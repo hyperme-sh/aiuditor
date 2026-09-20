@@ -125,3 +125,74 @@ class AuditorGrant(BaseModel):
     purpose: str
     device_id: uuid.UUID
     exp: datetime | None = None
+
+
+class ApprovalWhy(StrEnum):
+    COMPLETION = "completion"
+    TOOL = "tool"
+    LEASE = "lease"
+
+
+class ApprovalStatus(StrEnum):
+    HELD = "held"
+    ALLOWED = "allowed"
+    DENIED = "denied"
+    TIMED_OUT = "timed_out"
+
+
+class ApprovalDecision(StrEnum):
+    ALLOW_ONCE = "allow_once"
+    ALLOW_SESSION = "allow_session"
+    DENY = "deny"
+
+
+class ApprovalCreate(BaseModel):
+    """Held AI-use ask. No prompt body."""
+
+    lease_id: uuid.UUID | None = None
+    connection_id: uuid.UUID | None = None
+    purpose: str = Field(default="renter", max_length=32)
+    who: str = Field(..., min_length=1, max_length=256)
+    why: ApprovalWhy = ApprovalWhy.COMPLETION
+    prompt_class: str | None = Field(default=None, max_length=64)
+    ttl_seconds: int = Field(default=900, ge=30, le=24 * 60 * 60)
+
+
+class ApprovalResolve(BaseModel):
+    """Named human resolve. LLM is never resolved_by."""
+
+    decision: ApprovalDecision
+
+
+class Approval(BaseModel):
+    """Operator inbox row. Distinct from fyber.auditor and privilege_grant."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    lease_id: uuid.UUID | None = None
+    connection_id: uuid.UUID | None = None
+    purpose: str
+    who: str
+    why: ApprovalWhy
+    prompt_class: str | None = None
+    status: ApprovalStatus
+    decision: ApprovalDecision | None = None
+    resolved_by: str | None = None
+    created_at: datetime
+    expires_at: datetime
+    resolved_at: datetime | None = None
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "lease_id": str(self.lease_id) if self.lease_id else None,
+            "connection_id": str(self.connection_id) if self.connection_id else None,
+            "purpose": self.purpose,
+            "who": self.who,
+            "why": self.why.value,
+            "prompt_class": self.prompt_class,
+            "status": self.status.value,
+            "decision": self.decision.value if self.decision else None,
+            "resolved_by": self.resolved_by,
+        }
