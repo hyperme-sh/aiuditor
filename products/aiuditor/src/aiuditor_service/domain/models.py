@@ -56,6 +56,11 @@ class ConnectionCreate(BaseModel):
                 raise ValueError("host connections require device_id")
             if self.endpoint:
                 raise ValueError("host connections must not set endpoint")
+            if self.credential:
+                raise ValueError(
+                    "host connections must not take a credential; "
+                    "the device secret stays on Hypermesh"
+                )
             return self
         if self.device_id is not None:
             raise ValueError("provider connections must not set device_id")

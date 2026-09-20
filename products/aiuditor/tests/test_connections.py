@@ -27,6 +27,16 @@ def test_host_create_rejects_endpoint():
         )
 
 
+def test_host_create_rejects_credential():
+    with pytest.raises(ValidationError):
+        ConnectionCreate(
+            kind=ConnectionKind.HOST,
+            purpose=ConnectionPurpose.LEASE,
+            device_id=DEVICE,
+            credential="hm_dev_stays-on-hypermesh",
+        )
+
+
 def test_provider_create_requires_https_endpoint():
     with pytest.raises(ValidationError):
         ConnectionCreate(kind=ConnectionKind.PROVIDER, purpose=ConnectionPurpose.AUDITOR)
