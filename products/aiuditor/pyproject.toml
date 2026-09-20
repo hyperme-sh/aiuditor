@@ -11,6 +11,7 @@ dependencies = [
     "controlplane-core",
     "controlplane-db",
     "controlplane-events",
+    "httpx>=0.28.0",
 ]
 
 [dependency-groups]

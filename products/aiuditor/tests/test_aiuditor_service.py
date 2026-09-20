@@ -111,7 +111,6 @@ async def test_create_connection_emits_event(
             "kind": "host",
             "purpose": "auditor",
             "device_id": str(device),
-            "credential": "host-secret-never-returned",
         },
     )
     assert r.status_code == 201, r.text
@@ -121,10 +120,10 @@ async def test_create_connection_emits_event(
     assert body["purpose"] == "auditor"
     assert body["device_id"] == str(device)
     assert "credential" not in body
-    assert body["credential_ref"] == credential_ref("host-secret-never-returned")
+    assert body["credential_ref"] is None
     assert body["status"] == "ready"
     assert event_sink
     assert event_sink[0]["event_type"] == CONNECTION_CREATED_V1
     assert event_sink[0]["tenant_id"] == tenant_a
     assert "credential" not in event_sink[0]["payload"]
-    assert event_sink[0]["payload"]["credential_ref"] == body["credential_ref"]
+    assert event_sink[0]["payload"]["credential_ref"] is None

@@ -11,6 +11,7 @@ Edge prefix: `/api/v1/aiuditor`. Wire prefix of the door (`hm_gw_`) is unchanged
 | Piece | Location |
 |-------|----------|
 | Connection | `kind` host\|provider, `purpose` lease\|auditor, `device_id` or HTTPS `endpoint`, `credential_ref` (hash), `status` |
+| Host assign | `kind=host` looks up the enrolled Hypermesh device (`HYPERMESH_SERVICE_URL`). Stores `device_id` only. Device secret and the standing WG peer stay on Hypermesh / the door. Unset URL fail-closes. |
 | Router | `GET/POST /api/v1/aiuditor/connections`, `GET /api/v1/aiuditor/connections/{id}` |
 | Tenant | Bound JWT (tenant-session or purpose=service exchange). `X-Tenant-ID` is a cross-check. Header-only and Hypermesh machine prefixes are 401. |
 | Event | `aiuditor.connection.created.v1` on `controlplane.events.v1`. Lock fields only. No raw credential. |

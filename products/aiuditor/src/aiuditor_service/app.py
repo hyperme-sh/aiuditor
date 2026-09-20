@@ -21,6 +21,7 @@ from api.interfaces.api_controllers.health_endpoint import router as health_rout
 from controlplane_db.session import normalize_database_url
 from controlplane_events import AioKafkaEventProducer
 
+from aiuditor_service.hypermesh import HostLookup, resolve_host_lookup
 from aiuditor_service.interfaces.api.routes import router as aiuditor_router
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
 from aiuditor_service.store import ConnectionStore
@@ -33,6 +34,7 @@ def create_app(
     test_event_sink: list | None = None,
     enable_db_middleware: bool = True,
     service_name: str | None = None,
+    host_lookup: HostLookup | None = None,
 ) -> FastAPI:
     svc_name = service_name or settings.service_name
 
@@ -40,6 +42,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         configure_logging()
         app.state.connection_store = ConnectionStore()
+        app.state.host_lookup = resolve_host_lookup(host_lookup)
         engine = None
         if enable_db_middleware:
             engine = create_async_engine(normalize_database_url(settings.database_url))
@@ -148,7 +151,7 @@ def create_app(
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(aiuditor_router, prefix="/api/v1")
     add_optional_service_cors(app, env_var="AIUDITOR_SERVICE_CORS_ORIGINS")
-    logger.info("AIuditor: health + /api/v1/aiuditor/connections + optional CORS")
+    logger.info("AIuditor: health + /api/v1/aiuditor/connections + host assign + optional CORS")
     return app
 
 

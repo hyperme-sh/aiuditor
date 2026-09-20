@@ -4,8 +4,11 @@ import uuid
 
 import pytest
 
+from aiuditor_service.hypermesh import FakeHostLookup
 from api.core import config as api_config
 from api.infrastructure.security import keycloak_jwt as kc_jwt
+
+FYBER_AGX_DEVICE_ID = uuid.UUID("a6400000-0640-4000-8000-000000000001")
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +33,14 @@ def event_sink() -> list:
 
 
 @pytest.fixture
-def app(event_sink, monkeypatch):
+def host_lookup(tenant_a: uuid.UUID) -> FakeHostLookup:
+    fake = FakeHostLookup()
+    fake.enroll(FYBER_AGX_DEVICE_ID, tenant_id=tenant_a)
+    return fake
+
+
+@pytest.fixture
+def app(event_sink, host_lookup, monkeypatch):
     monkeypatch.setattr(
         api_config.settings,
         "database_url",
@@ -41,7 +51,11 @@ def app(event_sink, monkeypatch):
 
     from aiuditor_service.app import create_app
 
-    return create_app(test_event_sink=event_sink, enable_db_middleware=False)
+    return create_app(
+        test_event_sink=event_sink,
+        enable_db_middleware=False,
+        host_lookup=host_lookup,
+    )
 
 
 @pytest.fixture
