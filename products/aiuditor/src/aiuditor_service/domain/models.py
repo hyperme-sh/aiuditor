@@ -80,6 +80,7 @@ class Connection(BaseModel):
     device_id: uuid.UUID | None = None
     endpoint: str | None = None
     credential_ref: str | None = None
+    lease_id: uuid.UUID | None = None
     status: ConnectionStatus
     created_at: datetime
 
@@ -92,5 +93,35 @@ class Connection(BaseModel):
             "device_id": str(self.device_id) if self.device_id else None,
             "endpoint": self.endpoint,
             "credential_ref": self.credential_ref,
+            "lease_id": str(self.lease_id) if self.lease_id else None,
             "status": self.status.value,
         }
+
+
+class ConnectionAssign(BaseModel):
+    """Bind a purpose=lease host row to an existing Hypermesh renter lease."""
+
+    lease_id: uuid.UUID
+
+
+class ConnectionTicket(BaseModel):
+    """Mint a purpose=ir ticket for a purpose=auditor host row."""
+
+    reserved_hours: int = Field(default=24, ge=1, le=24 * 30)
+
+
+class ConnectionClassify(BaseModel):
+    """AIuditor-owned provider hop. Prompt is not persisted or evented."""
+
+    messages: list[dict[str, object]] = Field(default_factory=list)
+    model: str | None = Field(default=None, max_length=128)
+
+
+class AuditorGrant(BaseModel):
+    """Door pull key. The HMAC ticket blob stays on Hypermesh / hm_gw_."""
+
+    connection_id: uuid.UUID
+    lease_id: uuid.UUID
+    purpose: str
+    device_id: uuid.UUID
+    exp: datetime | None = None

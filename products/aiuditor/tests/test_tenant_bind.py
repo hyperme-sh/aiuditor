@@ -6,9 +6,11 @@ import pytest
 from fastapi import HTTPException
 
 from aiuditor_service.tenant import (
+    AUDITOR_ACTOR_REQUIRED,
     BOUND_JWT_REQUIRED,
     HEADER_REQUIRED,
     TOKEN_TENANT_REQUIRED,
+    require_auditor_actor,
     require_tenant_id,
     rls_tenant_id,
 )
@@ -160,6 +162,50 @@ def _session_missing_tenant() -> str:
         },
         settings.usable_api_key_exchange_secret(),
         algorithm=ALG,
+    )
+
+
+def test_require_auditor_actor_refuses_renter_exchange():
+    from api.infrastructure.security.api_key_exchange_jwt import mint_api_key_session_jwt
+
+    token = mint_api_key_session_jwt(
+        key_record_id=uuid.uuid4(),
+        tenant_id=TENANT_A,
+        scopes=[],
+        purpose="renter",
+    )
+    with pytest.raises(HTTPException) as exc:
+        require_auditor_actor(
+            _Req(
+                {
+                    "X-Tenant-ID": str(TENANT_A),
+                    "Authorization": f"Bearer {token}",
+                }
+            )
+        )
+    assert exc.value.status_code == 401
+    assert exc.value.detail == AUDITOR_ACTOR_REQUIRED
+
+
+def test_require_auditor_actor_accepts_ir_exchange():
+    from api.infrastructure.security.api_key_exchange_jwt import mint_api_key_session_jwt
+
+    token = mint_api_key_session_jwt(
+        key_record_id=uuid.uuid4(),
+        tenant_id=TENANT_A,
+        scopes=[],
+        purpose="ir",
+    )
+    assert (
+        require_auditor_actor(
+            _Req(
+                {
+                    "X-Tenant-ID": str(TENANT_A),
+                    "Authorization": f"Bearer {token}",
+                }
+            )
+        )
+        == TENANT_A
     )
 
 

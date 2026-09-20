@@ -25,6 +25,12 @@ class ConnectionStore:
         self.for_tenant(row.tenant_id)[row.id] = row
         return row
 
+    def lease_for(self, tenant_id: uuid.UUID, lease_id: uuid.UUID) -> Connection | None:
+        for row in self.for_tenant(tenant_id).values():
+            if row.lease_id == lease_id:
+                return row
+        return None
+
     def host_for(
         self,
         tenant_id: uuid.UUID,

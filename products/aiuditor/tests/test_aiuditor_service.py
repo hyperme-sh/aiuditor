@@ -41,6 +41,7 @@ def test_connection_event_payload_is_lock_fields_only():
         "device_id",
         "endpoint",
         "credential_ref",
+        "lease_id",
         "status",
     }
     assert "credential" not in payload
@@ -63,6 +64,9 @@ async def test_openapi_is_aiuditor_not_hypermesh_or_site_inbox(http_client):
     assert "/api/v1/health/" in paths
     assert "/api/v1/aiuditor/connections" in paths
     assert "/api/v1/aiuditor/connections/{connection_id}" in paths
+    assert "/api/v1/aiuditor/connections/{connection_id}/assign" in paths
+    assert "/api/v1/aiuditor/connections/{connection_id}/ticket" in paths
+    assert "/api/v1/aiuditor/connections/{connection_id}/classify" in paths
     banned = (
         "/api/v1/hypermesh/classes",
         "/api/v1/hypermesh/devices",
