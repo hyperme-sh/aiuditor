@@ -17,6 +17,10 @@ INVALID_HEADER = "Invalid X-Tenant-ID"
 TENANT_MISMATCH = "X-Tenant-ID must match token tenant"
 TOKEN_TENANT_REQUIRED = "token tenant required"
 BOUND_JWT_REQUIRED = "tenant-session JWT or purpose=service exchange JWT required"
+AUDITOR_ACTOR_REQUIRED = (
+    "tenant-session JWT or purpose=ir or purpose=service exchange required"
+)
+_AUDITOR_EXCHANGE_PURPOSES = frozenset({"ir", "service"})
 
 TENANT_CLAIM = "https://panopticon.dev/tenant_id"
 _MACHINE_PREFIXES = ("hm_dev_", "hm_gw_", "hm_site_", "hm1.")
@@ -111,6 +115,38 @@ def require_tenant_id(request: Request) -> uuid.UUID:
     if header is not None:
         raise HTTPException(status_code=401, detail=BOUND_JWT_REQUIRED)
     raise HTTPException(status_code=400, detail=HEADER_REQUIRED)
+
+
+def require_auditor_actor(request: Request) -> uuid.UUID:
+    """Bound session or IR/service exchange. A renter key cannot use a connection."""
+
+    tenant_id = require_tenant_id(request)
+    secret = bearer_secret(request)
+    if secret is None:
+        raise HTTPException(status_code=401, detail=AUDITOR_ACTOR_REQUIRED)
+    try:
+        from api.infrastructure.security.tenant_session_jwt import (
+            try_decode_tenant_session_jwt,
+        )
+    except Exception:
+        try_decode_tenant_session_jwt = None
+    if try_decode_tenant_session_jwt is not None:
+        session = try_decode_tenant_session_jwt(secret)
+        if session is not None:
+            return tenant_id
+    try:
+        from api.infrastructure.security.api_key_exchange_jwt import (
+            try_decode_api_key_session_jwt,
+        )
+    except Exception:
+        raise HTTPException(status_code=401, detail=AUDITOR_ACTOR_REQUIRED)
+    exchange = try_decode_api_key_session_jwt(secret)
+    if exchange is None:
+        raise HTTPException(status_code=401, detail=AUDITOR_ACTOR_REQUIRED)
+    purpose = str(exchange.get("purpose") or "").strip().lower()
+    if purpose not in _AUDITOR_EXCHANGE_PURPOSES:
+        raise HTTPException(status_code=401, detail=AUDITOR_ACTOR_REQUIRED)
+    return tenant_id
 
 
 def rls_tenant_id(request: Request) -> uuid.UUID | None:

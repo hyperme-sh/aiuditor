@@ -15,6 +15,8 @@ import httpx
 
 HOST_LOOKUP_REQUIRED = "HYPERMESH_SERVICE_URL is required to assign a host"
 HOST_LOOKUP_FAILED = "hypermesh host lookup failed"
+PLANE_HOP_REQUIRED = "HYPERMESH_SERVICE_URL is required to assign a lease or mint a ticket"
+PLANE_HOP_FAILED = "hypermesh plane hop failed"
 HOST_ROLE = "host"
 
 
@@ -149,6 +151,232 @@ class FakeHostLookup:
         return view
 
 
+@dataclass(frozen=True)
+class LeaseView:
+    """Lock fields from GET /leases/{id}. No checkout URL or ticket blob."""
+
+    id: uuid.UUID
+    device_id: uuid.UUID | None
+    purpose: str
+    status: str
+    tenant_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class IssuedGrant:
+    """Minted purpose=ir ticket metadata. HMAC blob stays on Hypermesh."""
+
+    lease_id: uuid.UUID
+    device_id: uuid.UUID
+    purpose: str
+    exp: str | None = None
+
+
+class PlaneHop(Protocol):
+    async def get_lease(
+        self,
+        tenant_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> LeaseView | None: ...
+
+    async def mint_auditor_ticket(
+        self,
+        tenant_id: uuid.UUID,
+        device_id: uuid.UUID,
+        *,
+        reserved_hours: int,
+        headers: dict[str, str] | None = None,
+    ) -> IssuedGrant: ...
+
+
+class ClosedPlaneHop:
+    async def get_lease(
+        self,
+        tenant_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> LeaseView | None:
+        raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
+
+    async def mint_auditor_ticket(
+        self,
+        tenant_id: uuid.UUID,
+        device_id: uuid.UUID,
+        *,
+        reserved_hours: int,
+        headers: dict[str, str] | None = None,
+    ) -> IssuedGrant:
+        raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
+
+
+class HttpPlaneHop:
+    def __init__(self, base_url: str, *, timeout_s: float = 10.0) -> None:
+        self._base = base_url.rstrip("/")
+        self._timeout = timeout_s
+
+    def _hop(self, tenant_id: uuid.UUID, headers: dict[str, str] | None) -> dict[str, str]:
+        hop = {**(headers or {}), "X-Tenant-ID": str(tenant_id)}
+        hop["X-Tenant-ID"] = str(tenant_id)
+        return hop
+
+    async def get_lease(
+        self,
+        tenant_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> LeaseView | None:
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(
+                    f"{self._base}/api/v1/hypermesh/leases/{lease_id}",
+                    headers=self._hop(tenant_id, headers),
+                )
+        except httpx.HTTPError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        return _lease_from_body(body, lease_id=lease_id)
+
+    async def mint_auditor_ticket(
+        self,
+        tenant_id: uuid.UUID,
+        device_id: uuid.UUID,
+        *,
+        reserved_hours: int,
+        headers: dict[str, str] | None = None,
+    ) -> IssuedGrant:
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    f"{self._base}/api/v1/hypermesh/auditor-tickets",
+                    headers=self._hop(tenant_id, headers),
+                    json={"device_id": str(device_id), "reserved_hours": reserved_hours},
+                )
+        except httpx.HTTPError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if response.status_code >= 400:
+            detail = _http_detail(response) or PLANE_HOP_FAILED
+            raise HostLookupUnavailable(detail)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if not isinstance(body, dict):
+            raise HostLookupUnavailable(PLANE_HOP_FAILED)
+        try:
+            return IssuedGrant(
+                lease_id=uuid.UUID(str(body["lease_id"])),
+                device_id=uuid.UUID(str(body.get("device_id") or device_id)),
+                purpose=str(body.get("purpose") or "ir"),
+                exp=str(body["exp"]) if body.get("exp") else None,
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+
+
+def _http_detail(response: httpx.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if isinstance(body, dict) and body.get("detail"):
+        return str(body["detail"])
+    return None
+
+
+def _lease_from_body(body: object, *, lease_id: uuid.UUID) -> LeaseView:
+    if not isinstance(body, dict):
+        raise HostLookupUnavailable(PLANE_HOP_FAILED)
+    raw_device = body.get("device_id")
+    raw_tenant = body.get("tenant_id")
+    try:
+        device_id = uuid.UUID(str(raw_device)) if raw_device else None
+        tenant_id = uuid.UUID(str(raw_tenant)) if raw_tenant else None
+        parsed_id = uuid.UUID(str(body.get("id") or lease_id))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+    return LeaseView(
+        id=parsed_id,
+        device_id=device_id,
+        purpose=str(body.get("purpose") or "renter"),
+        status=str(body.get("status") or ""),
+        tenant_id=tenant_id,
+    )
+
+
+@dataclass
+class FakePlaneHop:
+    leases: dict[uuid.UUID, LeaseView] = field(default_factory=dict)
+    grants: dict[uuid.UUID, IssuedGrant] = field(default_factory=dict)
+    mint_error: str | None = None
+
+    def add_lease(
+        self,
+        lease_id: uuid.UUID,
+        *,
+        device_id: uuid.UUID,
+        purpose: str = "renter",
+        status: str = "active",
+        tenant_id: uuid.UUID | None = None,
+    ) -> LeaseView:
+        view = LeaseView(
+            id=lease_id,
+            device_id=device_id,
+            purpose=purpose,
+            status=status,
+            tenant_id=tenant_id,
+        )
+        self.leases[lease_id] = view
+        return view
+
+    async def get_lease(
+        self,
+        tenant_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> LeaseView | None:
+        view = self.leases.get(lease_id)
+        if view is None:
+            return None
+        if view.tenant_id is not None and view.tenant_id != tenant_id:
+            return None
+        return view
+
+    async def mint_auditor_ticket(
+        self,
+        tenant_id: uuid.UUID,
+        device_id: uuid.UUID,
+        *,
+        reserved_hours: int,
+        headers: dict[str, str] | None = None,
+    ) -> IssuedGrant:
+        del tenant_id, reserved_hours, headers
+        if self.mint_error:
+            raise HostLookupUnavailable(self.mint_error)
+        existing = self.grants.get(device_id)
+        if existing is not None:
+            raise HostLookupUnavailable("device already has an auditor ticket")
+        grant = IssuedGrant(
+            lease_id=uuid.uuid4(),
+            device_id=device_id,
+            purpose="ir",
+            exp="2026-09-21T16:00:00+00:00",
+        )
+        self.grants[device_id] = grant
+        return grant
+
+
 def resolve_host_lookup(
     lookup: HostLookup | None = None,
     *,
@@ -161,3 +389,17 @@ def resolve_host_lookup(
     if not text:
         return ClosedHostLookup()
     return HttpHostLookup(text)
+
+
+def resolve_plane_hop(
+    hop: PlaneHop | None = None,
+    *,
+    base_url: str | None = None,
+) -> PlaneHop:
+    if hop is not None:
+        return hop
+    raw = os.environ.get("HYPERMESH_SERVICE_URL") if base_url is None else base_url
+    text = (raw or "").strip()
+    if not text:
+        return ClosedPlaneHop()
+    return HttpPlaneHop(text)

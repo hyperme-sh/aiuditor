@@ -4,7 +4,8 @@ import uuid
 
 import pytest
 
-from aiuditor_service.hypermesh import FakeHostLookup
+from aiuditor_service.hypermesh import FakeHostLookup, FakePlaneHop
+from aiuditor_service.provider import FakeProviderHop
 from api.core import config as api_config
 from api.infrastructure.security import keycloak_jwt as kc_jwt
 
@@ -40,7 +41,17 @@ def host_lookup(tenant_a: uuid.UUID) -> FakeHostLookup:
 
 
 @pytest.fixture
-def app(event_sink, host_lookup, monkeypatch):
+def plane_hop() -> FakePlaneHop:
+    return FakePlaneHop()
+
+
+@pytest.fixture
+def provider_hop() -> FakeProviderHop:
+    return FakeProviderHop()
+
+
+@pytest.fixture
+def app(event_sink, host_lookup, plane_hop, provider_hop, monkeypatch):
     monkeypatch.setattr(
         api_config.settings,
         "database_url",
@@ -55,6 +66,8 @@ def app(event_sink, host_lookup, monkeypatch):
         test_event_sink=event_sink,
         enable_db_middleware=False,
         host_lookup=host_lookup,
+        plane_hop=plane_hop,
+        provider_hop=provider_hop,
     )
 
 
