@@ -237,3 +237,66 @@ class ApprovalPolicy(BaseModel):
             "connection_id": str(self.connection_id) if self.connection_id else None,
             "disposition": self.disposition.value,
         }
+
+
+class ContractStatus(StrEnum):
+    DRAFT = "draft"
+    SIGNED = "signed"
+
+
+class ContractParty(BaseModel):
+    """Who binds. Not a prompt body."""
+
+    role: str = Field(..., min_length=1, max_length=32)
+    subject: str = Field(..., min_length=1, max_length=256)
+
+
+class ContractCreate(BaseModel):
+    """Spine §D fields only. 1.x rail is Stripe. No prompt body."""
+
+    parties: list[ContractParty] = Field(..., min_length=2, max_length=8)
+    meters: list[str] = Field(..., min_length=1, max_length=8)
+    rail: str = Field(default="stripe", max_length=32)
+    until: datetime
+    dispute_tip: str | None = Field(default=None, max_length=120)
+    connection_id: uuid.UUID | None = None
+    lease_id: uuid.UUID | None = None
+
+
+class ContractBind(BaseModel):
+    """Cite a Hypermesh lease. Does not mint a ticket."""
+
+    lease_id: uuid.UUID
+
+
+class Contract(BaseModel):
+    """Portable grant object. Not a handoff package. Not fyber.auditor."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    parties: list[ContractParty]
+    meters: list[str]
+    rail: str
+    until: datetime
+    dispute_tip: str | None = None
+    connection_id: uuid.UUID | None = None
+    lease_id: uuid.UUID | None = None
+    status: ContractStatus
+    signed_by: str | None = None
+    created_at: datetime
+    signed_at: datetime | None = None
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "parties": [party.model_dump() for party in self.parties],
+            "meters": list(self.meters),
+            "rail": self.rail,
+            "until": self.until.isoformat(),
+            "dispute_tip": self.dispute_tip,
+            "connection_id": str(self.connection_id) if self.connection_id else None,
+            "lease_id": str(self.lease_id) if self.lease_id else None,
+            "status": self.status.value,
+            "signed_by": self.signed_by,
+        }
