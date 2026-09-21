@@ -35,6 +35,8 @@ class HostView:
     path_b_state: str | None = None
     schedule_hold: bool = False
     sell_state: str | None = None
+    class_id: str | None = None
+    loaded_catalog_id: str | None = None
 
 
 class HostLookup(Protocol):
@@ -116,6 +118,12 @@ def _view_from_device(body: object, *, device_id: uuid.UUID) -> HostView:
         path_b_state=str(body["path_b_state"]) if body.get("path_b_state") else None,
         schedule_hold=bool(body.get("schedule_hold") or False),
         sell_state=str(body["sell_state"]) if body.get("sell_state") else None,
+        class_id=str(body["class_id"]).strip() if body.get("class_id") else None,
+        loaded_catalog_id=(
+            str(body["loaded_catalog_id"]).strip()
+            if body.get("loaded_catalog_id")
+            else None
+        ),
     )
 
 
@@ -135,6 +143,8 @@ class FakeHostLookup:
         path_b_state: str | None = "green",
         schedule_hold: bool = False,
         sell_state: str | None = None,
+        class_id: str | None = None,
+        loaded_catalog_id: str | None = None,
     ) -> HostView:
         view = HostView(
             id=device_id,
@@ -144,6 +154,8 @@ class FakeHostLookup:
             path_b_state=path_b_state,
             schedule_hold=schedule_hold,
             sell_state=sell_state,
+            class_id=class_id,
+            loaded_catalog_id=loaded_catalog_id,
         )
         self.by_id[device_id] = view
         return view
@@ -185,6 +197,17 @@ class IssuedGrant:
     exp: str | None = None
 
 
+@dataclass(frozen=True)
+class OfferedLease:
+    """Checkout session for a catalog host row. HMAC stays on Hypermesh."""
+
+    lease_id: uuid.UUID
+    device_id: uuid.UUID
+    purpose: str
+    checkout_url: str | None = None
+    contract_id: uuid.UUID | None = None
+
+
 class PlaneHop(Protocol):
     async def get_lease(
         self,
@@ -212,6 +235,21 @@ class PlaneHop(Protocol):
         reason: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> None: ...
+
+    async def offer_lease(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        kind: str,
+        device_id: uuid.UUID,
+        reserved_hours: int,
+        contract_id: uuid.UUID,
+        success_url: str,
+        cancel_url: str,
+        class_id: str | None = None,
+        catalog_id: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> OfferedLease: ...
 
 
 class ClosedPlaneHop:
@@ -243,6 +281,22 @@ class ClosedPlaneHop:
         reason: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
+        raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
+
+    async def offer_lease(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        kind: str,
+        device_id: uuid.UUID,
+        reserved_hours: int,
+        contract_id: uuid.UUID,
+        success_url: str,
+        cancel_url: str,
+        class_id: str | None = None,
+        catalog_id: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> OfferedLease:
         raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
 
 
@@ -346,6 +400,65 @@ class HttpPlaneHop:
         if response.status_code >= 400:
             raise HostLookupUnavailable(_http_detail(response) or PLANE_HOP_FAILED)
 
+    async def offer_lease(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        kind: str,
+        device_id: uuid.UUID,
+        reserved_hours: int,
+        contract_id: uuid.UUID,
+        success_url: str,
+        cancel_url: str,
+        class_id: str | None = None,
+        catalog_id: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> OfferedLease:
+        payload: dict[str, object] = {
+            "kind": kind,
+            "device_id": str(device_id),
+            "reserved_hours": reserved_hours,
+            "contract_id": str(contract_id),
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+            "purpose": "renter",
+        }
+        if class_id:
+            payload["class_id"] = class_id
+        if catalog_id:
+            payload["catalog_id"] = catalog_id
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    f"{self._base}/api/v1/hypermesh/leases",
+                    headers=self._hop(tenant_id, headers),
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if response.status_code >= 400:
+            detail = _http_detail(response) or PLANE_HOP_FAILED
+            raise HostLookupUnavailable(detail)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if not isinstance(body, dict):
+            raise HostLookupUnavailable(PLANE_HOP_FAILED)
+        try:
+            raw_id = body.get("id") or body.get("lease_id")
+            raw_device = body.get("device_id") or device_id
+            raw_cid = body.get("contract_id") or contract_id
+            return OfferedLease(
+                lease_id=uuid.UUID(str(raw_id)),
+                device_id=uuid.UUID(str(raw_device)),
+                purpose=str(body.get("purpose") or "renter"),
+                checkout_url=str(body["checkout_url"]) if body.get("checkout_url") else None,
+                contract_id=uuid.UUID(str(raw_cid)) if raw_cid else None,
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+
 
 def _http_detail(response: httpx.Response) -> str | None:
     try:
@@ -385,8 +498,10 @@ class FakePlaneHop:
     leases: dict[uuid.UUID, LeaseView] = field(default_factory=dict)
     grants: dict[uuid.UUID, IssuedGrant] = field(default_factory=dict)
     violations: list[dict[str, object]] = field(default_factory=list)
+    offers: list[dict[str, object]] = field(default_factory=list)
     mint_error: str | None = None
     violate_error: str | None = None
+    offer_error: str | None = None
 
     def add_lease(
         self,
@@ -481,6 +596,58 @@ class FakePlaneHop:
                 tenant_id=view.tenant_id,
                 contract_id=view.contract_id,
             )
+
+    async def offer_lease(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        kind: str,
+        device_id: uuid.UUID,
+        reserved_hours: int,
+        contract_id: uuid.UUID,
+        success_url: str,
+        cancel_url: str,
+        class_id: str | None = None,
+        catalog_id: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> OfferedLease:
+        del headers
+        if self.offer_error:
+            raise HostLookupUnavailable(self.offer_error)
+        for view in self.leases.values():
+            if view.device_id == device_id and view.purpose in {"renter", "service"}:
+                if view.status not in {"ended", "failed", "refunded"}:
+                    raise HostLookupUnavailable("Device already has a live lease")
+        lease_id = uuid.uuid4()
+        self.add_lease(
+            lease_id,
+            device_id=device_id,
+            purpose="renter",
+            status="offered",
+            tenant_id=tenant_id,
+            contract_id=contract_id,
+        )
+        offered = OfferedLease(
+            lease_id=lease_id,
+            device_id=device_id,
+            purpose="renter",
+            checkout_url="https://checkout.test/session",
+            contract_id=contract_id,
+        )
+        self.offers.append(
+            {
+                "tenant_id": tenant_id,
+                "kind": kind,
+                "device_id": device_id,
+                "reserved_hours": reserved_hours,
+                "contract_id": contract_id,
+                "success_url": success_url,
+                "cancel_url": cancel_url,
+                "class_id": class_id,
+                "catalog_id": catalog_id,
+            }
+        )
+        return offered
 
 
 def resolve_host_lookup(

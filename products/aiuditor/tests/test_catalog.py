@@ -229,6 +229,7 @@ async def test_site_inbox_is_not_on_catalog_paths(http_client):
     paths = spec.json()["paths"]
     assert "/api/v1/aiuditor/catalog" in paths
     assert "/api/v1/aiuditor/catalog/{service_id}" in paths
+    assert "/api/v1/aiuditor/catalog/{service_id}/allocate" in paths
     assert "/api/v1/auditor/v0/tickets" not in paths
     assert "/api/v1/grants/v0/grants" not in paths
     assert "/api/v1/turn/allocate" not in paths
