@@ -25,6 +25,10 @@ from aiuditor_service.approvals import (
     resolver_subject,
 )
 from aiuditor_service.credentials import credential_ref
+from aiuditor_service.catalog import (
+    SERVICE_NOT_FOUND,
+    put_service,
+)
 from aiuditor_service.contracts import (
     CONTRACT_NOT_FOUND,
     bind_contract,
@@ -48,6 +52,7 @@ from aiuditor_service.domain.models import (
     ConnectionPurpose,
     ConnectionStatus,
     ConnectionTicket,
+    CatalogService,
     Contract,
     ContractBind,
     ContractCreate,
@@ -55,6 +60,7 @@ from aiuditor_service.domain.models import (
     ContractStatus,
     ContractViolation,
     ContractViolationCreate,
+    ServiceCreate,
 )
 from aiuditor_service.events import (
     APPROVAL_HELD_V1,
@@ -66,6 +72,7 @@ from aiuditor_service.events import (
     CONTRACT_FULFILLED_V1,
     CONTRACT_SIGNED_V1,
     CONTRACT_VIOLATED_V1,
+    CATALOG_SERVICE_CREATED_V1,
     POLICY_CREATED_V1,
     POLICY_DELETED_V1,
 )
@@ -82,6 +89,7 @@ from aiuditor_service.hypermesh import (
 from aiuditor_service.provider import ProviderUnavailable
 from aiuditor_service.store import (
     ApprovalStore,
+    CatalogStore,
     ConnectionStore,
     ContractStore,
     PolicyStore,
@@ -162,6 +170,14 @@ def _violations(request: Request) -> ViolationStore:
     if store is None:
         store = ViolationStore()
         request.app.state.violation_store = store
+    return store
+
+
+def _catalog(request: Request) -> CatalogStore:
+    store = getattr(request.app.state, "catalog_store", None)
+    if store is None:
+        store = CatalogStore()
+        request.app.state.catalog_store = store
     return store
 
 
@@ -630,6 +646,38 @@ async def fulfill_contract_route(
         event_type=CONTRACT_FULFILLED_V1,
         payload=row.to_event_payload(),
     )
+    return row
+
+
+@router.post(
+    "/catalog",
+    response_model=CatalogService,
+    status_code=status.HTTP_201_CREATED,
+    summary="Name a leasable backend. Not a Hypermesh class or catalog row.",
+)
+async def create_catalog_service(request: Request, body: ServiceCreate) -> CatalogService:
+    tenant_id = require_auditor_actor(request)
+    row = put_service(_catalog(request), _store(request), tenant_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=CATALOG_SERVICE_CREATED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.get("/catalog", response_model=list[CatalogService], summary="Tenant service catalog")
+async def list_catalog_services(request: Request) -> list[CatalogService]:
+    tenant_id = require_hold_actor(request)
+    return _catalog(request).list_for(tenant_id)
+
+
+@router.get("/catalog/{service_id}", response_model=CatalogService)
+async def get_catalog_service(request: Request, service_id: uuid.UUID) -> CatalogService:
+    tenant_id = require_hold_actor(request)
+    row = _catalog(request).get(tenant_id, service_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND)
     return row
 
 

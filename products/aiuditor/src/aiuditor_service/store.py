@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from aiuditor_service.domain.models import (
     Approval,
     ApprovalPolicy,
+    CatalogService,
     Connection,
     ConnectionKind,
     ConnectionPurpose,
@@ -180,5 +181,27 @@ class ViolationStore:
         return rows
 
     def put(self, row: ContractViolation) -> ContractViolation:
+        self.for_tenant(row.tenant_id)[row.id] = row
+        return row
+
+
+@dataclass
+class CatalogStore:
+    services: dict[uuid.UUID, dict[uuid.UUID, CatalogService]] = field(
+        default_factory=dict
+    )
+
+    def for_tenant(self, tenant_id: uuid.UUID) -> dict[uuid.UUID, CatalogService]:
+        return self.services.setdefault(tenant_id, {})
+
+    def list_for(self, tenant_id: uuid.UUID) -> list[CatalogService]:
+        rows = list(self.for_tenant(tenant_id).values())
+        rows.sort(key=lambda row: row.created_at)
+        return rows
+
+    def get(self, tenant_id: uuid.UUID, service_id: uuid.UUID) -> CatalogService | None:
+        return self.for_tenant(tenant_id).get(service_id)
+
+    def put(self, row: CatalogService) -> CatalogService:
         self.for_tenant(row.tenant_id)[row.id] = row
         return row
