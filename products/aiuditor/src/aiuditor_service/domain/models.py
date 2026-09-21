@@ -434,3 +434,35 @@ class CatalogService(BaseModel):
             "connection_id": str(self.connection_id) if self.connection_id else None,
             "meters": list(self.meters),
         }
+
+
+class ServiceAllocate(BaseModel):
+    """Pick a live connection and mint a Contract. HMAC stays on Hypermesh."""
+
+    renter: str = Field(..., min_length=1, max_length=256)
+    reserved_hours: int = Field(default=1, ge=1, le=24 * 30)
+    success_url: str | None = Field(default=None, max_length=2048)
+    cancel_url: str | None = Field(default=None, max_length=2048)
+
+
+class ServiceAllocation(BaseModel):
+    """Catalog grant. Provider hop has no HMAC; host checkout mints the ticket."""
+
+    service_id: uuid.UUID
+    contract: Contract
+    connection_id: uuid.UUID
+    backend: ServiceBackend
+    lease_id: uuid.UUID | None = None
+    purpose: str = "lease"
+    checkout_url: str | None = None
+    exp: datetime | None = None
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "service_id": str(self.service_id),
+            "contract_id": str(self.contract.id),
+            "connection_id": str(self.connection_id),
+            "backend": self.backend.value,
+            "lease_id": str(self.lease_id) if self.lease_id else None,
+            "purpose": self.purpose,
+        }

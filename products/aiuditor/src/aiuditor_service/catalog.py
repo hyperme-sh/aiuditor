@@ -2,27 +2,42 @@
 
 A row names a backend: Hypermesh P1 class, Hypermesh P2 catalog id, or a
 provider connection. TURN, oracles, and payments stay sibling products.
-Allocate (contract + ticket) is the next Phase 6 cut.
+Allocate picks a live connection, signs a Contract, and offers the host
+checkout whose HMAC the door already honors. Provider hops have no HMAC.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 
 from aiuditor_service.approvals import _safe_text
-from aiuditor_service.contracts import SPINE_METERS
+from aiuditor_service.contracts import (
+    LEASE_ALREADY_BOUND,
+    SPINE_METERS,
+    SPINE_RAIL,
+    bind_contract,
+    put_contract,
+    sign_contract,
+)
 from aiuditor_service.domain.models import (
     CatalogService,
+    Connection,
     ConnectionKind,
     ConnectionPurpose,
     ConnectionStatus,
+    ContractBind,
+    ContractCreate,
+    ContractParty,
+    ServiceAllocate,
+    ServiceAllocation,
     ServiceBackend,
     ServiceCreate,
 )
-from aiuditor_service.store import CatalogStore, ConnectionStore
+from aiuditor_service.hypermesh import HOST_ROLE, HostLookup, HostView, PlaneHop
+from aiuditor_service.store import CatalogStore, ConnectionStore, ContractStore
 
 SERVICE_NOT_FOUND = "Service not found"
 SERVICE_TITLE = "title is required"
@@ -32,6 +47,11 @@ PROVIDER_CONNECTION_REQUIRED = "provider services require a purpose=lease provid
 PROVIDER_NOT_LEASE = "only a purpose=lease provider connection can be cataloged"
 CONNECTION_NOT_FOUND = "Connection not found"
 CONNECTION_DISABLED = "connection is disabled"
+NO_LIVE_CONNECTION = "no live connection matches this service"
+CHECKOUT_URLS_REQUIRED = "host allocate requires success_url and cancel_url"
+RENTER_REQUIRED = "renter is required"
+PROVIDER_NOT_READY = "provider connection is not ready"
+LEASE_IS_AUDITOR = "auditor tickets are minted; they are not bound as renter leases"
 
 _SIBLING = frozenset({"turn", "oracle", "oracles", "payment", "payments"})
 
@@ -107,3 +127,191 @@ def put_service(
     )
     store.put(service)
     return service
+
+
+_NOT_LIVE_SELL = frozenset({"paused", "off"})
+_NOT_LIVE_CERT = frozenset({"suspended"})
+_RENTER_PURPOSE = frozenset({"renter", "service"})
+
+
+def _host_is_live(view: HostView) -> bool:
+    if not view.enrolled or (view.role or "").strip() != HOST_ROLE:
+        return False
+    if view.schedule_hold:
+        return False
+    if (view.sell_state or "").strip().lower() in _NOT_LIVE_SELL:
+        return False
+    if (view.path_b_state or "").strip().lower() in _NOT_LIVE_CERT:
+        return False
+    return True
+
+
+def _matches_service(service: CatalogService, view: HostView) -> bool:
+    if service.backend is ServiceBackend.HYPERMESH_CLASS:
+        return (view.class_id or "") == (service.class_id or "")
+    if service.backend is ServiceBackend.HYPERMESH_CATALOG:
+        return (view.loaded_catalog_id or "") == (service.catalog_id or "")
+    return False
+
+
+async def pick_live_connection(
+    connections: ConnectionStore,
+    service: CatalogService,
+    *,
+    lookup: HostLookup,
+    headers: dict[str, str] | None = None,
+) -> Connection:
+    if service.backend is ServiceBackend.PROVIDER:
+        if service.connection_id is None:
+            raise HTTPException(status_code=409, detail=NO_LIVE_CONNECTION)
+        row = connections.get(service.tenant_id, service.connection_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=CONNECTION_NOT_FOUND)
+        if row.kind is not ConnectionKind.PROVIDER or row.purpose is not ConnectionPurpose.LEASE:
+            raise HTTPException(status_code=409, detail=PROVIDER_CONNECTION_REQUIRED)
+        if row.status is ConnectionStatus.DISABLED:
+            raise HTTPException(status_code=409, detail=CONNECTION_DISABLED)
+        if row.status is not ConnectionStatus.READY:
+            raise HTTPException(status_code=409, detail=PROVIDER_NOT_READY)
+        return row
+
+    candidates: list[Connection] = []
+    for row in connections.list_for(service.tenant_id):
+        if row.kind is not ConnectionKind.HOST or row.purpose is not ConnectionPurpose.LEASE:
+            continue
+        if row.status is ConnectionStatus.DISABLED or row.device_id is None:
+            continue
+        host = await lookup.get(service.tenant_id, row.device_id, headers=headers)
+        if host is None or not _host_is_live(host) or not _matches_service(service, host):
+            continue
+        candidates.append(row)
+    if not candidates:
+        raise HTTPException(status_code=409, detail=NO_LIVE_CONNECTION)
+    candidates.sort(
+        key=lambda row: (
+            row.lease_id is not None,
+            row.status is not ConnectionStatus.READY,
+            row.created_at,
+        )
+    )
+    return candidates[0]
+
+
+def _host_subject(row: Connection) -> str:
+    if row.device_id is not None:
+        return str(row.device_id)
+    if row.endpoint:
+        return row.endpoint
+    return str(row.id)
+
+
+async def allocate_service(
+    catalog: CatalogStore,
+    connections: ConnectionStore,
+    contracts: ContractStore,
+    tenant_id: uuid.UUID,
+    service_id: uuid.UUID,
+    body: ServiceAllocate,
+    *,
+    lookup: HostLookup,
+    plane: PlaneHop,
+    signed_by: str,
+    headers: dict[str, str] | None = None,
+    now: datetime | None = None,
+) -> ServiceAllocation:
+    service = catalog.get(tenant_id, service_id)
+    if service is None:
+        raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND)
+    renter = _safe_text(body.renter)
+    if renter is None:
+        raise HTTPException(status_code=400, detail=RENTER_REQUIRED)
+    row = await pick_live_connection(connections, service, lookup=lookup, headers=headers)
+    clock = _now(now)
+    hours = max(1, min(int(body.reserved_hours), 24 * 30))
+    draft = put_contract(
+        contracts,
+        tenant_id,
+        ContractCreate(
+            parties=[
+                ContractParty(role="renter", subject=renter),
+                ContractParty(role="host", subject=_host_subject(row)),
+            ],
+            meters=list(service.meters),
+            rail=SPINE_RAIL,
+            until=clock + timedelta(hours=hours),
+            connection_id=row.id,
+        ),
+        now=clock,
+    )
+    signed = sign_contract(contracts, tenant_id, draft.id, signed_by=signed_by, now=clock)
+    lease_id = row.lease_id
+    purpose = "lease"
+    checkout_url = None
+    if service.backend is ServiceBackend.PROVIDER:
+        if row.status is not ConnectionStatus.READY:
+            row = row.model_copy(update={"status": ConnectionStatus.READY})
+            connections.put(row)
+        return ServiceAllocation(
+            service_id=service.id,
+            contract=signed,
+            connection_id=row.id,
+            backend=service.backend,
+            purpose=purpose,
+            exp=signed.until,
+        )
+
+    if row.device_id is None:
+        raise HTTPException(status_code=409, detail=NO_LIVE_CONNECTION)
+    if lease_id is not None:
+        lease = await plane.get_lease(tenant_id, lease_id, headers=headers)
+        if lease is None:
+            raise HTTPException(status_code=404, detail="Lease not found")
+        if lease.purpose not in _RENTER_PURPOSE:
+            raise HTTPException(status_code=409, detail=LEASE_IS_AUDITOR)
+        purpose = lease.purpose
+    else:
+        success = (body.success_url or "").strip()
+        cancel = (body.cancel_url or "").strip()
+        if not success or not cancel:
+            raise HTTPException(status_code=400, detail=CHECKOUT_URLS_REQUIRED)
+        kind = (
+            "p1_hardware"
+            if service.backend is ServiceBackend.HYPERMESH_CLASS
+            else "p2_loaded_model"
+        )
+        offered = await plane.offer_lease(
+            tenant_id,
+            kind=kind,
+            device_id=row.device_id,
+            reserved_hours=hours,
+            contract_id=signed.id,
+            success_url=success,
+            cancel_url=cancel,
+            class_id=service.class_id,
+            catalog_id=service.catalog_id,
+            headers=headers,
+        )
+        lease_id = offered.lease_id
+        purpose = offered.purpose
+        checkout_url = offered.checkout_url
+    current = contracts.get(tenant_id, signed.id) or signed
+    if current.lease_id is None:
+        current = bind_contract(
+            contracts, tenant_id, signed.id, ContractBind(lease_id=lease_id)
+        )
+    elif current.lease_id != lease_id:
+        raise HTTPException(status_code=409, detail=LEASE_ALREADY_BOUND)
+    assigned = row.model_copy(
+        update={"lease_id": lease_id, "status": ConnectionStatus.READY}
+    )
+    connections.put(assigned)
+    return ServiceAllocation(
+        service_id=service.id,
+        contract=current,
+        connection_id=assigned.id,
+        backend=service.backend,
+        lease_id=lease_id,
+        purpose=purpose,
+        checkout_url=checkout_url,
+        exp=current.until,
+    )

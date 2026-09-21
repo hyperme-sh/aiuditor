@@ -52,6 +52,8 @@ async def test_http_lookup_reads_enrolled_role_only(monkeypatch):
                 "tenant_id": str(TENANT),
                 "enrolled": True,
                 "role": "host",
+                "class_id": "agx-large",
+                "loaded_catalog_id": "llama-3.1-8b-q4",
                 "serial": "must-not-be-stored",
                 "wg_public_key": "must-not-be-read-as-assignment",
             }
@@ -83,6 +85,8 @@ async def test_http_lookup_reads_enrolled_role_only(monkeypatch):
     assert view.enrolled is True
     assert view.role == "host"
     assert view.tenant_id == TENANT
+    assert view.class_id == "agx-large"
+    assert view.loaded_catalog_id == "llama-3.1-8b-q4"
     assert "serial" not in view.__dict__ or not hasattr(view, "serial")
     assert captured["url"] == f"http://hm.example/api/v1/hypermesh/devices/{DEVICE}"
     headers = captured["headers"]
@@ -273,3 +277,78 @@ async def test_http_plane_mint_conflict_and_get_miss(monkeypatch):
         await hop.mint_auditor_ticket(TENANT, DEVICE, reserved_hours=1)
     assert str(exc.value) == "device has a renter lease"
     assert await hop.get_lease(TENANT, uuid.uuid4()) is None
+
+
+@pytest.mark.asyncio
+async def test_closed_plane_offer_fail_closes():
+    with pytest.raises(HostLookupUnavailable) as exc:
+        await ClosedPlaneHop().offer_lease(
+            TENANT,
+            kind="p1_hardware",
+            device_id=DEVICE,
+            reserved_hours=1,
+            contract_id=uuid.uuid4(),
+            success_url="https://app.example/ok",
+            cancel_url="https://app.example/cancel",
+            class_id="agx-large",
+        )
+    assert str(exc.value) == PLANE_HOP_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_http_plane_offers_lease_without_keeping_ticket(monkeypatch):
+    captured: dict[str, object] = {}
+    lease_id = uuid.uuid4()
+    contract_id = uuid.uuid4()
+
+    class _Resp:
+        status_code = 201
+
+        def json(self):
+            return {
+                "id": str(lease_id),
+                "device_id": str(DEVICE),
+                "purpose": "renter",
+                "checkout_url": "https://checkout.example/session",
+                "contract_id": str(contract_id),
+                "ticket": "hm1.must-not-be-stored",
+            }
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    offered = await HttpPlaneHop("http://hm.example").offer_lease(
+        TENANT,
+        kind="p1_hardware",
+        device_id=DEVICE,
+        reserved_hours=2,
+        contract_id=contract_id,
+        success_url="https://app.example/ok",
+        cancel_url="https://app.example/cancel",
+        class_id="agx-large",
+        headers={"Authorization": "Bearer session"},
+    )
+    assert offered.lease_id == lease_id
+    assert offered.purpose == "renter"
+    assert offered.checkout_url == "https://checkout.example/session"
+    assert not hasattr(offered, "ticket")
+    assert "hm1.must-not-be-stored" not in str(offered)
+    assert captured["url"] == "http://hm.example/api/v1/hypermesh/leases"
+    assert captured["json"]["kind"] == "p1_hardware"
+    assert captured["json"]["class_id"] == "agx-large"
+    assert captured["json"]["contract_id"] == str(contract_id)
+    assert captured["headers"]["Authorization"] == "Bearer session"

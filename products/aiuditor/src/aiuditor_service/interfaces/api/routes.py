@@ -27,6 +27,7 @@ from aiuditor_service.approvals import (
 from aiuditor_service.credentials import credential_ref
 from aiuditor_service.catalog import (
     SERVICE_NOT_FOUND,
+    allocate_service,
     put_service,
 )
 from aiuditor_service.contracts import (
@@ -53,6 +54,8 @@ from aiuditor_service.domain.models import (
     ConnectionStatus,
     ConnectionTicket,
     CatalogService,
+    ServiceAllocate,
+    ServiceAllocation,
     Contract,
     ContractBind,
     ContractCreate,
@@ -73,6 +76,7 @@ from aiuditor_service.events import (
     CONTRACT_SIGNED_V1,
     CONTRACT_VIOLATED_V1,
     CATALOG_SERVICE_CREATED_V1,
+    CATALOG_SERVICE_ALLOCATED_V1,
     POLICY_CREATED_V1,
     POLICY_DELETED_V1,
 )
@@ -125,6 +129,7 @@ _PLANE_CONFLICTS = frozenset(
     {
         "device has a renter lease",
         "device already has an auditor ticket",
+        "Device already has a live lease",
         "device is not enrolled",
         "device role is not host",
         LEASE_IS_AUDITOR,
@@ -679,6 +684,44 @@ async def get_catalog_service(request: Request, service_id: uuid.UUID) -> Catalo
     if row is None:
         raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND)
     return row
+
+
+@router.post(
+    "/catalog/{service_id}/allocate",
+    response_model=ServiceAllocation,
+    status_code=status.HTTP_201_CREATED,
+    summary="Pick a live connection, sign a Contract, and offer the host ticket.",
+)
+async def allocate_catalog_service(
+    request: Request, service_id: uuid.UUID, body: ServiceAllocate
+) -> ServiceAllocation:
+    tenant_id = require_auditor_actor(request)
+    signed_by = require_contract_signer(request)
+    lookup = getattr(request.app.state, "host_lookup", None)
+    plane = getattr(request.app.state, "plane_hop", None)
+    if lookup is None or plane is None:
+        raise HTTPException(status_code=503, detail=PLANE_HOP_FAILED)
+    try:
+        allocation = await allocate_service(
+            _catalog(request),
+            _store(request),
+            _contracts(request),
+            tenant_id,
+            service_id,
+            body,
+            lookup=lookup,
+            plane=plane,
+            signed_by=signed_by,
+            headers=_forward_headers(request),
+        )
+    except HostLookupUnavailable as exc:
+        raise _plane_error(exc) from exc
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=CATALOG_SERVICE_ALLOCATED_V1,
+        payload=allocation.to_event_payload(),
+    )
+    return allocation
 
 
 @router.get(
