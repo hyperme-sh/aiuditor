@@ -378,8 +378,19 @@ class SqlPersistSession:
                 session.commit()
 
 
-def resolve_persist(enable_sql: bool, database_url: str | None = None) -> PersistSession:
+def resolve_persist(
+    enable_sql: bool,
+    database_url: str | None = None,
+    *,
+    role: object | None = None,
+) -> PersistSession:
+    from aiuditor_service.package import witness_uses_memory_persist
+    from aiuditor_service.role import AiuditorRole
+
     if not enable_sql:
+        return MemoryPersistSession()
+    if isinstance(role, AiuditorRole) and witness_uses_memory_persist(role, database_url):
+        logger.info("aiuditor persist: MemoryPersistSession (witness copy)")
         return MemoryPersistSession()
     url = database_url if database_url is not None else os.environ.get("DATABASE_URL", "")
     if not url or "localhost:1" in url:
