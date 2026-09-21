@@ -7,6 +7,8 @@ wire. Handoff (spine D) is not this path.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -24,6 +26,8 @@ from aiuditor_service.store import StoreBundle
 
 PARENT_REQUIRED = "AIUDITOR_PARENT_URL is required to pull hydrate"
 PARENT_HOP_FAILED = "parent AIuditor hydrate failed"
+
+logger = logging.getLogger(__name__)
 
 
 class ParentUnavailable(Exception):
@@ -163,6 +167,54 @@ def build_hydrate(
     )
     _reject_bodies(payload.model_dump(mode="json"))
     return payload
+
+
+def stores_from_app(app) -> StoreBundle:
+    persist = getattr(app.state, "aiuditor_persist", None)
+    return StoreBundle(
+        persist=persist,
+        connection_store=app.state.connection_store,
+        approval_store=app.state.approval_store,
+        policy_store=app.state.policy_store,
+        contract_store=app.state.contract_store,
+        violation_store=app.state.violation_store,
+        catalog_store=app.state.catalog_store,
+    )
+
+
+async def run_hydrate_loop(
+    app,
+    *,
+    stop: asyncio.Event,
+    sleep=asyncio.sleep,
+) -> None:
+    """Pull the parent snapshot on a timer. Witness only. Does not fulfill."""
+
+    from aiuditor_service.package import resolve_hydrate_every
+    from aiuditor_service.role import AiuditorRole
+
+    role = getattr(app.state, "aiuditor_role", None)
+    tenant_id = getattr(app.state, "hydrate_tenant_id", None)
+    hop = getattr(app.state, "parent_hop", None)
+    if role is not AiuditorRole.WITNESS or tenant_id is None:
+        return
+    if hop is None or isinstance(hop, ClosedParentHop):
+        return
+    every = resolve_hydrate_every()
+    while not stop.is_set():
+        try:
+            snapshot = await hop.hydrate(tenant_id)
+            apply_hydrate(stores_from_app(app), snapshot)
+            logger.info("aiuditor witness hydrate applied tenant=%s", tenant_id)
+        except Exception as exc:
+            logger.warning("aiuditor witness hydrate failed: %s", exc)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=every)
+            break
+        except TimeoutError:
+            continue
+        except Exception:
+            await sleep(every)
 
 
 def apply_hydrate(stores: StoreBundle, snapshot: HydrateSnapshot) -> HydrateSnapshot:

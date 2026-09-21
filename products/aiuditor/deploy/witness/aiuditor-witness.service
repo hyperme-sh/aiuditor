@@ -1,0 +1,17 @@
+[Unit]
+Description=AIuditor witness sidecar (hydrate only)
+Documentation=https://github.com/FyberLabs/panopticon/tree/main/products/aiuditor/deploy/witness
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PANOPTICON_IMAGE_TAG=test
+EnvironmentFile=-/etc/hypermesh/aiuditor-witness.env
+# Host network + HOST=127.0.0.1. Do not publish 0.0.0.0:8015.
+ExecStart=/usr/bin/docker run --rm --name aiuditor-witness --network host --env-file /etc/hypermesh/aiuditor-witness.env ghcr.io/fyberlabs/aiuditor-service:${PANOPTICON_IMAGE_TAG}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
@@ -29,7 +30,11 @@ from aiuditor_service.hypermesh import (
 )
 from aiuditor_service.interfaces.api.routes import router as aiuditor_router
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
-from aiuditor_service.parent import ParentHop, resolve_parent_hop
+from aiuditor_service.package import (
+    resolve_hydrate_tenant,
+    witness_uses_memory_persist,
+)
+from aiuditor_service.parent import ParentHop, resolve_parent_hop, run_hydrate_loop
 from aiuditor_service.provider import ProviderHop, resolve_provider_hop
 from aiuditor_service.persist import (
     PERSIST_UNAVAILABLE,
@@ -57,17 +62,22 @@ def create_app(
 ) -> FastAPI:
     svc_name = service_name or settings.service_name
     resolved_role = role if role is not None else resolve_role()
+    hydrate_tenant_id = resolve_hydrate_tenant(resolved_role)
+    use_sql = enable_db_middleware
+    if witness_uses_memory_persist(resolved_role):
+        use_sql = False
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         configure_logging()
         persist = persist_session or resolve_persist(
-            enable_db_middleware, settings.database_url
+            use_sql, settings.database_url, role=resolved_role
         )
         stores = new_stores(persist)
         app.state.aiuditor_persist = persist
         app.state.aiuditor_role = resolved_role
         app.state.aiuditor_writer = writer_for(resolved_role)
+        app.state.hydrate_tenant_id = hydrate_tenant_id
         app.state.connection_store = stores.connection_store
         app.state.approval_store = stores.approval_store
         app.state.policy_store = stores.policy_store
@@ -85,7 +95,7 @@ def create_app(
         app.state.provider_hop = resolve_provider_hop(provider_hop)
         app.state.parent_hop = resolve_parent_hop(parent_hop)
         engine = None
-        if enable_db_middleware:
+        if use_sql:
             engine = create_async_engine(normalize_database_url(settings.database_url))
             maker = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
             configure_session_maker(maker)
@@ -129,8 +139,19 @@ def create_app(
         else:
             set_tenant_event_publisher(NoOpTenantEventPublisher())
 
+        hydrate_stop = asyncio.Event()
+        app.state.hydrate_stop = hydrate_stop
+        hydrate_task = asyncio.create_task(run_hydrate_loop(app, stop=hydrate_stop))
+        app.state.hydrate_task = hydrate_task
+
         yield
 
+        hydrate_stop.set()
+        hydrate_task.cancel()
+        try:
+            await hydrate_task
+        except asyncio.CancelledError:
+            pass
         set_tenant_event_publisher(None)
         kp = getattr(app.state, "kafka_producer", None)
         if kp is not None:
@@ -197,7 +218,7 @@ def create_app(
 
     app.openapi = custom_openapi
 
-    if enable_db_middleware:
+    if use_sql:
         app.add_middleware(AiuditorServiceDbMiddleware)
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(aiuditor_router, prefix="/api/v1")
