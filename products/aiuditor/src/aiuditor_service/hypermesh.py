@@ -32,6 +32,9 @@ class HostView:
     enrolled: bool
     role: str
     tenant_id: uuid.UUID | None = None
+    path_b_state: str | None = None
+    schedule_hold: bool = False
+    sell_state: str | None = None
 
 
 class HostLookup(Protocol):
@@ -110,6 +113,9 @@ def _view_from_device(body: object, *, device_id: uuid.UUID) -> HostView:
         enrolled=bool(body.get("enrolled")),
         role=str(body.get("role") or "").strip() or HOST_ROLE,
         tenant_id=parsed_tenant,
+        path_b_state=str(body["path_b_state"]) if body.get("path_b_state") else None,
+        schedule_hold=bool(body.get("schedule_hold") or False),
+        sell_state=str(body["sell_state"]) if body.get("sell_state") else None,
     )
 
 
@@ -126,12 +132,18 @@ class FakeHostLookup:
         tenant_id: uuid.UUID | None = None,
         enrolled: bool = True,
         role: str = HOST_ROLE,
+        path_b_state: str | None = "green",
+        schedule_hold: bool = False,
+        sell_state: str | None = None,
     ) -> HostView:
         view = HostView(
             id=device_id,
             enrolled=enrolled,
             role=role,
             tenant_id=tenant_id,
+            path_b_state=path_b_state,
+            schedule_hold=schedule_hold,
+            sell_state=sell_state,
         )
         self.by_id[device_id] = view
         return view
@@ -160,6 +172,7 @@ class LeaseView:
     purpose: str
     status: str
     tenant_id: uuid.UUID | None = None
+    contract_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +203,16 @@ class PlaneHop(Protocol):
         headers: dict[str, str] | None = None,
     ) -> IssuedGrant: ...
 
+    async def apply_violation(
+        self,
+        tenant_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        action: str,
+        reason: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None: ...
+
 
 class ClosedPlaneHop:
     async def get_lease(
@@ -209,6 +232,17 @@ class ClosedPlaneHop:
         reserved_hours: int,
         headers: dict[str, str] | None = None,
     ) -> IssuedGrant:
+        raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
+
+    async def apply_violation(
+        self,
+        tenant_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        action: str,
+        reason: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
 
 
@@ -283,6 +317,35 @@ class HttpPlaneHop:
         except (KeyError, ValueError, TypeError) as exc:
             raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
 
+    async def apply_violation(
+        self,
+        tenant_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        action: str,
+        reason: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        hop = self._hop(tenant_id, headers)
+        token = (os.environ.get("HYPERMESH_INTERNAL_TOKEN") or "").strip()
+        if token:
+            hop["X-Internal-Token"] = token
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    f"{self._base}/api/v1/hypermesh/internal/lease-violate",
+                    headers=hop,
+                    json={
+                        "lease_id": str(lease_id),
+                        "action": action,
+                        "reason": reason,
+                    },
+                )
+        except httpx.HTTPError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if response.status_code >= 400:
+            raise HostLookupUnavailable(_http_detail(response) or PLANE_HOP_FAILED)
+
 
 def _http_detail(response: httpx.Response) -> str | None:
     try:
@@ -303,6 +366,8 @@ def _lease_from_body(body: object, *, lease_id: uuid.UUID) -> LeaseView:
         device_id = uuid.UUID(str(raw_device)) if raw_device else None
         tenant_id = uuid.UUID(str(raw_tenant)) if raw_tenant else None
         parsed_id = uuid.UUID(str(body.get("id") or lease_id))
+        raw_cid = body.get("contract_id")
+        contract_id = uuid.UUID(str(raw_cid)) if raw_cid else None
     except (ValueError, AttributeError, TypeError) as exc:
         raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
     return LeaseView(
@@ -311,6 +376,7 @@ def _lease_from_body(body: object, *, lease_id: uuid.UUID) -> LeaseView:
         purpose=str(body.get("purpose") or "renter"),
         status=str(body.get("status") or ""),
         tenant_id=tenant_id,
+        contract_id=contract_id,
     )
 
 
@@ -318,7 +384,9 @@ def _lease_from_body(body: object, *, lease_id: uuid.UUID) -> LeaseView:
 class FakePlaneHop:
     leases: dict[uuid.UUID, LeaseView] = field(default_factory=dict)
     grants: dict[uuid.UUID, IssuedGrant] = field(default_factory=dict)
+    violations: list[dict[str, object]] = field(default_factory=list)
     mint_error: str | None = None
+    violate_error: str | None = None
 
     def add_lease(
         self,
@@ -328,6 +396,7 @@ class FakePlaneHop:
         purpose: str = "renter",
         status: str = "active",
         tenant_id: uuid.UUID | None = None,
+        contract_id: uuid.UUID | None = None,
     ) -> LeaseView:
         view = LeaseView(
             id=lease_id,
@@ -335,6 +404,7 @@ class FakePlaneHop:
             purpose=purpose,
             status=status,
             tenant_id=tenant_id,
+            contract_id=contract_id,
         )
         self.leases[lease_id] = view
         return view
@@ -375,6 +445,42 @@ class FakePlaneHop:
         )
         self.grants[device_id] = grant
         return grant
+
+    async def apply_violation(
+        self,
+        tenant_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        action: str,
+        reason: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        del headers
+        if self.violate_error:
+            raise HostLookupUnavailable(self.violate_error)
+        self.violations.append(
+            {
+                "tenant_id": tenant_id,
+                "lease_id": lease_id,
+                "action": action,
+                "reason": reason,
+            }
+        )
+        view = self.leases.get(lease_id)
+        if view is not None:
+            status = {
+                "suspend": "suspended",
+                "stop": "failed",
+                "refund": "refunded",
+            }.get(action, view.status)
+            self.leases[lease_id] = LeaseView(
+                id=view.id,
+                device_id=view.device_id,
+                purpose=view.purpose,
+                status=status,
+                tenant_id=view.tenant_id,
+                contract_id=view.contract_id,
+            )
 
 
 def resolve_host_lookup(

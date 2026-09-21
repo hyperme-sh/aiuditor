@@ -242,6 +242,52 @@ class ApprovalPolicy(BaseModel):
 class ContractStatus(StrEnum):
     DRAFT = "draft"
     SIGNED = "signed"
+    SUSPENDED = "suspended"
+
+
+class ViolationKind(StrEnum):
+    TERM = "term"
+    CERT_FAIL = "cert_fail"
+    POLICY_DENY = "policy_deny"
+    ABUSE = "abuse"
+
+
+class ViolationAction(StrEnum):
+    SUSPEND = "suspend"
+    STOP = "stop"
+    REFUND = "refund"
+
+
+class ContractViolationCreate(BaseModel):
+    """File a violation. Dispute reads cert + audit, not an on-chain court."""
+
+    kind: ViolationKind
+    action: ViolationAction | None = None
+    reason: str | None = Field(default=None, max_length=120)
+
+
+class ContractViolation(BaseModel):
+    """Attached to a signed Contract. Not a handoff package."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    contract_id: uuid.UUID
+    lease_id: uuid.UUID | None = None
+    kind: ViolationKind
+    action: ViolationAction
+    reason: str | None = None
+    created_at: datetime
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "contract_id": str(self.contract_id),
+            "lease_id": str(self.lease_id) if self.lease_id else None,
+            "kind": self.kind.value,
+            "action": self.action.value,
+            "reason": self.reason,
+        }
 
 
 class ContractParty(BaseModel):
@@ -267,6 +313,23 @@ class ContractBind(BaseModel):
     """Cite a Hypermesh lease. Does not mint a ticket."""
 
     lease_id: uuid.UUID
+
+
+class ContractFulfill(BaseModel):
+    """Auto-sign on Checkout. Internal only. Not a named-human sign path."""
+
+    lease_id: uuid.UUID
+    contract_id: uuid.UUID | None = None
+    reserved_hours: int = Field(default=1, ge=1, le=24 * 30)
+    renter_subject: str = Field(..., min_length=1, max_length=256)
+    host_subject: str = Field(..., min_length=1, max_length=256)
+    meters: list[str] = Field(
+        default_factory=lambda: ["wall_time", "capacity_block"],
+        min_length=1,
+        max_length=8,
+    )
+    dispute_tip: str | None = Field(default=None, max_length=120)
+    connection_id: uuid.UUID | None = None
 
 
 class Contract(BaseModel):

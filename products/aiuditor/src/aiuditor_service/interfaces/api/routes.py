@@ -28,6 +28,7 @@ from aiuditor_service.credentials import credential_ref
 from aiuditor_service.contracts import (
     CONTRACT_NOT_FOUND,
     bind_contract,
+    fulfill_checkout_contract,
     put_contract,
     require_contract_signer,
     sign_contract,
@@ -50,6 +51,10 @@ from aiuditor_service.domain.models import (
     Contract,
     ContractBind,
     ContractCreate,
+    ContractFulfill,
+    ContractStatus,
+    ContractViolation,
+    ContractViolationCreate,
 )
 from aiuditor_service.events import (
     APPROVAL_HELD_V1,
@@ -58,7 +63,9 @@ from aiuditor_service.events import (
     CONNECTION_CREATED_V1,
     CONTRACT_BOUND_V1,
     CONTRACT_CREATED_V1,
+    CONTRACT_FULFILLED_V1,
     CONTRACT_SIGNED_V1,
+    CONTRACT_VIOLATED_V1,
     POLICY_CREATED_V1,
     POLICY_DELETED_V1,
 )
@@ -78,8 +85,14 @@ from aiuditor_service.store import (
     ConnectionStore,
     ContractStore,
     PolicyStore,
+    ViolationStore,
 )
 from aiuditor_service.tenant import require_auditor_actor, require_tenant_id
+from aiuditor_service.violations import (
+    deny_count,
+    evaluate_kind,
+    put_violation,
+)
 
 router = APIRouter(prefix="/aiuditor", tags=["aiuditor"])
 
@@ -141,6 +154,14 @@ def _contracts(request: Request) -> ContractStore:
     if store is None:
         store = ContractStore()
         request.app.state.contract_store = store
+    return store
+
+
+def _violations(request: Request) -> ViolationStore:
+    store = getattr(request.app.state, "violation_store", None)
+    if store is None:
+        store = ViolationStore()
+        request.app.state.violation_store = store
     return store
 
 
@@ -591,3 +612,137 @@ async def bind_contract_route(
         payload=row.to_event_payload(),
     )
     return row
+
+
+@router.post(
+    "/contracts/fulfill",
+    response_model=Contract,
+    status_code=status.HTTP_201_CREATED,
+    summary="Auto-sign a spine §D contract for Checkout. Internal only.",
+)
+async def fulfill_contract_route(
+    request: Request, body: ContractFulfill
+) -> Contract:
+    tenant_id = require_internal_actor(request)
+    row = fulfill_checkout_contract(_contracts(request), tenant_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=CONTRACT_FULFILLED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.get(
+    "/contracts/{contract_id}/violations",
+    response_model=list[ContractViolation],
+    summary="Violations on a contract. Dispute reads cert + audit, not a court.",
+)
+async def list_violations(
+    request: Request, contract_id: uuid.UUID
+) -> list[ContractViolation]:
+    tenant_id = require_hold_actor(request)
+    row = _contracts(request).get(tenant_id, contract_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
+    return _violations(request).list_for(tenant_id, contract_id=contract_id)
+
+
+async def _apply_filed_violation(
+    request: Request, tenant_id: uuid.UUID, filed: ContractViolation
+) -> None:
+    if filed.lease_id is None:
+        return
+    plane = getattr(request.app.state, "plane_hop", None)
+    if plane is None:
+        raise HTTPException(status_code=503, detail=PLANE_HOP_FAILED)
+    try:
+        await plane.apply_violation(
+            tenant_id,
+            filed.lease_id,
+            action=filed.action.value,
+            reason=filed.reason,
+            headers=dict(request.headers),
+        )
+    except HostLookupUnavailable as exc:
+        raise _plane_error(exc) from exc
+
+
+@router.post(
+    "/contracts/{contract_id}/violations",
+    response_model=ContractViolation,
+    status_code=status.HTTP_201_CREATED,
+    summary="File a term, cert-fail, policy-deny, or abuse violation.",
+)
+async def file_violation_route(
+    request: Request, contract_id: uuid.UUID, body: ContractViolationCreate
+) -> ContractViolation:
+    tenant_id = require_auditor_actor(request)
+    filed, _updated = put_violation(
+        _violations(request), _contracts(request), tenant_id, contract_id, body
+    )
+    await _apply_filed_violation(request, tenant_id, filed)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=CONTRACT_VIOLATED_V1,
+        payload=filed.to_event_payload(),
+    )
+    return filed
+
+
+@router.post(
+    "/contracts/{contract_id}/evaluate",
+    response_model=list[ContractViolation],
+    summary="Evaluate term, cert-fail, deny budget, and host unpaid.",
+)
+async def evaluate_contract_route(
+    request: Request, contract_id: uuid.UUID
+) -> list[ContractViolation]:
+    tenant_id = require_hold_actor(request)
+    row = _contracts(request).get(tenant_id, contract_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
+    existing = _violations(request).list_for(tenant_id, contract_id=contract_id)
+    if row.status is ContractStatus.DRAFT:
+        raise HTTPException(status_code=409, detail="only a signed contract can be evaluated")
+    if row.status is ContractStatus.SUSPENDED:
+        return existing
+    lease = None
+    host = None
+    if row.lease_id is not None:
+        plane = getattr(request.app.state, "plane_hop", None)
+        lookup = getattr(request.app.state, "host_lookup", None)
+        if plane is None:
+            raise HTTPException(status_code=503, detail=PLANE_HOP_FAILED)
+        try:
+            lease = await plane.get_lease(
+                tenant_id, row.lease_id, headers=dict(request.headers)
+            )
+            if lease is not None and lease.device_id is not None and lookup is not None:
+                host = await lookup.get(
+                    tenant_id, lease.device_id, headers=dict(request.headers)
+                )
+        except HostLookupUnavailable as exc:
+            raise _plane_error(exc) from exc
+    denied = (
+        deny_count(_approvals(request), tenant_id, row.lease_id)
+        if row.lease_id is not None
+        else 0
+    )
+    kind = evaluate_kind(row, host=host, lease=lease, denied=denied)
+    if kind is None:
+        return existing
+    filed, _updated = put_violation(
+        _violations(request),
+        _contracts(request),
+        tenant_id,
+        contract_id,
+        ContractViolationCreate(kind=kind),
+    )
+    await _apply_filed_violation(request, tenant_id, filed)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=CONTRACT_VIOLATED_V1,
+        payload=filed.to_event_payload(),
+    )
+    return [filed]

@@ -12,6 +12,7 @@ from aiuditor_service.domain.models import (
     ConnectionKind,
     ConnectionPurpose,
     Contract,
+    ContractViolation,
 )
 
 
@@ -158,3 +159,26 @@ class ContractStore:
             if row.lease_id == lease_id:
                 return row
         return None
+
+
+@dataclass
+class ViolationStore:
+    violations: dict[uuid.UUID, dict[uuid.UUID, ContractViolation]] = field(
+        default_factory=dict
+    )
+
+    def for_tenant(self, tenant_id: uuid.UUID) -> dict[uuid.UUID, ContractViolation]:
+        return self.violations.setdefault(tenant_id, {})
+
+    def list_for(
+        self, tenant_id: uuid.UUID, *, contract_id: uuid.UUID | None = None
+    ) -> list[ContractViolation]:
+        rows = list(self.for_tenant(tenant_id).values())
+        if contract_id is not None:
+            rows = [row for row in rows if row.contract_id == contract_id]
+        rows.sort(key=lambda row: row.created_at)
+        return rows
+
+    def put(self, row: ContractViolation) -> ContractViolation:
+        self.for_tenant(row.tenant_id)[row.id] = row
+        return row
