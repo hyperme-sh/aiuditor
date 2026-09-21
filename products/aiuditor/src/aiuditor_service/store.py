@@ -60,11 +60,23 @@ class ApprovalStore:
         return self.approvals.setdefault(tenant_id, {})
 
     def list_for(
-        self, tenant_id: uuid.UUID, *, status: str | None = None
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        status: str | None = None,
+        lease_id: uuid.UUID | None = None,
+        who: str | None = None,
+        prompt_class: str | None = None,
     ) -> list[Approval]:
         rows = list(self.for_tenant(tenant_id).values())
         if status:
             rows = [row for row in rows if row.status.value == status]
+        if lease_id is not None:
+            rows = [row for row in rows if row.lease_id == lease_id]
+        if who is not None:
+            rows = [row for row in rows if row.who == who]
+        if prompt_class is not None:
+            rows = [row for row in rows if row.prompt_class == prompt_class]
         rows.sort(key=lambda row: row.created_at)
         return rows
 

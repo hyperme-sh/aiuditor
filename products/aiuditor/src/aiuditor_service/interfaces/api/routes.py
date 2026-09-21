@@ -15,9 +15,12 @@ from api.infrastructure.messaging.tenant_event_publisher import get_tenant_event
 
 from aiuditor_service.approvals import (
     APPROVAL_NOT_FOUND,
+    consume_allow_once,
     expire_due,
     hold_approval,
+    latest_for,
     require_hold_actor,
+    require_internal_actor,
     resolve_approval,
     resolver_subject,
 )
@@ -360,16 +363,41 @@ async def create_approval(request: Request, body: ApprovalCreate) -> Approval:
 async def list_approvals(
     request: Request,
     approval_status: str | None = Query(default=None, alias="status"),
+    lease_id: uuid.UUID | None = Query(default=None),
+    who: str | None = Query(default=None),
 ) -> list[Approval]:
-    tenant_id = require_auditor_actor(request)
+    tenant_id = require_hold_actor(request)
     store = _approvals(request)
     expire_due(store, tenant_id)
-    return store.list_for(tenant_id, status=approval_status)
+    return store.list_for(
+        tenant_id, status=approval_status, lease_id=lease_id, who=who
+    )
+
+
+@router.get(
+    "/approvals/latest",
+    response_model=Approval,
+    summary="Door lookup for a lease + who",
+)
+async def latest_approval(
+    request: Request,
+    lease_id: uuid.UUID,
+    who: str,
+    prompt_class: str | None = Query(default=None),
+) -> Approval:
+    tenant_id = require_hold_actor(request)
+    store = _approvals(request)
+    row = latest_for(
+        store, tenant_id, lease_id=lease_id, who=who, prompt_class=prompt_class
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND)
+    return row
 
 
 @router.get("/approvals/{approval_id}", response_model=Approval)
 async def get_approval(request: Request, approval_id: uuid.UUID) -> Approval:
-    tenant_id = require_auditor_actor(request)
+    tenant_id = require_hold_actor(request)
     store = _approvals(request)
     expire_due(store, tenant_id)
     row = store.get(tenant_id, approval_id)
@@ -401,3 +429,15 @@ async def resolve_approval_route(
         payload=row.to_event_payload(),
     )
     return row
+
+
+@router.post(
+    "/approvals/{approval_id}/consume",
+    response_model=Approval,
+    summary="Door consumes an unused allow_once",
+)
+async def consume_approval(
+    request: Request, approval_id: uuid.UUID
+) -> Approval:
+    tenant_id = require_internal_actor(request)
+    return consume_allow_once(_approvals(request), tenant_id, approval_id)
