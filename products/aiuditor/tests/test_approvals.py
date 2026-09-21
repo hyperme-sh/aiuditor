@@ -7,11 +7,16 @@ import pytest
 from fastapi import HTTPException
 
 from aiuditor_service.approvals import (
+    APPROVAL_ALREADY_CONSUMED,
+    APPROVAL_NOT_ALLOW_ONCE,
     APPROVAL_NOT_HELD,
+    INTERNAL_REQUIRED,
     LLM_NEVER_RESOLVES,
     NAMED_HUMAN_REQUIRED,
+    consume_allow_once,
     expire_due,
     hold_approval,
+    latest_for,
     resolve_approval,
 )
 from aiuditor_service.domain.models import (
@@ -164,7 +169,9 @@ async def test_site_inbox_paths_are_not_on_aiuditor(http_client):
     spec = await http_client.get("/openapi.json")
     paths = spec.json()["paths"]
     assert "/api/v1/aiuditor/approvals" in paths
+    assert "/api/v1/aiuditor/approvals/latest" in paths
     assert "/api/v1/aiuditor/approvals/{approval_id}/resolve" in paths
+    assert "/api/v1/aiuditor/approvals/{approval_id}/consume" in paths
     assert "/api/v1/auditor/v0/tickets" not in paths
     assert "/api/v1/grants/v0/grants" not in paths
 
@@ -228,3 +235,206 @@ def test_llm_subject_is_refused_on_resolve():
     with pytest.raises(HTTPException) as exc:
         resolver_subject(Request(scope))
     assert exc.value.detail == LLM_NEVER_RESOLVES
+
+
+def test_second_hold_reuses_the_open_row():
+    store = ApprovalStore()
+    tenant = uuid.uuid4()
+    lease = uuid.uuid4()
+    first = hold_approval(
+        store,
+        tenant,
+        ApprovalCreate(
+            who="pk_test",
+            why=ApprovalWhy.COMPLETION,
+            lease_id=lease,
+            prompt_class="out_of_scope",
+        ),
+    )
+    second = hold_approval(
+        store,
+        tenant,
+        ApprovalCreate(
+            who="pk_test",
+            why=ApprovalWhy.COMPLETION,
+            lease_id=lease,
+            prompt_class="out_of_scope",
+        ),
+    )
+    assert second.id == first.id
+    assert len(store.list_for(tenant)) == 1
+
+
+def test_consume_allow_once_is_one_shot():
+    store = ApprovalStore()
+    tenant = uuid.uuid4()
+    lease = uuid.uuid4()
+    row = hold_approval(
+        store,
+        tenant,
+        ApprovalCreate(who="pk_test", why=ApprovalWhy.COMPLETION, lease_id=lease),
+    )
+    allowed = resolve_approval(
+        store,
+        tenant,
+        row.id,
+        decision=ApprovalDecision.ALLOW_ONCE,
+        resolved_by="11111111-1111-1111-1111-111111111111",
+    )
+    consumed = consume_allow_once(store, tenant, allowed.id)
+    assert consumed.consumed_at is not None
+    with pytest.raises(HTTPException) as exc:
+        consume_allow_once(store, tenant, allowed.id)
+    assert exc.value.detail == APPROVAL_ALREADY_CONSUMED
+    with pytest.raises(HTTPException) as again:
+        consume_allow_once(store, tenant, uuid.uuid4())
+    assert again.value.status_code == 404
+
+
+def test_consume_refuses_allow_session():
+    store = ApprovalStore()
+    tenant = uuid.uuid4()
+    row = hold_approval(
+        store,
+        tenant,
+        ApprovalCreate(who="pk_test", why=ApprovalWhy.COMPLETION, lease_id=uuid.uuid4()),
+    )
+    resolve_approval(
+        store,
+        tenant,
+        row.id,
+        decision=ApprovalDecision.ALLOW_SESSION,
+        resolved_by="11111111-1111-1111-1111-111111111111",
+    )
+    with pytest.raises(HTTPException) as exc:
+        consume_allow_once(store, tenant, row.id)
+    assert exc.value.detail == APPROVAL_NOT_ALLOW_ONCE
+
+
+def test_latest_prefers_session_after_consumed_once():
+    store = ApprovalStore()
+    tenant = uuid.uuid4()
+    lease = uuid.uuid4()
+    once = hold_approval(
+        store,
+        tenant,
+        ApprovalCreate(
+            who="pk_test",
+            why=ApprovalWhy.COMPLETION,
+            lease_id=lease,
+            prompt_class="out_of_scope",
+        ),
+    )
+    resolve_approval(
+        store,
+        tenant,
+        once.id,
+        decision=ApprovalDecision.ALLOW_ONCE,
+        resolved_by="11111111-1111-1111-1111-111111111111",
+    )
+    consume_allow_once(store, tenant, once.id)
+    session = hold_approval(
+        store,
+        tenant,
+        ApprovalCreate(
+            who="pk_test",
+            why=ApprovalWhy.COMPLETION,
+            lease_id=lease,
+            prompt_class="incident_triage",
+        ),
+    )
+    resolve_approval(
+        store,
+        tenant,
+        session.id,
+        decision=ApprovalDecision.ALLOW_SESSION,
+        resolved_by="11111111-1111-1111-1111-111111111111",
+    )
+    found = latest_for(
+        store,
+        tenant,
+        lease_id=lease,
+        who="pk_test",
+        prompt_class="out_of_scope",
+    )
+    assert found is not None
+    assert found.id == session.id
+
+
+@pytest.mark.asyncio
+async def test_internal_can_lookup_and_consume(
+    http_client, tenant_headers, tenant_a, internal_token
+):
+    lease = uuid.uuid4()
+    created = await http_client.post(
+        "/api/v1/aiuditor/approvals",
+        headers={
+            "X-Tenant-ID": str(tenant_a),
+            "X-Internal-Token": internal_token,
+        },
+        json={
+            "who": "pk_test",
+            "why": "completion",
+            "lease_id": str(lease),
+            "prompt_class": "out_of_scope",
+            "purpose": "ir",
+        },
+    )
+    assert created.status_code == 201, created.text
+    approval_id = created.json()["id"]
+    listed = await http_client.get(
+        "/api/v1/aiuditor/approvals",
+        headers={
+            "X-Tenant-ID": str(tenant_a),
+            "X-Internal-Token": internal_token,
+        },
+        params={"lease_id": str(lease), "who": "pk_test"},
+    )
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()] == [approval_id]
+    latest = await http_client.get(
+        "/api/v1/aiuditor/approvals/latest",
+        headers={
+            "X-Tenant-ID": str(tenant_a),
+            "X-Internal-Token": internal_token,
+        },
+        params={
+            "lease_id": str(lease),
+            "who": "pk_test",
+            "prompt_class": "out_of_scope",
+        },
+    )
+    assert latest.status_code == 200
+    assert latest.json()["id"] == approval_id
+
+    resolved = await http_client.post(
+        f"/api/v1/aiuditor/approvals/{approval_id}/resolve",
+        headers=tenant_headers,
+        json={"decision": "allow_once"},
+    )
+    assert resolved.status_code == 200
+    consumed = await http_client.post(
+        f"/api/v1/aiuditor/approvals/{approval_id}/consume",
+        headers={
+            "X-Tenant-ID": str(tenant_a),
+            "X-Internal-Token": internal_token,
+        },
+    )
+    assert consumed.status_code == 200, consumed.text
+    assert consumed.json()["consumed_at"] is not None
+    named = await http_client.post(
+        f"/api/v1/aiuditor/approvals/{approval_id}/consume",
+        headers=tenant_headers,
+    )
+    assert named.status_code == 401
+    assert named.json()["detail"] == INTERNAL_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_latest_is_404_when_empty(http_client, tenant_headers):
+    missing = await http_client.get(
+        "/api/v1/aiuditor/approvals/latest",
+        headers=tenant_headers,
+        params={"lease_id": str(uuid.uuid4()), "who": "nobody"},
+    )
+    assert missing.status_code == 404

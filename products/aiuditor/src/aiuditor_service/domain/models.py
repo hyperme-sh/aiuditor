@@ -181,6 +181,7 @@ class Approval(BaseModel):
     created_at: datetime
     expires_at: datetime
     resolved_at: datetime | None = None
+    consumed_at: datetime | None = None
 
     def to_event_payload(self) -> dict[str, object]:
         return {
@@ -195,4 +196,7 @@ class Approval(BaseModel):
             "status": self.status.value,
             "decision": self.decision.value if self.decision else None,
             "resolved_by": self.resolved_by,
+            "consumed_at": (
+                self.consumed_at.isoformat() if self.consumed_at else None
+            ),
         }
