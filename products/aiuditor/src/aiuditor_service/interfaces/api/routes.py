@@ -28,6 +28,8 @@ from aiuditor_service.credentials import credential_ref
 from aiuditor_service.domain.models import (
     Approval,
     ApprovalCreate,
+    ApprovalPolicy,
+    ApprovalPolicyCreate,
     ApprovalResolve,
     AuditorGrant,
     Connection,
@@ -44,6 +46,12 @@ from aiuditor_service.events import (
     APPROVAL_RESOLVED_V1,
     CONNECTION_ASSIGNED_V1,
     CONNECTION_CREATED_V1,
+    POLICY_CREATED_V1,
+    POLICY_DELETED_V1,
+)
+from aiuditor_service.policies import (
+    POLICY_NOT_FOUND,
+    put_policy,
 )
 from aiuditor_service.hypermesh import (
     HOST_LOOKUP_FAILED,
@@ -52,7 +60,7 @@ from aiuditor_service.hypermesh import (
     HostLookupUnavailable,
 )
 from aiuditor_service.provider import ProviderUnavailable
-from aiuditor_service.store import ApprovalStore, ConnectionStore
+from aiuditor_service.store import ApprovalStore, ConnectionStore, PolicyStore
 from aiuditor_service.tenant import require_auditor_actor, require_tenant_id
 
 router = APIRouter(prefix="/aiuditor", tags=["aiuditor"])
@@ -99,6 +107,14 @@ def _approvals(request: Request) -> ApprovalStore:
     if store is None:
         store = ApprovalStore()
         request.app.state.approval_store = store
+    return store
+
+
+def _policies(request: Request) -> PolicyStore:
+    store = getattr(request.app.state, "policy_store", None)
+    if store is None:
+        store = PolicyStore()
+        request.app.state.policy_store = store
     return store
 
 
@@ -441,3 +457,42 @@ async def consume_approval(
 ) -> Approval:
     tenant_id = require_internal_actor(request)
     return consume_allow_once(_approvals(request), tenant_id, approval_id)
+
+
+@router.post(
+    "/policies",
+    response_model=ApprovalPolicy,
+    status_code=status.HTTP_201_CREATED,
+    summary="Org allow/hold/deny. Default renter chat is unclassified.",
+)
+async def create_policy(request: Request, body: ApprovalPolicyCreate) -> ApprovalPolicy:
+    tenant_id = require_auditor_actor(request)
+    row = put_policy(_policies(request), tenant_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=POLICY_CREATED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.get("/policies", response_model=list[ApprovalPolicy], summary="Org policy")
+async def list_policies(
+    request: Request,
+    purpose: str | None = Query(default=None),
+) -> list[ApprovalPolicy]:
+    tenant_id = require_hold_actor(request)
+    return _policies(request).list_for(tenant_id, purpose=purpose)
+
+
+@router.delete("/policies/{policy_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_policy(request: Request, policy_id: uuid.UUID) -> None:
+    tenant_id = require_auditor_actor(request)
+    row = _policies(request).delete(tenant_id, policy_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=POLICY_NOT_FOUND)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=POLICY_DELETED_V1,
+        payload=row.to_event_payload(),
+    )

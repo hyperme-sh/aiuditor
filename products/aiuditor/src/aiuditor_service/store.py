@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from aiuditor_service.domain.models import (
     Approval,
+    ApprovalPolicy,
     Connection,
     ConnectionKind,
     ConnectionPurpose,
@@ -86,3 +87,47 @@ class ApprovalStore:
     def put(self, row: Approval) -> Approval:
         self.for_tenant(row.tenant_id)[row.id] = row
         return row
+
+
+@dataclass
+class PolicyStore:
+    policies: dict[uuid.UUID, dict[uuid.UUID, ApprovalPolicy]] = field(
+        default_factory=dict
+    )
+
+    def for_tenant(self, tenant_id: uuid.UUID) -> dict[uuid.UUID, ApprovalPolicy]:
+        return self.policies.setdefault(tenant_id, {})
+
+    def list_for(
+        self, tenant_id: uuid.UUID, *, purpose: str | None = None
+    ) -> list[ApprovalPolicy]:
+        rows = list(self.for_tenant(tenant_id).values())
+        if purpose:
+            rows = [row for row in rows if row.purpose == purpose]
+        rows.sort(key=lambda row: row.created_at)
+        return rows
+
+    def get(self, tenant_id: uuid.UUID, policy_id: uuid.UUID) -> ApprovalPolicy | None:
+        return self.for_tenant(tenant_id).get(policy_id)
+
+    def put(self, row: ApprovalPolicy) -> ApprovalPolicy:
+        self.for_tenant(row.tenant_id)[row.id] = row
+        return row
+
+    def delete(self, tenant_id: uuid.UUID, policy_id: uuid.UUID) -> ApprovalPolicy | None:
+        return self.for_tenant(tenant_id).pop(policy_id, None)
+
+    def matching(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        purpose: str,
+        prompt_class: str | None,
+        connection_id: uuid.UUID | None,
+    ) -> ApprovalPolicy | None:
+        for row in self.list_for(tenant_id, purpose=purpose):
+            same_class = row.prompt_class == prompt_class
+            same_conn = row.connection_id == connection_id
+            if same_class and same_conn:
+                return row
+        return None
