@@ -30,7 +30,13 @@ from aiuditor_service.hypermesh import (
 from aiuditor_service.interfaces.api.routes import router as aiuditor_router
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
 from aiuditor_service.provider import ProviderHop, resolve_provider_hop
-from aiuditor_service.store import ApprovalStore, ConnectionStore, ContractStore, PolicyStore
+from aiuditor_service.store import (
+    ApprovalStore,
+    ConnectionStore,
+    ContractStore,
+    PolicyStore,
+    ViolationStore,
+)
 
 logger = get_logger(__name__)
 
@@ -53,6 +59,7 @@ def create_app(
         app.state.approval_store = ApprovalStore()
         app.state.policy_store = PolicyStore()
         app.state.contract_store = ContractStore()
+        app.state.violation_store = ViolationStore()
         app.state.host_lookup = resolve_host_lookup(host_lookup)
         app.state.plane_hop = resolve_plane_hop(plane_hop)
         app.state.provider_hop = resolve_provider_hop(provider_hop)

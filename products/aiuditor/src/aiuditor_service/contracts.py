@@ -7,7 +7,7 @@ Prompt bodies are not stored. Persistence (RLS + Alembic) is follow-up.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 
@@ -16,6 +16,7 @@ from aiuditor_service.domain.models import (
     Contract,
     ContractBind,
     ContractCreate,
+    ContractFulfill,
     ContractParty,
     ContractStatus,
 )
@@ -31,6 +32,7 @@ CONTRACT_PARTIES = "at least two parties with a role and subject are required"
 CONTRACT_METER = "meters must be a non-empty subset of the spine E vocabulary"
 CONTRACT_RAIL = "1.x rail is stripe"
 CONTRACT_PARTY_ROLE = "party role must be renter, host, auditor, or billing"
+CHECKOUT_SIGNER = "checkout"
 
 SPINE_METERS = frozenset(
     {
@@ -161,6 +163,48 @@ def bind_contract(
     updated = row.model_copy(update={"lease_id": body.lease_id})
     store.put(updated)
     return updated
+
+
+def fulfill_checkout_contract(
+    store: ContractStore,
+    tenant_id: uuid.UUID,
+    body: ContractFulfill,
+    *,
+    now: datetime | None = None,
+) -> Contract:
+    """Mint or bind a signed Contract for Stripe checkout / first motion.
+
+    Internal only. A named human still uses draft + sign. This path is
+    the auto-sign the HMAC ticket waits on.
+    """
+
+    clock = _now(now)
+    if body.contract_id is not None:
+        return bind_contract(
+            store, tenant_id, body.contract_id, ContractBind(lease_id=body.lease_id)
+        )
+    hours = max(1, min(int(body.reserved_hours), 24 * 30))
+    until = clock + timedelta(hours=hours)
+    row = put_contract(
+        store,
+        tenant_id,
+        ContractCreate(
+            parties=[
+                ContractParty(role="renter", subject=body.renter_subject),
+                ContractParty(role="host", subject=body.host_subject),
+            ],
+            meters=body.meters,
+            rail=SPINE_RAIL,
+            until=until,
+            dispute_tip=body.dispute_tip,
+            connection_id=body.connection_id,
+            lease_id=body.lease_id,
+        ),
+        now=clock,
+    )
+    return sign_contract(
+        store, tenant_id, row.id, signed_by=CHECKOUT_SIGNER, now=clock
+    )
 
 
 def require_contract_signer(request) -> str:

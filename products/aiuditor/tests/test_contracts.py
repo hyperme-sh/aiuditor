@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from aiuditor_service.contracts import (
+    CHECKOUT_SIGNER,
     CONTRACT_ALREADY_BOUND,
     CONTRACT_METER,
     CONTRACT_NOT_DRAFT,
@@ -15,18 +16,21 @@ from aiuditor_service.contracts import (
     CONTRACT_UNTIL_PAST,
     LEASE_ALREADY_BOUND,
     bind_contract,
+    fulfill_checkout_contract,
     put_contract,
     sign_contract,
 )
 from aiuditor_service.domain.models import (
     ContractBind,
     ContractCreate,
+    ContractFulfill,
     ContractParty,
     ContractStatus,
 )
 from aiuditor_service.events import (
     CONTRACT_BOUND_V1,
     CONTRACT_CREATED_V1,
+    CONTRACT_FULFILLED_V1,
     CONTRACT_SIGNED_V1,
 )
 from aiuditor_service.store import ContractStore
@@ -133,6 +137,51 @@ def test_bind_requires_signed_and_is_one_shot():
     assert taken.value.detail == LEASE_ALREADY_BOUND
 
 
+def test_checkout_auto_signs_and_binds_a_lease():
+    store = ContractStore()
+    tenant = uuid.uuid4()
+    lease = uuid.uuid4()
+    row = fulfill_checkout_contract(
+        store,
+        tenant,
+        ContractFulfill(
+            lease_id=lease,
+            reserved_hours=2,
+            renter_subject="renter@example.com",
+            host_subject="agx-host",
+        ),
+        now=datetime(2026, 9, 20, tzinfo=UTC),
+    )
+    assert row.status is ContractStatus.SIGNED
+    assert row.signed_by == CHECKOUT_SIGNER
+    assert row.lease_id == lease
+    assert row.rail == "stripe"
+    assert "wall_time" in row.meters
+    assert row.until == datetime(2026, 9, 20, 2, tzinfo=UTC)
+
+
+def test_checkout_can_bind_a_human_signed_contract():
+    store = ContractStore()
+    tenant = uuid.uuid4()
+    draft = put_contract(store, tenant, _draft())
+    signed = sign_contract(
+        store, tenant, draft.id, signed_by="11111111-1111-1111-1111-111111111111"
+    )
+    lease = uuid.uuid4()
+    bound = fulfill_checkout_contract(
+        store,
+        tenant,
+        ContractFulfill(
+            lease_id=lease,
+            contract_id=signed.id,
+            renter_subject="renter@example.com",
+            host_subject="agx-host",
+        ),
+    )
+    assert bound.id == signed.id
+    assert bound.lease_id == lease
+
+
 @pytest.mark.asyncio
 async def test_operator_can_draft_sign_and_bind(
     http_client, tenant_headers, event_sink
@@ -179,6 +228,46 @@ async def test_operator_can_draft_sign_and_bind(
     assert bound.status_code == 200, bound.text
     assert bound.json()["lease_id"] == str(lease)
     assert CONTRACT_BOUND_V1 in [e["event_type"] for e in event_sink]
+
+
+@pytest.mark.asyncio
+async def test_internal_can_fulfill_checkout_contract(
+    http_client, tenant_a, internal_token, event_sink
+):
+    lease = uuid.uuid4()
+    fulfilled = await http_client.post(
+        "/api/v1/aiuditor/contracts/fulfill",
+        headers={
+            "X-Tenant-ID": str(tenant_a),
+            "X-Internal-Token": internal_token,
+        },
+        json={
+            "lease_id": str(lease),
+            "reserved_hours": 3,
+            "renter_subject": "renter@example.com",
+            "host_subject": "agx-host",
+        },
+    )
+    assert fulfilled.status_code == 201, fulfilled.text
+    body = fulfilled.json()
+    assert body["status"] == "signed"
+    assert body["signed_by"] == CHECKOUT_SIGNER
+    assert body["lease_id"] == str(lease)
+    assert CONTRACT_FULFILLED_V1 in [e["event_type"] for e in event_sink]
+
+
+@pytest.mark.asyncio
+async def test_operator_cannot_use_checkout_fulfill(http_client, tenant_headers):
+    refused = await http_client.post(
+        "/api/v1/aiuditor/contracts/fulfill",
+        headers=tenant_headers,
+        json={
+            "lease_id": str(uuid.uuid4()),
+            "renter_subject": "renter@example.com",
+            "host_subject": "agx-host",
+        },
+    )
+    assert refused.status_code == 401
 
 
 @pytest.fixture
@@ -305,6 +394,7 @@ async def test_site_inbox_is_not_on_contract_paths(http_client):
     assert "/api/v1/aiuditor/contracts" in paths
     assert "/api/v1/aiuditor/contracts/{contract_id}/sign" in paths
     assert "/api/v1/aiuditor/contracts/{contract_id}/bind" in paths
+    assert "/api/v1/aiuditor/contracts/fulfill" in paths
     assert "/api/v1/auditor/v0/tickets" not in paths
     assert "/api/v1/grants/v0/grants" not in paths
 
