@@ -18,7 +18,7 @@ Edge prefix: `/api/v1/aiuditor`. Wire prefix of the door (`hm_gw_`) is unchanged
 | Tenant | Bound JWT (tenant-session or purpose=service exchange). `X-Tenant-ID` is a cross-check. Header-only and Hypermesh machine prefixes are 401. |
 | Event | `aiuditor.connection.created.v1` on `controlplane.events.v1`. Lock fields only. No raw credential. |
 
-In-memory store. Persistence (table + RLS + Alembic) is follow-up when assignment and contracts need it.
+In-memory store in process. Alembic 0025 creates `aiuditor_*` tables with tenant RLS on the shared `controlplane` Postgres. Session-backed puts are the next cut.
 
 Not in this product: Hypermesh classes, devices, certs, leases, catalog. Not a second door. Not a second IdP.
 

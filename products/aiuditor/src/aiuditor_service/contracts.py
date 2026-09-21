@@ -1,7 +1,8 @@
 """AIuditor Contract. Spine §D only. Not a handoff package.
 
 parties, meters, rail, until, dispute tip. 1.x rail is Stripe.
-Prompt bodies are not stored. Persistence (RLS + Alembic) is follow-up.
+Prompt bodies are not stored. Tables + RLS are Alembic 0025. Session-backed
+puts are the next cut.
 """
 
 from __future__ import annotations
