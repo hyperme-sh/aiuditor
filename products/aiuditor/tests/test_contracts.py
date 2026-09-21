@@ -391,6 +391,7 @@ async def test_missing_contract_is_404(http_client, tenant_headers):
 async def test_site_inbox_is_not_on_contract_paths(http_client):
     spec = await http_client.get("/openapi.json")
     paths = spec.json()["paths"]
+    assert "/api/v1/aiuditor/export" in paths
     assert "/api/v1/aiuditor/contracts" in paths
     assert "/api/v1/aiuditor/contracts/{contract_id}/sign" in paths
     assert "/api/v1/aiuditor/contracts/{contract_id}/bind" in paths
