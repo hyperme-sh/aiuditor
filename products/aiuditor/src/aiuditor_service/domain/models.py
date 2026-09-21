@@ -200,3 +200,40 @@ class Approval(BaseModel):
                 self.consumed_at.isoformat() if self.consumed_at else None
             ),
         }
+
+
+class PolicyDisposition(StrEnum):
+    ALLOW = "allow"
+    HOLD = "hold"
+    DENY = "deny"
+
+
+class ApprovalPolicyCreate(BaseModel):
+    """Org allow/hold/deny. No prompt body. Default renter chat is unclassified."""
+
+    purpose: str = Field(..., min_length=1, max_length=32)
+    prompt_class: str | None = Field(default=None, max_length=64)
+    connection_id: uuid.UUID | None = None
+    disposition: PolicyDisposition
+
+
+class ApprovalPolicy(BaseModel):
+    """Most specific match wins. Distinct from fyber.auditor."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    purpose: str
+    prompt_class: str | None = None
+    connection_id: uuid.UUID | None = None
+    disposition: PolicyDisposition
+    created_at: datetime
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "purpose": self.purpose,
+            "prompt_class": self.prompt_class,
+            "connection_id": str(self.connection_id) if self.connection_id else None,
+            "disposition": self.disposition.value,
+        }
