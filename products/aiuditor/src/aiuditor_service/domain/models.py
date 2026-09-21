@@ -365,6 +365,32 @@ class Contract(BaseModel):
         }
 
 
+class ContractGrant(BaseModel):
+    """Signed grant a sibling product may cite. Not a TURN/oracle/payment row."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    status: ContractStatus
+    rail: str
+    meters: list[str]
+    until: datetime
+    connection_id: uuid.UUID | None = None
+    lease_id: uuid.UUID | None = None
+
+    @classmethod
+    def from_contract(cls, row: Contract) -> Self:
+        return cls(
+            id=row.id,
+            tenant_id=row.tenant_id,
+            status=row.status,
+            rail=row.rail,
+            meters=list(row.meters),
+            until=row.until,
+            connection_id=row.connection_id,
+            lease_id=row.lease_id,
+        )
+
+
 class ServiceBackend(StrEnum):
     """AIuditor catalog backend. Not a Hypermesh class or catalog row."""
 

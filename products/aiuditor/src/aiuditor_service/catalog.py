@@ -1,9 +1,9 @@
 """AIuditor service catalog. Distinct from Hypermesh classes and catalog.
 
 A row names a backend: Hypermesh P1 class, Hypermesh P2 catalog id, or a
-provider connection. TURN, oracles, and payments stay sibling products.
-Allocate picks a live connection, signs a Contract, and offers the host
-checkout whose HMAC the door already honors. Provider hops have no HMAC.
+provider connection. TURN, oracles, and payments stay sibling products
+until they can cite the same signed Contract — they are not catalog
+backends and are not wrapped here.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ RENTER_REQUIRED = "renter is required"
 PROVIDER_NOT_READY = "provider connection is not ready"
 LEASE_IS_AUDITOR = "auditor tickets are minted; they are not bound as renter leases"
 
-_SIBLING = frozenset({"turn", "oracle", "oracles", "payment", "payments"})
+SIBLING_TOKENS = frozenset({"turn", "oracle", "oracles", "payment", "payments"})
 
 
 def _now(clock: datetime | None) -> datetime:
@@ -85,7 +85,7 @@ def _refuse_sibling(title: str, class_id: str | None, catalog_id: str | None) ->
         tokens.add(class_id.strip().lower())
     if catalog_id:
         tokens.add(catalog_id.strip().lower())
-    if tokens & _SIBLING:
+    if tokens & SIBLING_TOKENS:
         raise HTTPException(status_code=400, detail=SERVICE_SIBLING)
 
 
@@ -222,6 +222,7 @@ async def allocate_service(
     service = catalog.get(tenant_id, service_id)
     if service is None:
         raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND)
+    _refuse_sibling(service.title, service.class_id, service.catalog_id)
     renter = _safe_text(body.renter)
     if renter is None:
         raise HTTPException(status_code=400, detail=RENTER_REQUIRED)
