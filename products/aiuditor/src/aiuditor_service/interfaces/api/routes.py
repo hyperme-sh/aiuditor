@@ -36,6 +36,7 @@ from aiuditor_service.contracts import (
     fulfill_checkout_contract,
     put_contract,
     require_contract_signer,
+    require_signed_grant,
     sign_contract,
 )
 from aiuditor_service.domain.models import (
@@ -57,6 +58,7 @@ from aiuditor_service.domain.models import (
     ServiceAllocate,
     ServiceAllocation,
     Contract,
+    ContractGrant,
     ContractBind,
     ContractCreate,
     ContractFulfill,
@@ -596,6 +598,18 @@ async def get_contract(request: Request, contract_id: uuid.UUID) -> Contract:
     if row is None:
         raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
     return row
+
+
+@router.get(
+    "/contracts/{contract_id}/grant",
+    response_model=ContractGrant,
+    summary="Signed spine §D grant a sibling product may cite. Not a catalog row.",
+)
+async def get_contract_grant(request: Request, contract_id: uuid.UUID) -> ContractGrant:
+    tenant_id = require_hold_actor(request)
+    return ContractGrant.from_contract(
+        require_signed_grant(_contracts(request), tenant_id, contract_id)
+    )
 
 
 @router.post(

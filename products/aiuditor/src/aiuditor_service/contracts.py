@@ -207,6 +207,21 @@ def fulfill_checkout_contract(
     )
 
 
+def require_signed_grant(
+    store: ContractStore,
+    tenant_id: uuid.UUID,
+    contract_id: uuid.UUID,
+) -> Contract:
+    """Signed spine §D grant a sibling product may cite. Not a catalog row."""
+
+    row = store.get(tenant_id, contract_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
+    if row.status is not ContractStatus.SIGNED:
+        raise HTTPException(status_code=409, detail=CONTRACT_NOT_SIGNED)
+    return row
+
+
 def require_contract_signer(request) -> str:
     """Named human. Never internal. Never an LLM name."""
 
