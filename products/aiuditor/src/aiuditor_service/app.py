@@ -32,6 +32,7 @@ from aiuditor_service.middleware import AiuditorServiceDbMiddleware
 from aiuditor_service.provider import ProviderHop, resolve_provider_hop
 from aiuditor_service.store import (
     ApprovalStore,
+    CatalogStore,
     ConnectionStore,
     ContractStore,
     PolicyStore,
@@ -60,6 +61,7 @@ def create_app(
         app.state.policy_store = PolicyStore()
         app.state.contract_store = ContractStore()
         app.state.violation_store = ViolationStore()
+        app.state.catalog_store = CatalogStore()
         app.state.host_lookup = resolve_host_lookup(host_lookup)
         app.state.plane_hop = resolve_plane_hop(plane_hop)
         app.state.provider_hop = resolve_provider_hop(provider_hop)
@@ -122,7 +124,7 @@ def create_app(
         title="AIuditor",
         description=(
             "Enterprise grant plane: connections, approval inbox, org policy, "
-            "and spine §D contracts. "
+            "spine §D contracts, and a service catalog. "
             "Edge prefix /api/v1/aiuditor. Does not absorb Hypermesh classes, devices, "
             "or certs. Site inbox stays /api/v1/auditor. The door stays hypermesh-gateway."
         ),
@@ -173,7 +175,7 @@ def create_app(
     app.include_router(aiuditor_router, prefix="/api/v1")
     add_optional_service_cors(app, env_var="AIUDITOR_SERVICE_CORS_ORIGINS")
     logger.info(
-        "AIuditor: health + connections + inbox + policy + contracts + optional CORS"
+        "AIuditor: health + connections + inbox + policy + contracts + catalog + optional CORS"
     )
     return app
 

@@ -363,3 +363,74 @@ class Contract(BaseModel):
             "status": self.status.value,
             "signed_by": self.signed_by,
         }
+
+
+class ServiceBackend(StrEnum):
+    """AIuditor catalog backend. Not a Hypermesh class or catalog row."""
+
+    HYPERMESH_CLASS = "hypermesh_class"
+    HYPERMESH_CATALOG = "hypermesh_catalog"
+    PROVIDER = "provider"
+
+
+class ServiceCreate(BaseModel):
+    """Name a leasable backend. TURN / oracles / payments stay siblings."""
+
+    title: str = Field(..., min_length=1, max_length=120)
+    backend: ServiceBackend
+    class_id: str | None = Field(default=None, max_length=64)
+    catalog_id: str | None = Field(default=None, max_length=64)
+    connection_id: uuid.UUID | None = None
+    meters: list[str] = Field(
+        default_factory=lambda: ["wall_time", "capacity_block"],
+        min_length=1,
+        max_length=8,
+    )
+
+    @model_validator(mode="after")
+    def _one_backend(self) -> Self:
+        if self.backend is ServiceBackend.HYPERMESH_CLASS:
+            if not (self.class_id or "").strip():
+                raise ValueError("hypermesh_class services require class_id")
+            if self.catalog_id or self.connection_id:
+                raise ValueError("hypermesh_class services take class_id only")
+            self.class_id = self.class_id.strip()
+            return self
+        if self.backend is ServiceBackend.HYPERMESH_CATALOG:
+            if not (self.catalog_id or "").strip():
+                raise ValueError("hypermesh_catalog services require catalog_id")
+            if self.class_id or self.connection_id:
+                raise ValueError("hypermesh_catalog services take catalog_id only")
+            self.catalog_id = self.catalog_id.strip()
+            return self
+        if self.connection_id is None:
+            raise ValueError("provider services require connection_id")
+        if self.class_id or self.catalog_id:
+            raise ValueError("provider services take connection_id only")
+        return self
+
+
+class CatalogService(BaseModel):
+    """Tenant-scoped leasable service. Classes stay on Hypermesh."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    title: str
+    backend: ServiceBackend
+    class_id: str | None = None
+    catalog_id: str | None = None
+    connection_id: uuid.UUID | None = None
+    meters: list[str]
+    created_at: datetime
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "title": self.title,
+            "backend": self.backend.value,
+            "class_id": self.class_id,
+            "catalog_id": self.catalog_id,
+            "connection_id": str(self.connection_id) if self.connection_id else None,
+            "meters": list(self.meters),
+        }
