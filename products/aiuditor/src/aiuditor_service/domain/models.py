@@ -375,6 +375,29 @@ class GrantExport(BaseModel):
     approvals: list[dict[str, object]]
 
 
+class AiuditorMeta(BaseModel):
+    """Deployment role a sibling or Hypermesh can check before honoring a grant."""
+
+    role: str
+    writer: str
+    parent: bool = False
+
+
+class HydrateSnapshot(BaseModel):
+    """Witness pull from a parent AIuditor. Not a handoff package. No tickets."""
+
+    tenant_id: uuid.UUID
+    role: str
+    writer: str
+    exported_at: datetime
+    connections: list[dict[str, object]]
+    policies: list[dict[str, object]]
+    contracts: list[dict[str, object]]
+    violations: list[dict[str, object]]
+    approvals: list[dict[str, object]]
+    catalog: list[dict[str, object]]
+
+
 class ContractGrant(BaseModel):
     """Signed grant a sibling product may cite. Not a TURN/oracle/payment row."""
 
@@ -384,11 +407,12 @@ class ContractGrant(BaseModel):
     rail: str
     meters: list[str]
     until: datetime
+    writer: str
     connection_id: uuid.UUID | None = None
     lease_id: uuid.UUID | None = None
 
     @classmethod
-    def from_contract(cls, row: Contract) -> Self:
+    def from_contract(cls, row: Contract, *, writer: str) -> Self:
         return cls(
             id=row.id,
             tenant_id=row.tenant_id,
@@ -396,6 +420,7 @@ class ContractGrant(BaseModel):
             rail=row.rail,
             meters=list(row.meters),
             until=row.until,
+            writer=writer,
             connection_id=row.connection_id,
             lease_id=row.lease_id,
         )

@@ -20,6 +20,12 @@ def _clear_keycloak_validator_cache() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _default_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AIUDITOR_ROLE", "global")
+    monkeypatch.delenv("AIUDITOR_PARENT_URL", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _exchange_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         api_config.settings,

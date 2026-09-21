@@ -45,6 +45,7 @@ from aiuditor_service.domain.models import (
     ApprovalPolicy,
     ApprovalPolicyCreate,
     ApprovalResolve,
+    AiuditorMeta,
     AuditorGrant,
     Connection,
     ConnectionAssign,
@@ -66,9 +67,11 @@ from aiuditor_service.domain.models import (
     ContractViolation,
     ContractViolationCreate,
     GrantExport,
+    HydrateSnapshot,
     ServiceCreate,
 )
 from aiuditor_service.export import build_grant_export
+from aiuditor_service.persist import MemoryPersistSession
 from aiuditor_service.events import (
     APPROVAL_HELD_V1,
     APPROVAL_RESOLVED_V1,
@@ -94,13 +97,29 @@ from aiuditor_service.hypermesh import (
     PLANE_HOP_FAILED,
     HostLookupUnavailable,
 )
+from aiuditor_service.parent import (
+    PARENT_REQUIRED,
+    ClosedParentHop,
+    ParentUnavailable,
+    apply_hydrate,
+    build_hydrate,
+)
 from aiuditor_service.provider import ProviderUnavailable
+from aiuditor_service.role import (
+    ROLE_HEADER,
+    require_grant_write,
+    require_market_mint,
+    require_witness,
+    role_from_request,
+    writer_for,
+)
 from aiuditor_service.store import (
     ApprovalStore,
     CatalogStore,
     ConnectionStore,
     ContractStore,
     PolicyStore,
+    StoreBundle,
     ViolationStore,
 )
 from aiuditor_service.tenant import require_auditor_actor, require_tenant_id
@@ -190,6 +209,66 @@ def _catalog(request: Request) -> CatalogStore:
     return store
 
 
+def _stores(request: Request) -> StoreBundle:
+    persist = getattr(request.app.state, "aiuditor_persist", None)
+    return StoreBundle(
+        persist=persist or MemoryPersistSession(),
+        connection_store=_store(request),
+        approval_store=_approvals(request),
+        policy_store=_policies(request),
+        contract_store=_contracts(request),
+        violation_store=_violations(request),
+        catalog_store=_catalog(request),
+    )
+
+
+@router.get(
+    "/meta",
+    response_model=AiuditorMeta,
+    summary="Deployment role. Hypermesh checks writer before honoring a market grant.",
+)
+async def get_meta(request: Request) -> AiuditorMeta:
+    role = role_from_request(request)
+    parent = getattr(request.app.state, "parent_hop", None)
+    return AiuditorMeta(
+        role=role.value,
+        writer=writer_for(role),
+        parent=parent is not None and not isinstance(parent, ClosedParentHop),
+    )
+
+
+@router.get(
+    "/hydrate",
+    response_model=HydrateSnapshot,
+    summary="Tenant snapshot a witness may pull. No prompt bodies or tickets.",
+)
+async def get_hydrate(request: Request) -> HydrateSnapshot:
+    tenant_id = require_hold_actor(request)
+    return build_hydrate(
+        tenant_id=tenant_id,
+        role=role_from_request(request),
+        stores=_stores(request),
+    )
+
+
+@router.post(
+    "/hydrate/pull",
+    response_model=HydrateSnapshot,
+    summary="Witness pull from AIUDITOR_PARENT_URL. Does not fulfill.",
+)
+async def pull_hydrate(request: Request) -> HydrateSnapshot:
+    require_witness(role_from_request(request))
+    tenant_id = require_hold_actor(request)
+    hop = getattr(request.app.state, "parent_hop", None)
+    if hop is None or isinstance(hop, ClosedParentHop):
+        raise HTTPException(status_code=503, detail=PARENT_REQUIRED)
+    try:
+        snapshot = await hop.hydrate(tenant_id, headers=_forward_headers(request))
+    except ParentUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc) or PARENT_REQUIRED) from exc
+    return apply_hydrate(_stores(request), snapshot)
+
+
 @router.get("/connections", response_model=list[Connection])
 async def list_connections(request: Request) -> list[Connection]:
     tenant_id = require_tenant_id(request)
@@ -201,6 +280,7 @@ def _forward_headers(request: Request) -> dict[str, str]:
     hop: dict[str, str] = {}
     if auth:
         hop["Authorization"] = auth
+    hop[ROLE_HEADER] = role_from_request(request).value
     return hop
 
 
@@ -313,6 +393,7 @@ async def _bind_lease(
 async def assign_connection(
     request: Request, connection_id: uuid.UUID, body: ConnectionAssign
 ) -> Connection:
+    require_market_mint(role_from_request(request))
     tenant_id = require_auditor_actor(request)
     row = _connection_or_404(request, tenant_id, connection_id)
     if row.kind is not ConnectionKind.HOST or row.purpose is not ConnectionPurpose.LEASE:
@@ -350,6 +431,7 @@ async def assign_connection(
 async def mint_connection_ticket(
     request: Request, connection_id: uuid.UUID, body: ConnectionTicket
 ) -> AuditorGrant:
+    require_market_mint(role_from_request(request))
     tenant_id = require_auditor_actor(request)
     row = _connection_or_404(request, tenant_id, connection_id)
     if row.kind is not ConnectionKind.HOST or row.purpose is not ConnectionPurpose.AUDITOR:
@@ -577,6 +659,7 @@ async def delete_policy(request: Request, policy_id: uuid.UUID) -> None:
     summary="Draft a spine §D contract. 1.x rail is Stripe.",
 )
 async def create_contract(request: Request, body: ContractCreate) -> Contract:
+    require_grant_write(role_from_request(request))
     tenant_id = require_auditor_actor(request)
     row = put_contract(_contracts(request), tenant_id, body)
     await get_tenant_event_publisher().publish(
@@ -625,7 +708,8 @@ async def get_contract(request: Request, contract_id: uuid.UUID) -> Contract:
 async def get_contract_grant(request: Request, contract_id: uuid.UUID) -> ContractGrant:
     tenant_id = require_hold_actor(request)
     return ContractGrant.from_contract(
-        require_signed_grant(_contracts(request), tenant_id, contract_id)
+        require_signed_grant(_contracts(request), tenant_id, contract_id),
+        writer=writer_for(role_from_request(request)),
     )
 
 
@@ -635,6 +719,7 @@ async def get_contract_grant(request: Request, contract_id: uuid.UUID) -> Contra
     summary="Named human signs. LLM is never signed_by.",
 )
 async def sign_contract_route(request: Request, contract_id: uuid.UUID) -> Contract:
+    require_grant_write(role_from_request(request))
     signed_by = require_contract_signer(request)
     tenant_id = require_auditor_actor(request)
     row = sign_contract(
@@ -656,6 +741,7 @@ async def sign_contract_route(request: Request, contract_id: uuid.UUID) -> Contr
 async def bind_contract_route(
     request: Request, contract_id: uuid.UUID, body: ContractBind
 ) -> Contract:
+    require_grant_write(role_from_request(request))
     tenant_id = require_auditor_actor(request)
     row = bind_contract(_contracts(request), tenant_id, contract_id, body)
     await get_tenant_event_publisher().publish(
@@ -675,6 +761,7 @@ async def bind_contract_route(
 async def fulfill_contract_route(
     request: Request, body: ContractFulfill
 ) -> Contract:
+    require_grant_write(role_from_request(request))
     tenant_id = require_internal_actor(request)
     row = fulfill_checkout_contract(_contracts(request), tenant_id, body)
     await get_tenant_event_publisher().publish(
@@ -726,6 +813,9 @@ async def get_catalog_service(request: Request, service_id: uuid.UUID) -> Catalo
 async def allocate_catalog_service(
     request: Request, service_id: uuid.UUID, body: ServiceAllocate
 ) -> ServiceAllocation:
+    role = role_from_request(request)
+    require_grant_write(role)
+    require_market_mint(role)
     tenant_id = require_auditor_actor(request)
     signed_by = require_contract_signer(request)
     lookup = getattr(request.app.state, "host_lookup", None)

@@ -13,6 +13,8 @@ from typing import Protocol
 
 import httpx
 
+from aiuditor_service.role import ROLE_HEADER, resolve_role
+
 HOST_LOOKUP_REQUIRED = "HYPERMESH_SERVICE_URL is required to assign a host"
 HOST_LOOKUP_FAILED = "hypermesh host lookup failed"
 PLANE_HOP_REQUIRED = "HYPERMESH_SERVICE_URL is required to assign a lease or mint a ticket"
@@ -301,13 +303,17 @@ class ClosedPlaneHop:
 
 
 class HttpPlaneHop:
-    def __init__(self, base_url: str, *, timeout_s: float = 10.0) -> None:
+    def __init__(
+        self, base_url: str, *, timeout_s: float = 10.0, role: str = "global"
+    ) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout_s
+        self._role = role
 
     def _hop(self, tenant_id: uuid.UUID, headers: dict[str, str] | None) -> dict[str, str]:
         hop = {**(headers or {}), "X-Tenant-ID": str(tenant_id)}
         hop["X-Tenant-ID"] = str(tenant_id)
+        hop.setdefault(ROLE_HEADER, self._role)
         return hop
 
     async def get_lease(
@@ -668,6 +674,7 @@ def resolve_plane_hop(
     hop: PlaneHop | None = None,
     *,
     base_url: str | None = None,
+    role: str | None = None,
 ) -> PlaneHop:
     if hop is not None:
         return hop
@@ -675,4 +682,4 @@ def resolve_plane_hop(
     text = (raw or "").strip()
     if not text:
         return ClosedPlaneHop()
-    return HttpPlaneHop(text)
+    return HttpPlaneHop(text, role=role or resolve_role().value)

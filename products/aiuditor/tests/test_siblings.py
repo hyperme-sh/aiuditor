@@ -90,6 +90,7 @@ async def test_signed_contract_is_the_sibling_grant(
     assert body["status"] == ContractStatus.SIGNED.value
     assert body["rail"] == "stripe"
     assert body["meters"] == ["wall_time", "capacity_block"]
+    assert body["writer"] == "market"
     assert "signed_by" not in body
     assert "parties" not in body
     assert "messages" not in str(body)

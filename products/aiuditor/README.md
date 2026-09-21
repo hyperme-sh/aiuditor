@@ -22,6 +22,8 @@ Edge prefix: `/api/v1/aiuditor`. Wire prefix of the door (`hm_gw_`) is unchanged
 
 Alembic 0025 `aiuditor_*` tables with tenant RLS on the shared `controlplane` Postgres. Production hydrates and writes through `SqlPersistSession` (RLS GUC per put) and fail-closes if `DATABASE_URL` is missing, dummy, or unreachable. Tests keep `MemoryPersistSession` (`enable_db_middleware=False`).
 
+`AIUDITOR_ROLE` is `global` (Azure marketplace SoT), `operator` (private plane), or `witness` (host/door package). Same image. Witness fail-closes on fulfill, sign, bind, allocate, and ticket mint. `GET /meta` advertises `writer` (`market` / `private` / `none`). Hypermesh checkout GETs that before fulfill and refuses a non-market writer unless `AIUDITOR_REQUIRED_WRITER` is `private` or `any`. Witness `POST /hydrate/pull` copies a tenant snapshot from `AIUDITOR_PARENT_URL`. Handoff (spine D) is not this path.
+
 Not in this product: Hypermesh classes, devices, certs, leases, catalog. Not a second door. Not a second IdP.
 
 ## Run locally
