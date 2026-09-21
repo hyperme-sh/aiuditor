@@ -756,6 +756,21 @@ async def allocate_catalog_service(
 
 
 @router.get(
+    "/violations",
+    response_model=list[ContractViolation],
+    summary="Tenant violations. Dispute reads cert + audit, not a court.",
+)
+async def list_tenant_violations(
+    request: Request,
+    contract_id: uuid.UUID | None = Query(default=None),
+) -> list[ContractViolation]:
+    tenant_id = require_hold_actor(request)
+    if contract_id is not None and _contracts(request).get(tenant_id, contract_id) is None:
+        raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
+    return _violations(request).list_for(tenant_id, contract_id=contract_id)
+
+
+@router.get(
     "/contracts/{contract_id}/violations",
     response_model=list[ContractViolation],
     summary="Violations on a contract. Dispute reads cert + audit, not a court.",

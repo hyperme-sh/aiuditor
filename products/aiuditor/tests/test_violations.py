@@ -231,6 +231,16 @@ async def test_file_abuse_stops_lease(
     assert filed.status_code == 201, filed.text
     assert filed.json()["action"] == "stop"
     assert plane_hop.violations[-1]["action"] == "stop"
+    listed = await http_client.get("/api/v1/aiuditor/violations", headers=tenant_headers)
+    assert listed.status_code == 200, listed.text
+    assert listed.json()[0]["id"] == filed.json()["id"]
+    assert listed.json()[0]["kind"] == "abuse"
+    scoped = await http_client.get(
+        f"/api/v1/aiuditor/violations?contract_id={fulfilled.json()['id']}",
+        headers=tenant_headers,
+    )
+    assert scoped.status_code == 200
+    assert scoped.json()[0]["contract_id"] == fulfilled.json()["id"]
 
 
 @pytest.mark.asyncio
@@ -288,6 +298,7 @@ async def test_evaluate_deny_budget_suspends(
 async def test_site_inbox_is_not_on_violation_paths(http_client):
     spec = await http_client.get("/openapi.json")
     paths = spec.json()["paths"]
+    assert "/api/v1/aiuditor/violations" in paths
     assert "/api/v1/aiuditor/contracts/{contract_id}/violations" in paths
     assert "/api/v1/aiuditor/contracts/{contract_id}/evaluate" in paths
     assert "/api/v1/auditor/v0/tickets" not in paths
