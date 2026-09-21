@@ -30,14 +30,8 @@ from aiuditor_service.hypermesh import (
 from aiuditor_service.interfaces.api.routes import router as aiuditor_router
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
 from aiuditor_service.provider import ProviderHop, resolve_provider_hop
-from aiuditor_service.store import (
-    ApprovalStore,
-    CatalogStore,
-    ConnectionStore,
-    ContractStore,
-    PolicyStore,
-    ViolationStore,
-)
+from aiuditor_service.persist import PersistSession, resolve_persist
+from aiuditor_service.store import new_stores
 
 logger = get_logger(__name__)
 
@@ -50,18 +44,25 @@ def create_app(
     host_lookup: HostLookup | None = None,
     plane_hop: PlaneHop | None = None,
     provider_hop: ProviderHop | None = None,
+    persist_session: PersistSession | None = None,
 ) -> FastAPI:
     svc_name = service_name or settings.service_name
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         configure_logging()
-        app.state.connection_store = ConnectionStore()
-        app.state.approval_store = ApprovalStore()
-        app.state.policy_store = PolicyStore()
-        app.state.contract_store = ContractStore()
-        app.state.violation_store = ViolationStore()
-        app.state.catalog_store = CatalogStore()
+        persist = persist_session or resolve_persist(
+            enable_db_middleware, settings.database_url
+        )
+        stores = new_stores(persist)
+        app.state.aiuditor_persist = persist
+        app.state.connection_store = stores.connection_store
+        app.state.approval_store = stores.approval_store
+        app.state.policy_store = stores.policy_store
+        app.state.contract_store = stores.contract_store
+        app.state.violation_store = stores.violation_store
+        app.state.catalog_store = stores.catalog_store
+        logger.info("AIuditor persist backend: %s", type(persist).__name__)
         app.state.host_lookup = resolve_host_lookup(host_lookup)
         app.state.plane_hop = resolve_plane_hop(plane_hop)
         app.state.provider_hop = resolve_provider_hop(provider_hop)
