@@ -25,6 +25,13 @@ from aiuditor_service.approvals import (
     resolver_subject,
 )
 from aiuditor_service.credentials import credential_ref
+from aiuditor_service.contracts import (
+    CONTRACT_NOT_FOUND,
+    bind_contract,
+    put_contract,
+    require_contract_signer,
+    sign_contract,
+)
 from aiuditor_service.domain.models import (
     Approval,
     ApprovalCreate,
@@ -40,12 +47,18 @@ from aiuditor_service.domain.models import (
     ConnectionPurpose,
     ConnectionStatus,
     ConnectionTicket,
+    Contract,
+    ContractBind,
+    ContractCreate,
 )
 from aiuditor_service.events import (
     APPROVAL_HELD_V1,
     APPROVAL_RESOLVED_V1,
     CONNECTION_ASSIGNED_V1,
     CONNECTION_CREATED_V1,
+    CONTRACT_BOUND_V1,
+    CONTRACT_CREATED_V1,
+    CONTRACT_SIGNED_V1,
     POLICY_CREATED_V1,
     POLICY_DELETED_V1,
 )
@@ -60,7 +73,12 @@ from aiuditor_service.hypermesh import (
     HostLookupUnavailable,
 )
 from aiuditor_service.provider import ProviderUnavailable
-from aiuditor_service.store import ApprovalStore, ConnectionStore, PolicyStore
+from aiuditor_service.store import (
+    ApprovalStore,
+    ConnectionStore,
+    ContractStore,
+    PolicyStore,
+)
 from aiuditor_service.tenant import require_auditor_actor, require_tenant_id
 
 router = APIRouter(prefix="/aiuditor", tags=["aiuditor"])
@@ -115,6 +133,14 @@ def _policies(request: Request) -> PolicyStore:
     if store is None:
         store = PolicyStore()
         request.app.state.policy_store = store
+    return store
+
+
+def _contracts(request: Request) -> ContractStore:
+    store = getattr(request.app.state, "contract_store", None)
+    if store is None:
+        store = ContractStore()
+        request.app.state.contract_store = store
     return store
 
 
@@ -496,3 +522,72 @@ async def delete_policy(request: Request, policy_id: uuid.UUID) -> None:
         event_type=POLICY_DELETED_V1,
         payload=row.to_event_payload(),
     )
+
+
+@router.post(
+    "/contracts",
+    response_model=Contract,
+    status_code=status.HTTP_201_CREATED,
+    summary="Draft a spine §D contract. 1.x rail is Stripe.",
+)
+async def create_contract(request: Request, body: ContractCreate) -> Contract:
+    tenant_id = require_auditor_actor(request)
+    row = put_contract(_contracts(request), tenant_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=CONTRACT_CREATED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.get("/contracts", response_model=list[Contract], summary="Tenant contracts")
+async def list_contracts(request: Request) -> list[Contract]:
+    tenant_id = require_hold_actor(request)
+    return _contracts(request).list_for(tenant_id)
+
+
+@router.get("/contracts/{contract_id}", response_model=Contract)
+async def get_contract(request: Request, contract_id: uuid.UUID) -> Contract:
+    tenant_id = require_hold_actor(request)
+    row = _contracts(request).get(tenant_id, contract_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
+    return row
+
+
+@router.post(
+    "/contracts/{contract_id}/sign",
+    response_model=Contract,
+    summary="Named human signs. LLM is never signed_by.",
+)
+async def sign_contract_route(request: Request, contract_id: uuid.UUID) -> Contract:
+    signed_by = require_contract_signer(request)
+    tenant_id = require_auditor_actor(request)
+    row = sign_contract(
+        _contracts(request), tenant_id, contract_id, signed_by=signed_by
+    )
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=CONTRACT_SIGNED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.post(
+    "/contracts/{contract_id}/bind",
+    response_model=Contract,
+    summary="Cite a Hypermesh lease. Does not mint a ticket.",
+)
+async def bind_contract_route(
+    request: Request, contract_id: uuid.UUID, body: ContractBind
+) -> Contract:
+    tenant_id = require_auditor_actor(request)
+    row = bind_contract(_contracts(request), tenant_id, contract_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=CONTRACT_BOUND_V1,
+        payload=row.to_event_payload(),
+    )
+    return row

@@ -11,6 +11,7 @@ from aiuditor_service.domain.models import (
     Connection,
     ConnectionKind,
     ConnectionPurpose,
+    Contract,
 )
 
 
@@ -129,5 +130,31 @@ class PolicyStore:
             same_class = row.prompt_class == prompt_class
             same_conn = row.connection_id == connection_id
             if same_class and same_conn:
+                return row
+        return None
+
+
+@dataclass
+class ContractStore:
+    contracts: dict[uuid.UUID, dict[uuid.UUID, Contract]] = field(default_factory=dict)
+
+    def for_tenant(self, tenant_id: uuid.UUID) -> dict[uuid.UUID, Contract]:
+        return self.contracts.setdefault(tenant_id, {})
+
+    def list_for(self, tenant_id: uuid.UUID) -> list[Contract]:
+        rows = list(self.for_tenant(tenant_id).values())
+        rows.sort(key=lambda row: row.created_at)
+        return rows
+
+    def get(self, tenant_id: uuid.UUID, contract_id: uuid.UUID) -> Contract | None:
+        return self.for_tenant(tenant_id).get(contract_id)
+
+    def put(self, row: Contract) -> Contract:
+        self.for_tenant(row.tenant_id)[row.id] = row
+        return row
+
+    def lease_for(self, tenant_id: uuid.UUID, lease_id: uuid.UUID) -> Contract | None:
+        for row in self.for_tenant(tenant_id).values():
+            if row.lease_id == lease_id:
                 return row
         return None
