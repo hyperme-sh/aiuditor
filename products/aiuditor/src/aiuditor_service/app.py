@@ -29,6 +29,7 @@ from aiuditor_service.hypermesh import (
 )
 from aiuditor_service.interfaces.api.routes import router as aiuditor_router
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
+from aiuditor_service.parent import ParentHop, resolve_parent_hop
 from aiuditor_service.provider import ProviderHop, resolve_provider_hop
 from aiuditor_service.persist import (
     PERSIST_UNAVAILABLE,
@@ -36,6 +37,7 @@ from aiuditor_service.persist import (
     PersistUnavailable,
     resolve_persist,
 )
+from aiuditor_service.role import AiuditorRole, resolve_role, writer_for
 from aiuditor_service.store import new_stores
 
 logger = get_logger(__name__)
@@ -50,8 +52,11 @@ def create_app(
     plane_hop: PlaneHop | None = None,
     provider_hop: ProviderHop | None = None,
     persist_session: PersistSession | None = None,
+    role: AiuditorRole | None = None,
+    parent_hop: ParentHop | None = None,
 ) -> FastAPI:
     svc_name = service_name or settings.service_name
+    resolved_role = role if role is not None else resolve_role()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -61,16 +66,24 @@ def create_app(
         )
         stores = new_stores(persist)
         app.state.aiuditor_persist = persist
+        app.state.aiuditor_role = resolved_role
+        app.state.aiuditor_writer = writer_for(resolved_role)
         app.state.connection_store = stores.connection_store
         app.state.approval_store = stores.approval_store
         app.state.policy_store = stores.policy_store
         app.state.contract_store = stores.contract_store
         app.state.violation_store = stores.violation_store
         app.state.catalog_store = stores.catalog_store
-        logger.info("AIuditor persist backend: %s", type(persist).__name__)
+        logger.info(
+            "AIuditor persist backend: %s role=%s writer=%s",
+            type(persist).__name__,
+            resolved_role.value,
+            writer_for(resolved_role),
+        )
         app.state.host_lookup = resolve_host_lookup(host_lookup)
-        app.state.plane_hop = resolve_plane_hop(plane_hop)
+        app.state.plane_hop = resolve_plane_hop(plane_hop, role=resolved_role.value)
         app.state.provider_hop = resolve_provider_hop(provider_hop)
+        app.state.parent_hop = resolve_parent_hop(parent_hop)
         engine = None
         if enable_db_middleware:
             engine = create_async_engine(normalize_database_url(settings.database_url))
@@ -136,6 +149,8 @@ def create_app(
         ),
         version="0.1.0",
     )
+    app.state.aiuditor_role = resolved_role
+    app.state.aiuditor_writer = writer_for(resolved_role)
 
     @app.exception_handler(UnauthorizedException)
     async def _unauthorized(_: Request, ex: UnauthorizedException) -> JSONResponse:

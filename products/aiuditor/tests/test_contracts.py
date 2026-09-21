@@ -396,6 +396,8 @@ async def test_site_inbox_is_not_on_contract_paths(http_client):
     assert "/api/v1/aiuditor/contracts/{contract_id}/sign" in paths
     assert "/api/v1/aiuditor/contracts/{contract_id}/bind" in paths
     assert "/api/v1/aiuditor/contracts/fulfill" in paths
+    assert "/api/v1/aiuditor/meta" in paths
+    assert "/api/v1/aiuditor/hydrate" in paths
     assert "/api/v1/auditor/v0/tickets" not in paths
     assert "/api/v1/grants/v0/grants" not in paths
 
