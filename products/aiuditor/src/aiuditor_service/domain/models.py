@@ -365,6 +365,16 @@ class Contract(BaseModel):
         }
 
 
+class GrantExport(BaseModel):
+    """Operator artifact. Derived copy, not the grant SoT. No prompt bodies."""
+
+    tenant_id: uuid.UUID
+    exported_at: datetime
+    contracts: list[dict[str, object]]
+    violations: list[dict[str, object]]
+    approvals: list[dict[str, object]]
+
+
 class ContractGrant(BaseModel):
     """Signed grant a sibling product may cite. Not a TURN/oracle/payment row."""
 

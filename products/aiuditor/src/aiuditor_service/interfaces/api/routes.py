@@ -65,8 +65,10 @@ from aiuditor_service.domain.models import (
     ContractStatus,
     ContractViolation,
     ContractViolationCreate,
+    GrantExport,
     ServiceCreate,
 )
+from aiuditor_service.export import build_grant_export
 from aiuditor_service.events import (
     APPROVAL_HELD_V1,
     APPROVAL_RESOLVED_V1,
@@ -583,6 +585,21 @@ async def create_contract(request: Request, body: ContractCreate) -> Contract:
         payload=row.to_event_payload(),
     )
     return row
+
+
+@router.get(
+    "/export",
+    response_model=GrantExport,
+    summary="Operator grant export. No prompt bodies. Not the grant SoT.",
+)
+async def export_grants(request: Request) -> GrantExport:
+    tenant_id = require_auditor_actor(request)
+    return build_grant_export(
+        tenant_id=tenant_id,
+        contracts=_contracts(request),
+        violations=_violations(request),
+        approvals=_approvals(request),
+    )
 
 
 @router.get("/contracts", response_model=list[Contract], summary="Tenant contracts")

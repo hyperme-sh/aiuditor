@@ -17,6 +17,7 @@ Edge prefix: `/api/v1/aiuditor`. Wire prefix of the door (`hm_gw_`) is unchanged
 | Approval inbox | `POST/GET /api/v1/aiuditor/approvals`, `POST …/approvals/{id}/resolve` — hold an AI-use ask until a named human allow-once / allow-session / deny. Timeout is deny. Not `/api/v1/auditor`. LLM is never `resolved_by`. |
 | Tenant | Bound JWT (tenant-session or purpose=service exchange). `X-Tenant-ID` is a cross-check. Header-only and Hypermesh machine prefixes are 401. |
 | Event | `aiuditor.connection.created.v1` on `controlplane.events.v1`. Lock fields only. No raw credential. |
+| Export | `GET /api/v1/aiuditor/export` — contracts, violations, approvals. No prompt bodies. Derived copy, not the SoT. |
 
 Alembic 0025 `aiuditor_*` tables with tenant RLS on the shared `controlplane` Postgres. Production hydrates and writes through `SqlPersistSession` (RLS GUC per put) and fail-closes if `DATABASE_URL` is missing, dummy, or unreachable. Tests keep `MemoryPersistSession` (`enable_db_middleware=False`).
 

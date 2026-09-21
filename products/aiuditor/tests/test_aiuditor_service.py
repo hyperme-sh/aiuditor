@@ -68,6 +68,7 @@ async def test_openapi_is_aiuditor_not_hypermesh_or_site_inbox(http_client):
     assert "/api/v1/aiuditor/connections/{connection_id}/ticket" in paths
     assert "/api/v1/aiuditor/connections/{connection_id}/classify" in paths
     assert "/api/v1/aiuditor/approvals" in paths
+    assert "/api/v1/aiuditor/export" in paths
     assert "/api/v1/auditor/v0/tickets" not in paths
     banned = (
         "/api/v1/hypermesh/classes",
