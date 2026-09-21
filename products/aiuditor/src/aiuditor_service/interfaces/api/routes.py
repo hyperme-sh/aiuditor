@@ -9,12 +9,26 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from api.infrastructure.messaging.tenant_event_publisher import get_tenant_event_publisher
 
+from aiuditor_service.approvals import (
+    APPROVAL_NOT_FOUND,
+    consume_allow_once,
+    expire_due,
+    hold_approval,
+    latest_for,
+    require_hold_actor,
+    require_internal_actor,
+    resolve_approval,
+    resolver_subject,
+)
 from aiuditor_service.credentials import credential_ref
 from aiuditor_service.domain.models import (
+    Approval,
+    ApprovalCreate,
+    ApprovalResolve,
     AuditorGrant,
     Connection,
     ConnectionAssign,
@@ -25,7 +39,12 @@ from aiuditor_service.domain.models import (
     ConnectionStatus,
     ConnectionTicket,
 )
-from aiuditor_service.events import CONNECTION_ASSIGNED_V1, CONNECTION_CREATED_V1
+from aiuditor_service.events import (
+    APPROVAL_HELD_V1,
+    APPROVAL_RESOLVED_V1,
+    CONNECTION_ASSIGNED_V1,
+    CONNECTION_CREATED_V1,
+)
 from aiuditor_service.hypermesh import (
     HOST_LOOKUP_FAILED,
     HOST_ROLE,
@@ -33,7 +52,7 @@ from aiuditor_service.hypermesh import (
     HostLookupUnavailable,
 )
 from aiuditor_service.provider import ProviderUnavailable
-from aiuditor_service.store import ConnectionStore
+from aiuditor_service.store import ApprovalStore, ConnectionStore
 from aiuditor_service.tenant import require_auditor_actor, require_tenant_id
 
 router = APIRouter(prefix="/aiuditor", tags=["aiuditor"])
@@ -72,6 +91,14 @@ def _store(request: Request) -> ConnectionStore:
     if store is None:
         store = ConnectionStore()
         request.app.state.connection_store = store
+    return store
+
+
+def _approvals(request: Request) -> ApprovalStore:
+    store = getattr(request.app.state, "approval_store", None)
+    if store is None:
+        store = ApprovalStore()
+        request.app.state.approval_store = store
     return store
 
 
@@ -309,3 +336,108 @@ async def classify_connection(
     if 200 <= upstream < 300 and row.status is ConnectionStatus.PENDING:
         _store(request).put(row.model_copy(update={"status": ConnectionStatus.READY}))
     return {"upstream_status": upstream}
+
+
+@router.post(
+    "/approvals",
+    response_model=Approval,
+    status_code=status.HTTP_201_CREATED,
+    summary="Hold an AI-use ask for a named human",
+    description=(
+        "AIuditor inbox. Not /api/v1/auditor and not privilege_grant. "
+        "No prompt body. Internal token (door) or AIuditor grant."
+    ),
+)
+async def create_approval(request: Request, body: ApprovalCreate) -> Approval:
+    tenant_id = require_hold_actor(request)
+    row = hold_approval(_approvals(request), tenant_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=APPROVAL_HELD_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.get("/approvals", response_model=list[Approval], summary="Operator inbox")
+async def list_approvals(
+    request: Request,
+    approval_status: str | None = Query(default=None, alias="status"),
+    lease_id: uuid.UUID | None = Query(default=None),
+    who: str | None = Query(default=None),
+) -> list[Approval]:
+    tenant_id = require_hold_actor(request)
+    store = _approvals(request)
+    expire_due(store, tenant_id)
+    return store.list_for(
+        tenant_id, status=approval_status, lease_id=lease_id, who=who
+    )
+
+
+@router.get(
+    "/approvals/latest",
+    response_model=Approval,
+    summary="Door lookup for a lease + who",
+)
+async def latest_approval(
+    request: Request,
+    lease_id: uuid.UUID,
+    who: str,
+    prompt_class: str | None = Query(default=None),
+) -> Approval:
+    tenant_id = require_hold_actor(request)
+    store = _approvals(request)
+    row = latest_for(
+        store, tenant_id, lease_id=lease_id, who=who, prompt_class=prompt_class
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND)
+    return row
+
+
+@router.get("/approvals/{approval_id}", response_model=Approval)
+async def get_approval(request: Request, approval_id: uuid.UUID) -> Approval:
+    tenant_id = require_hold_actor(request)
+    store = _approvals(request)
+    expire_due(store, tenant_id)
+    row = store.get(tenant_id, approval_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND)
+    return row
+
+
+@router.post(
+    "/approvals/{approval_id}/resolve",
+    response_model=Approval,
+    summary="Allow-once, allow-session, or deny. LLM is never resolved_by.",
+)
+async def resolve_approval_route(
+    request: Request, approval_id: uuid.UUID, body: ApprovalResolve
+) -> Approval:
+    resolved_by = resolver_subject(request)
+    tenant_id = require_auditor_actor(request)
+    row = resolve_approval(
+        _approvals(request),
+        tenant_id,
+        approval_id,
+        decision=body.decision,
+        resolved_by=resolved_by,
+    )
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=APPROVAL_RESOLVED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.post(
+    "/approvals/{approval_id}/consume",
+    response_model=Approval,
+    summary="Door consumes an unused allow_once",
+)
+async def consume_approval(
+    request: Request, approval_id: uuid.UUID
+) -> Approval:
+    tenant_id = require_internal_actor(request)
+    return consume_allow_once(_approvals(request), tenant_id, approval_id)
