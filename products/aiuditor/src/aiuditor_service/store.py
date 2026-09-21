@@ -1,4 +1,8 @@
-"""In-memory tenant-scoped store. Persistence (RLS + Alembic) is follow-up."""
+"""In-memory tenant-scoped store.
+
+Tables + RLS live in controlplane-db 0025 (aiuditor_*). Session-backed
+puts are the next cut. Tests still use this in-process store.
+"""
 
 from __future__ import annotations
 
