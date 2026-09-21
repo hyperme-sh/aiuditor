@@ -25,6 +25,12 @@ from aiuditor_service.domain.models import (
 
 logger = logging.getLogger(__name__)
 
+PERSIST_UNAVAILABLE = "AIuditor persist requires a real DATABASE_URL"
+
+
+class PersistUnavailable(RuntimeError):
+    """Compose/VM must have a reachable DATABASE_URL. Tests set enable_sql=False."""
+
 TABLES = (
     "connections",
     "approvals",
@@ -283,6 +289,12 @@ class SqlPersistSession:
         engine = create_engine(sync)
         return cls(sessionmaker(engine, expire_on_commit=False))
 
+    def ping(self) -> None:
+        from sqlalchemy import text
+
+        with self._session_factory() as session:
+            session.execute(text("SELECT 1"))
+
     def snapshot(self) -> dict[str, Any]:
         memory = MemoryPersistSession()
         self._copy_sql_into(memory)
@@ -367,22 +379,17 @@ class SqlPersistSession:
 
 
 def resolve_persist(enable_sql: bool, database_url: str | None = None) -> PersistSession:
+    if not enable_sql:
+        return MemoryPersistSession()
     url = database_url if database_url is not None else os.environ.get("DATABASE_URL", "")
-    dummy = "localhost:1" in url or not url
-    if enable_sql and url and not dummy:
-        try:
-            persist = SqlPersistSession.from_url(url)
-            logger.info("aiuditor persist: SqlPersistSession")
-            return persist
-        except Exception:
-            logger.exception(
-                "aiuditor persist: SQL init failed; MemoryPersistSession is not "
-                "multi-replica safe (grant rows stay on this process only)"
-            )
-            return MemoryPersistSession()
-    if enable_sql:
-        logger.warning(
-            "aiuditor persist: MemoryPersistSession (DATABASE_URL missing or dummy). "
-            "Puts on one replica will miss on another."
-        )
-    return MemoryPersistSession()
+    if not url or "localhost:1" in url:
+        raise PersistUnavailable(PERSIST_UNAVAILABLE)
+    try:
+        persist = SqlPersistSession.from_url(url)
+        persist.ping()
+    except PersistUnavailable:
+        raise
+    except Exception as exc:
+        raise PersistUnavailable(PERSIST_UNAVAILABLE) from exc
+    logger.info("aiuditor persist: SqlPersistSession")
+    return persist

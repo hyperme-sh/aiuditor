@@ -20,7 +20,9 @@ from aiuditor_service.domain.models import (
     ServiceBackend,
 )
 from aiuditor_service.persist import (
+    PERSIST_UNAVAILABLE,
     MemoryPersistSession,
+    PersistUnavailable,
     SqlPersistSession,
     TABLES,
     dump_for_persist,
@@ -135,13 +137,19 @@ def test_policy_delete_is_write_through():
     assert new_stores(persist).policy_store.get(tenant, row.id) is None
 
 
-def test_resolve_persist_stays_memory_for_tests_and_dummy_urls():
+def test_resolve_persist_stays_memory_only_when_sql_is_disabled():
     assert isinstance(resolve_persist(False, "postgresql://db/controlplane"), MemoryPersistSession)
     assert isinstance(
-        resolve_persist(True, "postgresql+asyncpg://x:x@localhost:1/x"),
+        resolve_persist(False, "postgresql+asyncpg://x:x@localhost:1/x"),
         MemoryPersistSession,
     )
-    assert isinstance(resolve_persist(True, ""), MemoryPersistSession)
+
+
+def test_resolve_persist_fail_closes_on_dummy_or_missing_url():
+    with pytest.raises(PersistUnavailable, match=PERSIST_UNAVAILABLE):
+        resolve_persist(True, "postgresql+asyncpg://x:x@localhost:1/x")
+    with pytest.raises(PersistUnavailable, match=PERSIST_UNAVAILABLE):
+        resolve_persist(True, "")
 
 
 class _FakeResult:
@@ -225,15 +233,13 @@ def test_sql_persist_load_snapshot_and_hydrate_are_empty_without_rows():
     assert bundle.contract_store.list_for(tenant) == []
 
 
-def test_resolve_persist_sql_init_failure_falls_back(monkeypatch):
+def test_resolve_persist_sql_init_failure_fail_closes(monkeypatch):
     def _boom(_cls, _url):
         raise RuntimeError("no db")
 
     monkeypatch.setattr(SqlPersistSession, "from_url", classmethod(_boom))
-    assert isinstance(
-        resolve_persist(True, "postgresql://db/controlplane"),
-        MemoryPersistSession,
-    )
+    with pytest.raises(PersistUnavailable, match=PERSIST_UNAVAILABLE):
+        resolve_persist(True, "postgresql://db/controlplane")
 
 
 def test_connection_store_reloads_from_shared_persist():
@@ -245,6 +251,81 @@ def test_connection_store_reloads_from_shared_persist():
     reader = ConnectionStore(persist=persist)
     assert reader.get(tenant, row.id) is not None
     assert reader.get(tenant, row.id).status is ConnectionStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_http_put_is_503_when_persist_is_unavailable(
+    event_sink, host_lookup, plane_hop, provider_hop, tenant_headers
+):
+    import httpx
+    from asgi_lifespan import LifespanManager
+
+    from aiuditor_service.app import create_app
+
+    class _Down:
+        def hydrate(self, stores) -> None:
+            return None
+
+        def upsert(self, table, tenant_id, key, payload) -> None:
+            raise PersistUnavailable(PERSIST_UNAVAILABLE)
+
+        def delete(self, table, tenant_id, key) -> None:
+            raise PersistUnavailable(PERSIST_UNAVAILABLE)
+
+        def snapshot(self):
+            return {}
+
+        def load_rows(self, table, tenant_id):
+            return {}
+
+    app = create_app(
+        test_event_sink=event_sink,
+        enable_db_middleware=False,
+        host_lookup=host_lookup,
+        plane_hop=plane_hop,
+        provider_hop=provider_hop,
+        persist_session=_Down(),
+    )
+    async with LifespanManager(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/v1/aiuditor/connections",
+                headers=tenant_headers,
+                json={
+                    "kind": "host",
+                    "purpose": "auditor",
+                    "device_id": "a6400000-0640-4000-8000-000000000001",
+                },
+            )
+    assert created.status_code == 503, created.text
+    assert created.json()["error"] == PERSIST_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_lifespan_fail_closes_without_database(
+    event_sink, host_lookup, plane_hop, provider_hop, monkeypatch
+):
+    from asgi_lifespan import LifespanManager
+    from api.core import config as api_config
+
+    from aiuditor_service.app import create_app
+
+    monkeypatch.setattr(
+        api_config.settings,
+        "database_url",
+        "postgresql+asyncpg://x:x@localhost:1/x",
+    )
+    app = create_app(
+        test_event_sink=event_sink,
+        enable_db_middleware=True,
+        host_lookup=host_lookup,
+        plane_hop=plane_hop,
+        provider_hop=provider_hop,
+    )
+    with pytest.raises(PersistUnavailable, match=PERSIST_UNAVAILABLE):
+        async with LifespanManager(app):
+            pass
 
 
 @pytest.mark.asyncio

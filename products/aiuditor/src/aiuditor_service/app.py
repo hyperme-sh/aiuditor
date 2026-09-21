@@ -30,7 +30,12 @@ from aiuditor_service.hypermesh import (
 from aiuditor_service.interfaces.api.routes import router as aiuditor_router
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
 from aiuditor_service.provider import ProviderHop, resolve_provider_hop
-from aiuditor_service.persist import PersistSession, resolve_persist
+from aiuditor_service.persist import (
+    PERSIST_UNAVAILABLE,
+    PersistSession,
+    PersistUnavailable,
+    resolve_persist,
+)
 from aiuditor_service.store import new_stores
 
 logger = get_logger(__name__)
@@ -144,6 +149,13 @@ def create_app(
         return JSONResponse(
             status_code=status.HTTP_403_FORBIDDEN,
             content={"error": ex.message},
+        )
+
+    @app.exception_handler(PersistUnavailable)
+    async def _persist_unavailable(_: Request, ex: PersistUnavailable) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"error": str(ex) or PERSIST_UNAVAILABLE},
         )
 
     def custom_openapi() -> dict:

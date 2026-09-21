@@ -1,7 +1,8 @@
 """Tenant-scoped grant stores with write-through persist.
 
 Tables + RLS live in controlplane-db 0025 (aiuditor_*). Tests keep
-MemoryPersistSession. Production hydrates and puts through SqlPersistSession.
+MemoryPersistSession. Production hydrates and puts through SqlPersistSession
+and fail-closes without a reachable DATABASE_URL.
 """
 
 from __future__ import annotations

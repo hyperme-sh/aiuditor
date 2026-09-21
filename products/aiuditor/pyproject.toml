@@ -37,6 +37,7 @@ include = ["src/aiuditor_service"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = ["integration: needs Docker (testcontainers)"]
 pythonpath = [
     "src",
     "../../core/lib/controlplane-core/src",
