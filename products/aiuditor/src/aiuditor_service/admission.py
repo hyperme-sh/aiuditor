@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException
 
 from aiuditor_service.admission_catalog import admission_catalog_id
-from aiuditor_service.approvals import _safe_text
+from aiuditor_service.approvals import _safe_text, hold_approval
 from aiuditor_service.credentials import credential_ref
 from aiuditor_service.domain.models import (
     Admission,
@@ -25,9 +25,11 @@ from aiuditor_service.domain.models import (
     AdmissionResolve,
     AdmissionStatus,
     AdmissionVerdict,
+    ApprovalCreate,
+    ApprovalWhy,
 )
 from aiuditor_service.hypermesh import HostLookupUnavailable, PlaneHop
-from aiuditor_service.store import AdmissionStore
+from aiuditor_service.store import AdmissionStore, ApprovalStore
 
 FILE_HASH_REQUIRED = "file_hash is required"
 FORMAT_REQUIRED = "format is required"
@@ -165,7 +167,38 @@ def submit_admission(
     store.put(row)
     if not run_pipeline:
         return row
-    return advance_admission(store, tenant_id, row.id, body=body, now=clock)
+    return advance_admission(
+        store,
+        tenant_id,
+        row.id,
+        body=body,
+        hold_for_human=bool(body.hold_for_human),
+        now=clock,
+    )
+
+
+async def submit_admission_async(
+    store: AdmissionStore,
+    tenant_id: uuid.UUID,
+    body: AdmissionCreate,
+    *,
+    plane: PlaneHop | None = None,
+    approvals: ApprovalStore | None = None,
+    now: datetime | None = None,
+) -> Admission:
+    """Submit + quarantine onto a lab host + approval inbox hold for testers."""
+
+    row = submit_admission(store, tenant_id, body, now=now, run_pipeline=False)
+    return await advance_admission_async(
+        store,
+        tenant_id,
+        row.id,
+        body=body,
+        hold_for_human=bool(body.hold_for_human),
+        plane=plane,
+        approvals=approvals,
+        now=now,
+    )
 
 
 def advance_admission(
@@ -193,6 +226,7 @@ def advance_admission(
         license=row.license,
         intended_class=row.intended_class,
         size_bytes=row.size_bytes,
+        hold_for_human=hold_for_human,
     )
     reason = static_gate(row, gate_body)
     if reason is not None:
@@ -205,6 +239,7 @@ def advance_admission(
     store.put(row)
 
     # Sandbox timed sample + egress check. Fail closed on any other egress.
+    # Workload jail (internal net, no masquerade) enforces overlay-only egress.
     if not sandbox_egress_ok:
         return _deny(
             store,
@@ -218,7 +253,8 @@ def advance_admission(
     )
     store.put(row)
 
-    if hold_for_human:
+    want_hold = hold_for_human or bool(gate_body.hold_for_human)
+    if want_hold:
         row = row.model_copy(
             update={
                 "status": AdmissionStatus.HOLD,
@@ -237,6 +273,116 @@ def advance_admission(
     )
     store.put(row)
     return row
+
+
+async def advance_admission_async(
+    store: AdmissionStore,
+    tenant_id: uuid.UUID,
+    admission_id: uuid.UUID,
+    *,
+    body: AdmissionCreate | None = None,
+    sandbox_egress_ok: bool = True,
+    hold_for_human: bool = True,
+    plane: PlaneHop | None = None,
+    approvals: ApprovalStore | None = None,
+    now: datetime | None = None,
+) -> Admission:
+    """Quarantine onto one lab host, sandbox, then approval-inbox hold.
+
+    Crawl/lab-discovered packs are not routed here — missing admission must
+    not block that path. Deny never promotes. Allow still promotes an
+    uncertified catalog row via ``resolve_admission_async``.
+    """
+
+    row = store.get(tenant_id, admission_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
+    source_ref = body.source_ref if body is not None else None
+    gate_body = body or AdmissionCreate(
+        file_hash=row.file_hash,
+        format=row.format,
+        quant=row.quant,
+        license=row.license,
+        intended_class=row.intended_class,
+        size_bytes=row.size_bytes,
+        source_ref=source_ref,
+        hold_for_human=hold_for_human,
+    )
+    # Static gate + quarantine/sandbox status. Defer HOLD so we can queue lab.
+    advanced = advance_admission(
+        store,
+        tenant_id,
+        admission_id,
+        body=gate_body.model_copy(update={"hold_for_human": False}),
+        sandbox_egress_ok=sandbox_egress_ok,
+        hold_for_human=False,
+        now=now,
+    )
+    if advanced.verdict is not None:
+        return advanced
+
+    if plane is not None:
+        catalog_id = admission_catalog_id(
+            intended_class=advanced.intended_class, file_hash=advanced.file_hash
+        )
+        try:
+            await plane.queue_lab_soak(
+                tenant_id,
+                class_id=advanced.intended_class,
+                catalog_id=catalog_id,
+                artifact_name=catalog_id,
+                file_hash=advanced.file_hash,
+                quant=advanced.quant,
+                runtime="nvidia",
+                source_ref=(gate_body.source_ref or None),
+                enqueue_pull=True,
+            )
+            advanced = advanced.model_copy(
+                update={
+                    "status": AdmissionStatus.SANDBOXING,
+                    "reason": "lab quarantine soak queued",
+                }
+            )
+            store.put(advanced)
+        except HostLookupUnavailable:
+            advanced = advanced.model_copy(
+                update={
+                    "status": AdmissionStatus.HOLD,
+                    "reason": "no ready lab host",
+                }
+            )
+            store.put(advanced)
+            hold_for_human = True
+
+    if hold_for_human or advanced.status is AdmissionStatus.HOLD:
+        if approvals is not None and advanced.status is not AdmissionStatus.DENIED:
+            hold_approval(
+                approvals,
+                tenant_id,
+                ApprovalCreate(
+                    purpose="admission",
+                    who=f"upload:{advanced.file_hash[:20]}",
+                    why=ApprovalWhy.LEASE,
+                    ttl_seconds=24 * 60 * 60,
+                ),
+                now=now,
+            )
+        if advanced.status is not AdmissionStatus.HOLD:
+            advanced = advanced.model_copy(
+                update={"status": AdmissionStatus.HOLD, "reason": "human hold"}
+            )
+            store.put(advanced)
+        return advanced
+
+    if advanced.status is AdmissionStatus.SANDBOXING:
+        advanced = advanced.model_copy(
+            update={
+                "status": AdmissionStatus.PENDING,
+                "reason": "awaiting named verdict",
+            }
+        )
+        store.put(advanced)
+    return advanced
 
 
 def resolve_admission(

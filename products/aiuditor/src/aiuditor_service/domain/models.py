@@ -508,9 +508,18 @@ class AdmissionCreate(BaseModel):
     intended_class: str = Field(..., min_length=1, max_length=64)
     credential: str | None = Field(default=None, min_length=1, max_length=4096)
     size_bytes: int | None = Field(default=None, ge=0)
+    source_ref: str | None = Field(
+        default=None,
+        max_length=512,
+        description="Trusted fetch pin for lab quarantine pull (repo@rev/file).",
+    )
     extra_files: list[str] | None = Field(
         default=None,
         description="Any unexpected files beside the weights. Non-empty → deny.",
+    )
+    hold_for_human: bool = Field(
+        default=True,
+        description="First tester uploads go to the approval inbox. LLM never resolves.",
     )
 
 

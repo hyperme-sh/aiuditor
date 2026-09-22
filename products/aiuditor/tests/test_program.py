@@ -90,7 +90,7 @@ def test_core_suite_seed_is_pack_v1_llama_on_public_classes():
     assert CATALOG_LLAMA_8B == "llama-3.1-8b-q4"
 
 
-def test_admission_stays_pending_until_named_verdict():
+def test_admission_holds_for_named_verdict():
     store = AdmissionStore()
     tenant = uuid.uuid4()
     row = submit_admission(
@@ -105,7 +105,7 @@ def test_admission_stays_pending_until_named_verdict():
             credential="sk-publisher-secret",
         ),
     )
-    assert row.status is AdmissionStatus.PENDING
+    assert row.status is AdmissionStatus.HOLD
     assert row.verdict is None
     assert row.credential_ref == credential_ref("sk-publisher-secret")
     assert "sk-publisher" not in str(row.model_dump())
@@ -166,7 +166,7 @@ async def test_program_http_and_hydrate(
         },
     )
     assert admission.status_code == 201, admission.text
-    assert admission.json()["status"] == "pending"
+    assert admission.json()["status"] == "hold"
     assert admission.json()["credential_ref"] == credential_ref("publisher-token")
     assert "credential" not in admission.json() or admission.json().get("credential") is None
     verdict = await http_client.post(
@@ -201,7 +201,9 @@ async def test_program_http_and_hydrate(
     assert body["admissions"][0]["verdict"] == "deny"
     dumped = str(body)
     assert "publisher-token" not in dumped
-    assert "prompt" not in dumped
+    # Field name prompt_class may appear on approval inbox rows; bodies must not.
+    assert "messages" not in dumped
+    assert "'prompt':" not in dumped and '"prompt":' not in dumped
 
     types = {item["event_type"] for item in event_sink}
     assert ENVELOPE_RECORDED_V1 in types
