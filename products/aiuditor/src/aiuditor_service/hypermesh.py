@@ -253,6 +253,21 @@ class PlaneHop(Protocol):
         headers: dict[str, str] | None = None,
     ) -> OfferedLease: ...
 
+    async def queue_lab_soak(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        class_id: str,
+        catalog_id: str,
+        artifact_name: str | None = None,
+        file_hash: str | None = None,
+        quant: str | None = None,
+        runtime: str | None = None,
+        source_ref: str | None = None,
+        enqueue_pull: bool = True,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]: ...
+
 
 class ClosedPlaneHop:
     async def get_lease(
@@ -299,6 +314,22 @@ class ClosedPlaneHop:
         catalog_id: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> OfferedLease:
+        raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
+
+    async def queue_lab_soak(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        class_id: str,
+        catalog_id: str,
+        artifact_name: str | None = None,
+        file_hash: str | None = None,
+        quant: str | None = None,
+        runtime: str | None = None,
+        source_ref: str | None = None,
+        enqueue_pull: bool = True,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
         raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
 
 
@@ -465,6 +496,54 @@ class HttpPlaneHop:
         except (KeyError, ValueError, TypeError) as exc:
             raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
 
+    async def queue_lab_soak(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        class_id: str,
+        catalog_id: str,
+        artifact_name: str | None = None,
+        file_hash: str | None = None,
+        quant: str | None = None,
+        runtime: str | None = None,
+        source_ref: str | None = None,
+        enqueue_pull: bool = True,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "class_id": class_id,
+            "catalog_id": catalog_id,
+            "enqueue_pull": enqueue_pull,
+        }
+        if artifact_name:
+            payload["artifact_name"] = artifact_name
+        if file_hash:
+            payload["file_hash"] = file_hash
+        if quant:
+            payload["quant"] = quant
+        if runtime:
+            payload["runtime"] = runtime
+        if source_ref:
+            payload["source_ref"] = source_ref
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    f"{self._base}/api/v1/hypermesh/lab/soaks",
+                    headers=self._hop(tenant_id, headers),
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if response.status_code >= 400:
+            raise HostLookupUnavailable(_http_detail(response) or PLANE_HOP_FAILED)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if not isinstance(body, dict):
+            raise HostLookupUnavailable(PLANE_HOP_FAILED)
+        return body
+
 
 def _http_detail(response: httpx.Response) -> str | None:
     try:
@@ -505,9 +584,11 @@ class FakePlaneHop:
     grants: dict[uuid.UUID, IssuedGrant] = field(default_factory=dict)
     violations: list[dict[str, object]] = field(default_factory=list)
     offers: list[dict[str, object]] = field(default_factory=list)
+    soaks: list[dict[str, object]] = field(default_factory=list)
     mint_error: str | None = None
     violate_error: str | None = None
     offer_error: str | None = None
+    soak_error: str | None = None
 
     def add_lease(
         self,
@@ -654,6 +735,39 @@ class FakePlaneHop:
             }
         )
         return offered
+
+    async def queue_lab_soak(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        class_id: str,
+        catalog_id: str,
+        artifact_name: str | None = None,
+        file_hash: str | None = None,
+        quant: str | None = None,
+        runtime: str | None = None,
+        source_ref: str | None = None,
+        enqueue_pull: bool = True,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        del headers
+        if self.soak_error:
+            raise HostLookupUnavailable(self.soak_error)
+        body = {
+            "device_id": str(uuid.uuid4()),
+            "class_id": class_id,
+            "catalog_id": catalog_id,
+            "soak_job_id": str(uuid.uuid4()),
+            "pull_job_id": str(uuid.uuid4()) if enqueue_pull else None,
+            "artifact_name": artifact_name,
+            "file_hash": file_hash,
+            "quant": quant,
+            "runtime": runtime,
+            "source_ref": source_ref,
+            "tenant_id": tenant_id,
+        }
+        self.soaks.append(body)
+        return body
 
 
 def resolve_host_lookup(

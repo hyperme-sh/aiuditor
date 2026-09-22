@@ -72,6 +72,8 @@ from aiuditor_service.domain.models import (
     ContractStatus,
     ContractViolation,
     ContractViolationCreate,
+    CrawlCandidate,
+    CrawlRunResult,
     GrantExport,
     HydrateSnapshot,
     ServiceCreate,
@@ -138,6 +140,7 @@ from aiuditor_service.role import (
 from aiuditor_service.store import (
     AdmissionStore,
     ApprovalStore,
+    CandidateStore,
     CatalogStore,
     ConnectionStore,
     ContractStore,
@@ -258,6 +261,14 @@ def _admissions(request: Request) -> AdmissionStore:
     return store
 
 
+def _candidates(request: Request) -> CandidateStore:
+    store = getattr(request.app.state, "candidate_store", None)
+    if store is None:
+        store = CandidateStore()
+        request.app.state.candidate_store = store
+    return store
+
+
 def _stores(request: Request) -> StoreBundle:
     persist = getattr(request.app.state, "aiuditor_persist", None)
     return StoreBundle(
@@ -271,6 +282,7 @@ def _stores(request: Request) -> StoreBundle:
         envelope_store=_envelopes(request),
         suite_store=_suite(request),
         admission_store=_admissions(request),
+        candidate_store=_candidates(request),
     )
 
 
@@ -1047,7 +1059,7 @@ async def get_admission(request: Request, admission_id: uuid.UUID) -> Admission:
 @router.post(
     "/admissions/{admission_id}/verdict",
     response_model=Admission,
-    summary="Allow or deny an upload. Quarantine/sandbox stubs fail closed.",
+    summary="Allow or deny an upload. LLM is never resolved_by.",
 )
 async def verdict_admission(
     request: Request, admission_id: uuid.UUID, body: AdmissionResolve
@@ -1059,7 +1071,7 @@ async def verdict_admission(
         tenant_id,
         admission_id,
         body,
-        resolved_by=resolver_subject(request),
+        resolved_by=resolver_subject(request) or str(tenant_id),
     )
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
@@ -1067,6 +1079,73 @@ async def verdict_admission(
         payload=row.to_event_payload(),
     )
     return row
+
+
+@router.post(
+    "/crawl/run",
+    response_model=CrawlRunResult,
+    summary="Run one metadata crawl + fit-filter + lab soak queue",
+    description=(
+        "Control-plane intake. Fetches Hugging Face / allowlisted GGUF publisher "
+        "metadata only (no weight download). Drops artifacts that cannot fit the "
+        "class after OS reserve + KV headroom. Queues a lab soak on one ready "
+        "lab host when hash/quant/runtime changed or the envelope aged out."
+    ),
+)
+async def run_crawl(request: Request) -> CrawlRunResult:
+    require_grant_write(role_from_request(request))
+    tenant_id = require_auditor_actor(request)
+    from aiuditor_service.crawl import StaticMetadataSource
+    from aiuditor_service.intake import run_intake
+
+    # HTTP trigger uses an injected source when tests set app.state.crawl_source.
+    source = getattr(request.app.state, "crawl_source", None)
+    if source is None:
+        from aiuditor_service.crawl import HuggingFaceMetadataSource, default_seed_repos
+        import os
+
+        raw = (os.environ.get("AIUDITOR_CRAWL_REPOS") or "").strip()
+        repos = (
+            tuple(part.strip() for part in raw.split(",") if part.strip())
+            if raw
+            else default_seed_repos()
+        )
+        source = HuggingFaceMetadataSource(repos)
+    plane = getattr(request.app.state, "plane_hop", None)
+    from aiuditor_service.hypermesh import ClosedPlaneHop
+
+    lab_hop = None if plane is None or isinstance(plane, ClosedPlaneHop) else plane
+    report = await run_intake(
+        tenant_id=tenant_id,
+        source=source or StaticMetadataSource([]),
+        candidates=_candidates(request),
+        envelopes=_envelopes(request),
+        lab_hop=lab_hop,
+    )
+    return CrawlRunResult(
+        crawled=report.crawled,
+        stored=report.stored,
+        dropped_no_fit=report.dropped_no_fit,
+        queued=report.queued,
+        skipped_fresh=report.skipped_fresh,
+        errors=list(report.errors),
+    )
+
+
+@router.get(
+    "/crawl/candidates",
+    response_model=list[CrawlCandidate],
+    summary="List crawl metadata candidates. Filter by class_id or status.",
+)
+async def list_crawl_candidates(
+    request: Request,
+    class_id: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+) -> list[CrawlCandidate]:
+    tenant_id = require_hold_actor(request)
+    return _candidates(request).list_for(
+        tenant_id, class_id=class_id, status=status_filter
+    )
 
 
 @router.get(

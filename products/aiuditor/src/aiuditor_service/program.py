@@ -2,8 +2,7 @@
 
 Hypermesh stays the measurement and lease store. AIuditor owns which
 artifacts were soaked per class, which pack ids form the compact host
-cert, and whether an uploaded model is admitted. Quarantine / sandbox
-are stubs that fail closed (pending until a named verdict).
+cert, and whether an uploaded model is admitted.
 """
 
 from __future__ import annotations
@@ -13,25 +12,24 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException
 
+from aiuditor_service.admission import (
+    ADMISSION_ALREADY_RESOLVED,
+    ADMISSION_NOT_FOUND,
+    advance_admission,
+    resolve_admission,
+    submit_admission,
+)
 from aiuditor_service.approvals import _safe_text
-from aiuditor_service.credentials import credential_ref
 from aiuditor_service.domain.models import (
-    Admission,
-    AdmissionCreate,
-    AdmissionResolve,
-    AdmissionStatus,
-    AdmissionVerdict,
     ClassEnvelope,
     ClassEnvelopeCreate,
     SuiteMember,
     SuiteMemberCreate,
 )
-from aiuditor_service.store import AdmissionStore, EnvelopeStore, SuiteStore
+from aiuditor_service.store import EnvelopeStore, SuiteStore
 
 ENVELOPE_NOT_FOUND = "Envelope not found"
 SUITE_MEMBER_NOT_FOUND = "Suite member not found"
-ADMISSION_NOT_FOUND = "Admission not found"
-ADMISSION_ALREADY_RESOLVED = "admission already has a verdict"
 CLASS_ID_REQUIRED = "class_id is required"
 CATALOG_ID_REQUIRED = "catalog_id is required"
 FILE_HASH_REQUIRED = "file_hash is required"
@@ -46,6 +44,28 @@ CORE_SUITE_SEED: tuple[tuple[str, str, str], ...] = (
     ("agx-large", CATALOG_LLAMA_8B, PACK_ID),
     ("nx-volume", CATALOG_LLAMA_8B, PACK_ID),
 )
+
+__all__ = [
+    "ADMISSION_ALREADY_RESOLVED",
+    "ADMISSION_NOT_FOUND",
+    "CATALOG_ID_REQUIRED",
+    "CATALOG_LLAMA_8B",
+    "CLASS_ID_REQUIRED",
+    "CORE_SUITE_SEED",
+    "ENVELOPE_NOT_FOUND",
+    "FILE_HASH_REQUIRED",
+    "FORMAT_REQUIRED",
+    "LICENSE_REQUIRED",
+    "PACK_ID",
+    "RUNTIME_REQUIRED",
+    "SUITE_MEMBER_NOT_FOUND",
+    "advance_admission",
+    "put_envelope",
+    "put_suite_member",
+    "resolve_admission",
+    "seed_core_suite",
+    "submit_admission",
+]
 
 
 def _now(clock: datetime | None) -> datetime:
@@ -162,80 +182,3 @@ def seed_core_suite(
             )
         )
     return rows
-
-
-def submit_admission(
-    store: AdmissionStore,
-    tenant_id: uuid.UUID,
-    body: AdmissionCreate,
-    *,
-    now: datetime | None = None,
-) -> Admission:
-    """Record an upload. Stays pending — quarantine/sandbox stubs fail closed."""
-
-    file_hash = (body.file_hash or "").strip()
-    fmt = _safe_text(body.format)
-    license_name = _safe_text(body.license)
-    intended = _safe_text(body.intended_class)
-    if not file_hash:
-        raise HTTPException(status_code=400, detail=FILE_HASH_REQUIRED)
-    if fmt is None:
-        raise HTTPException(status_code=400, detail=FORMAT_REQUIRED)
-    if license_name is None:
-        raise HTTPException(status_code=400, detail=LICENSE_REQUIRED)
-    if intended is None:
-        raise HTTPException(status_code=400, detail=CLASS_ID_REQUIRED)
-    cred = None
-    if body.credential:
-        cred = credential_ref(body.credential)
-    row = Admission(
-        id=uuid.uuid4(),
-        tenant_id=tenant_id,
-        file_hash=file_hash[:256],
-        format=fmt,
-        quant=_safe_text(body.quant),
-        license=license_name,
-        intended_class=intended,
-        credential_ref=cred,
-        status=AdmissionStatus.PENDING,
-        verdict=None,
-        reason=None,
-        resolved_by=None,
-        created_at=_now(now),
-        resolved_at=None,
-    )
-    store.put(row)
-    return row
-
-
-def resolve_admission(
-    store: AdmissionStore,
-    tenant_id: uuid.UUID,
-    admission_id: uuid.UUID,
-    body: AdmissionResolve,
-    *,
-    resolved_by: str,
-    now: datetime | None = None,
-) -> Admission:
-    row = store.get(tenant_id, admission_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
-    if row.verdict is not None:
-        raise HTTPException(status_code=409, detail=ADMISSION_ALREADY_RESOLVED)
-    clock = _now(now)
-    status = (
-        AdmissionStatus.ALLOWED
-        if body.verdict is AdmissionVerdict.ALLOW
-        else AdmissionStatus.DENIED
-    )
-    updated = row.model_copy(
-        update={
-            "status": status,
-            "verdict": body.verdict,
-            "reason": _safe_text(body.reason),
-            "resolved_by": resolved_by,
-            "resolved_at": clock,
-        }
-    )
-    store.put(updated)
-    return updated

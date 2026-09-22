@@ -15,7 +15,8 @@ Edge prefix: `/api/v1/aiuditor`. Wire prefix of the door (`hm_gw_`) is unchanged
 | Use | `POST …/connections/{id}/assign` binds a purpose=lease host to a Hypermesh renter/service lease. `POST …/ticket` mints a purpose=ir ticket on a purpose=auditor host. `POST …/classify` is an AIuditor-owned HTTPS hop on a purpose=auditor provider (hash-only credential; optional one-shot `X-Provider-Authorization`). |
 | Class envelope | `POST/GET /api/v1/aiuditor/envelopes` — one row per artifact per `class_id` (file hash, quant, runtime, context, fit, `decode_tok_s`, thermal). Written from lab soaks. Hypermesh still stamps the catalog row from a green scorecard. |
 | Core cert suite | `POST/GET /api/v1/aiuditor/suite` (and `POST …/suite/seed`) — which catalog/pack ids form the compact host cert. Seed starts from `pack-v1` / `llama-3.1-8b-q4` for `agx-large` and `nx-volume`. Compact-cert jobs live on Hypermesh. |
-| Admission | `POST/GET /api/v1/aiuditor/admissions`, `POST …/admissions/{id}/verdict` — allow/deny for uploaded-model admission. Quarantine/sandbox are stubs that fail closed (row stays `pending` until a named verdict). Full HF crawl is out of scope. |
+| Admission | `POST/GET /api/v1/aiuditor/admissions`, `POST …/admissions/{id}/verdict` — upload submit runs static gate → lab quarantine → sandbox (egress fail-closed). Named human (or approval hold) issues allow/deny. LLM is never `resolved_by`. |
+| Daily crawl | `POST /api/v1/aiuditor/crawl/run`, `GET …/crawl/candidates` — HF + allowlisted GGUF publisher **metadata only** (no weight download). Fit-filter drops artifacts that cannot fit the class after OS reserve + KV headroom. Queues one lab soak via Hypermesh `POST /lab/soaks`. Re-soak only on hash/quant/runtime change or retention age. |
 | Router | `GET/POST /api/v1/aiuditor/connections`, `GET /api/v1/aiuditor/connections/{id}` |
 | Desk | Connections registry and violations desk on `/dashboard/aiuditor`. Not hyperme.sh. |
 | Approval inbox | `POST/GET /api/v1/aiuditor/approvals`, `POST …/approvals/{id}/resolve` — hold an AI-use ask until a named human allow-once / allow-session / deny. Timeout is deny. Not `/api/v1/auditor`. LLM is never `resolved_by`. |
@@ -23,7 +24,7 @@ Edge prefix: `/api/v1/aiuditor`. Wire prefix of the door (`hm_gw_`) is unchanged
 | Event | `aiuditor.connection.created.v1` on `controlplane.events.v1`. Lock fields only. No raw credential. |
 | Export | `GET /api/v1/aiuditor/export` — contracts, violations, approvals. No prompt bodies. Derived copy, not the SoT. |
 
-Alembic `0025` / `0029` `aiuditor_*` tables with tenant RLS on the shared `controlplane` Postgres. Production hydrates and writes through `SqlPersistSession` (RLS GUC per put) and fail-closes if `DATABASE_URL` is missing, dummy, or unreachable. Tests keep `MemoryPersistSession` (`enable_db_middleware=False`).
+Alembic `0025` / `0029` / `0030` `aiuditor_*` tables with tenant RLS on the shared `controlplane` Postgres. Production hydrates and writes through `SqlPersistSession` (RLS GUC per put) and fail-closes if `DATABASE_URL` is missing, dummy, or unreachable. Tests keep `MemoryPersistSession` (`enable_db_middleware=False`).
 
 `AIUDITOR_ROLE` is `global` (Azure marketplace SoT), `operator` (private plane), or `witness` (host/door package). Same image. Witness fail-closes on fulfill, sign, bind, allocate, ticket mint, and program writes (`require_grant_write`). `GET /meta` advertises `writer` (`market` / `private` / `none`). Hypermesh checkout GETs that before fulfill and refuses a non-market writer unless `AIUDITOR_REQUIRED_WRITER` is `private` or `any`. Witness `POST /hydrate/pull` copies a tenant snapshot from `AIUDITOR_PARENT_URL` (connections, policies, contracts, violations, approvals, catalog, **envelopes**, **suite members**, **admissions**). A host sidecar also pulls on a timer (`AIUDITOR_HYDRATE_TENANT_ID`, `AIUDITOR_HYDRATE_EVERY`). Witness binds `127.0.0.1` and uses memory persist unless `DATABASE_URL` is set. Handoff (spine D) is not this path. Package: [`deploy/witness/`](deploy/witness/). Do not put this on hyperme.sh.
 
@@ -31,8 +32,8 @@ Alembic `0025` / `0029` `aiuditor_*` tables with tenant RLS on the shared `contr
 
 | Fact | Owner |
 |------|--------|
-| What gets measured (class envelopes, core suite, admission allow/deny) | **AIuditor** |
-| Timed samples, scorecards, Path B, catalog `certified` / `tokens_per_sec`, leases | **Hypermesh** |
+| What gets measured (class envelopes, core suite, admission allow/deny, crawl candidates) | **AIuditor** |
+| Timed samples, scorecards, Path B, lab soak queue, catalog `certified` / `tokens_per_sec`, leases | **Hypermesh** |
 | Compact-cert job execution on enrolled hosts | **Hypermesh** (reads suite membership from AIuditor / witness hydrate) |
 | Workload jail / WG-only lease publish | **hypermesh-host** |
 

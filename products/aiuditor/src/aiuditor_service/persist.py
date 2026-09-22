@@ -23,6 +23,7 @@ from aiuditor_service.domain.models import (
     Connection,
     Contract,
     ContractViolation,
+    CrawlCandidate,
     SuiteMember,
 )
 
@@ -44,6 +45,7 @@ TABLES = (
     "envelopes",
     "suite_members",
     "admissions",
+    "candidates",
 )
 
 _DOMAIN = {
@@ -56,6 +58,7 @@ _DOMAIN = {
     "envelopes": ClassEnvelope,
     "suite_members": SuiteMember,
     "admissions": Admission,
+    "candidates": CrawlCandidate,
 }
 
 _BANNED = ("credential", "prompt", "ticket", "messages", "hmac")
@@ -171,8 +174,27 @@ _ALLOWED = {
         "verdict",
         "reason",
         "resolved_by",
+        "size_bytes",
         "created_at",
         "resolved_at",
+    },
+    "candidates": {
+        "id",
+        "tenant_id",
+        "repo",
+        "revision",
+        "file_name",
+        "size_bytes",
+        "license",
+        "quant",
+        "file_hash",
+        "publisher",
+        "catalog_id",
+        "class_id",
+        "status",
+        "soak_job_id",
+        "created_at",
+        "updated_at",
     },
 }
 
@@ -285,6 +307,7 @@ def apply_snapshot(stores: Any, rows: dict[str, Any]) -> None:
         ("envelopes", "envelope_store"),
         ("suite_members", "suite_store"),
         ("admissions", "admission_store"),
+        ("candidates", "candidate_store"),
     )
     for table, attr in mapping:
         store = getattr(stores, attr, None)
@@ -304,6 +327,7 @@ def _sql_models():
         AiuditorAdmission,
         AiuditorApproval,
         AiuditorCatalog,
+        AiuditorCandidate,
         AiuditorConnection,
         AiuditorContract,
         AiuditorEnvelope,
@@ -322,6 +346,7 @@ def _sql_models():
         "envelopes": AiuditorEnvelope,
         "suite_members": AiuditorSuiteMember,
         "admissions": AiuditorAdmission,
+        "candidates": AiuditorCandidate,
     }
 
 

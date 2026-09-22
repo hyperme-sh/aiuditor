@@ -22,7 +22,7 @@ from aiuditor_service.domain.models import HydrateSnapshot
 from aiuditor_service.export import _reject_bodies
 from aiuditor_service.persist import row_from_payload
 from aiuditor_service.role import AiuditorRole, writer_for
-from aiuditor_service.store import StoreBundle
+from aiuditor_service.store import CandidateStore, StoreBundle
 
 PARENT_REQUIRED = "AIUDITOR_PARENT_URL is required to pull hydrate"
 PARENT_HOP_FAILED = "parent AIuditor hydrate failed"
@@ -178,6 +178,9 @@ def build_hydrate(
 
 def stores_from_app(app) -> StoreBundle:
     persist = getattr(app.state, "aiuditor_persist", None)
+    candidate_store = getattr(app.state, "candidate_store", None)
+    if candidate_store is None:
+        candidate_store = CandidateStore(persist=persist)
     return StoreBundle(
         persist=persist,
         connection_store=app.state.connection_store,
@@ -189,6 +192,7 @@ def stores_from_app(app) -> StoreBundle:
         envelope_store=app.state.envelope_store,
         suite_store=app.state.suite_store,
         admission_store=app.state.admission_store,
+        candidate_store=candidate_store,
     )
 
 

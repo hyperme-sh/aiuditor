@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from controlplane_db.models import (
     AiuditorCatalog,
+    AiuditorCandidate,
     AiuditorConnection,
     AiuditorContract,
     AiuditorEnvelope,
@@ -19,6 +20,7 @@ def test_orm_tables_are_grant_store_not_siblings():
         AiuditorEnvelope.__tablename__,
         AiuditorSuiteMember.__tablename__,
         AiuditorAdmission.__tablename__,
+        AiuditorCandidate.__tablename__,
     }
     assert names == {
         "aiuditor_connections",
@@ -27,6 +29,7 @@ def test_orm_tables_are_grant_store_not_siblings():
         "aiuditor_envelopes",
         "aiuditor_suite_members",
         "aiuditor_admissions",
+        "aiuditor_candidates",
     }
     assert "contract_id" in HypermeshLease.__table__.c
     assert not any("turn" in name or "oracle" in name or "payment" in name for name in names)
@@ -35,6 +38,8 @@ def test_orm_tables_are_grant_store_not_siblings():
     assert "decode_tok_s" in AiuditorEnvelope.__table__.c
     assert "pack_id" in AiuditorSuiteMember.__table__.c
     assert "verdict" in AiuditorAdmission.__table__.c
+    assert "size_bytes" in AiuditorAdmission.__table__.c
+    assert "repo" in AiuditorCandidate.__table__.c
 
 
 def test_contract_row_is_spine_d_only():
