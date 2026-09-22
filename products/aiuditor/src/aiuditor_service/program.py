@@ -16,9 +16,11 @@ from aiuditor_service.admission import (
     ADMISSION_ALREADY_RESOLVED,
     ADMISSION_NOT_FOUND,
     advance_admission,
+    advance_admission_async,
     resolve_admission,
     resolve_admission_async,
     submit_admission,
+    submit_admission_async,
 )
 from aiuditor_service.approvals import _safe_text
 from aiuditor_service.domain.models import (
@@ -61,12 +63,14 @@ __all__ = [
     "RUNTIME_REQUIRED",
     "SUITE_MEMBER_NOT_FOUND",
     "advance_admission",
+    "advance_admission_async",
     "put_envelope",
     "put_suite_member",
     "resolve_admission",
     "resolve_admission_async",
     "seed_core_suite",
     "submit_admission",
+    "submit_admission_async",
 ]
 
 

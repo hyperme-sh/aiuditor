@@ -190,7 +190,7 @@ def test_admission_sandbox_egress_fail_closed_and_llm_cannot_resolve():
             size_bytes=1024,
         ),
     )
-    assert pending.status is AdmissionStatus.PENDING
+    assert pending.status is AdmissionStatus.HOLD
     with pytest.raises(HTTPException) as exc:
         resolve_admission(
             store,
@@ -227,3 +227,33 @@ def test_admission_hold_for_human_before_verdict():
     )
     assert allowed.status is AdmissionStatus.ALLOWED
     assert allowed.resolved_by.startswith("1111")
+
+
+@pytest.mark.asyncio
+async def test_admission_async_queues_lab_and_holds_inbox():
+    from aiuditor_service.admission import submit_admission_async
+    from aiuditor_service.store import ApprovalStore
+
+    store = AdmissionStore()
+    approvals = ApprovalStore()
+    tenant = uuid.uuid4()
+    hop = FakePlaneHop()
+    row = await submit_admission_async(
+        store,
+        tenant,
+        AdmissionCreate(
+            file_hash="sha256:" + ("ff" * 32),
+            format="gguf",
+            license="mit",
+            intended_class="agx-large",
+            source_ref="bartowski/Llama@main/model.gguf",
+            hold_for_human=True,
+        ),
+        plane=hop,
+        approvals=approvals,
+    )
+    assert row.status is AdmissionStatus.HOLD
+    assert hop.soaks
+    assert hop.soaks[0]["source_ref"] == "bartowski/Llama@main/model.gguf"
+    held = approvals.list_for(tenant)
+    assert any(a.purpose == "admission" for a in held)

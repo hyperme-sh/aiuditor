@@ -115,6 +115,7 @@ from aiuditor_service.program import (
     resolve_admission_async,
     seed_core_suite,
     submit_admission,
+    submit_admission_async,
 )
 from aiuditor_service.hypermesh import (
     HOST_LOOKUP_FAILED,
@@ -1023,7 +1024,14 @@ async def get_suite_member(request: Request, member_id: uuid.UUID) -> SuiteMembe
 async def create_admission(request: Request, body: AdmissionCreate) -> Admission:
     require_grant_write(role_from_request(request))
     tenant_id = require_auditor_actor(request)
-    row = submit_admission(_admissions(request), tenant_id, body)
+    plane = getattr(request.app.state, "plane_hop", None)
+    row = await submit_admission_async(
+        _admissions(request),
+        tenant_id,
+        body,
+        plane=plane,
+        approvals=_approvals(request),
+    )
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
         event_type=ADMISSION_SUBMITTED_V1,
