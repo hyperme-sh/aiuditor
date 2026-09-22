@@ -268,6 +268,21 @@ class PlaneHop(Protocol):
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]: ...
 
+    async def promote_catalog(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        catalog_id: str,
+        class_id: str,
+        artifact_name: str,
+        file_hash: str,
+        admission_id: uuid.UUID,
+        format: str | None = None,
+        quant: str | None = None,
+        runtime: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]: ...
+
 
 class ClosedPlaneHop:
     async def get_lease(
@@ -328,6 +343,22 @@ class ClosedPlaneHop:
         runtime: str | None = None,
         source_ref: str | None = None,
         enqueue_pull: bool = True,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
+
+    async def promote_catalog(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        catalog_id: str,
+        class_id: str,
+        artifact_name: str,
+        file_hash: str,
+        admission_id: uuid.UUID,
+        format: str | None = None,
+        quant: str | None = None,
+        runtime: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
@@ -544,6 +575,52 @@ class HttpPlaneHop:
             raise HostLookupUnavailable(PLANE_HOP_FAILED)
         return body
 
+    async def promote_catalog(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        catalog_id: str,
+        class_id: str,
+        artifact_name: str,
+        file_hash: str,
+        admission_id: uuid.UUID,
+        format: str | None = None,
+        quant: str | None = None,
+        runtime: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "catalog_id": catalog_id,
+            "class_id": class_id,
+            "artifact_name": artifact_name,
+            "file_hash": file_hash,
+            "admission_id": str(admission_id),
+        }
+        if format:
+            payload["format"] = format
+        if quant:
+            payload["quant"] = quant
+        if runtime:
+            payload["runtime"] = runtime
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    f"{self._base}/api/v1/hypermesh/catalog/promote",
+                    headers=self._hop(tenant_id, headers),
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if response.status_code >= 400:
+            raise HostLookupUnavailable(_http_detail(response) or PLANE_HOP_FAILED)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
+        if not isinstance(body, dict):
+            raise HostLookupUnavailable(PLANE_HOP_FAILED)
+        return body
+
 
 def _http_detail(response: httpx.Response) -> str | None:
     try:
@@ -585,10 +662,12 @@ class FakePlaneHop:
     violations: list[dict[str, object]] = field(default_factory=list)
     offers: list[dict[str, object]] = field(default_factory=list)
     soaks: list[dict[str, object]] = field(default_factory=list)
+    promotions: list[dict[str, object]] = field(default_factory=list)
     mint_error: str | None = None
     violate_error: str | None = None
     offer_error: str | None = None
     soak_error: str | None = None
+    promote_error: str | None = None
 
     def add_lease(
         self,
@@ -767,6 +846,40 @@ class FakePlaneHop:
             "tenant_id": tenant_id,
         }
         self.soaks.append(body)
+        return body
+
+    async def promote_catalog(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        catalog_id: str,
+        class_id: str,
+        artifact_name: str,
+        file_hash: str,
+        admission_id: uuid.UUID,
+        format: str | None = None,
+        quant: str | None = None,
+        runtime: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        del headers
+        if self.promote_error:
+            raise HostLookupUnavailable(self.promote_error)
+        body = {
+            "id": catalog_id,
+            "catalog_id": catalog_id,
+            "class_id": class_id,
+            "artifact_name": artifact_name,
+            "file_hash": file_hash,
+            "format": format,
+            "quant": quant,
+            "runtime": runtime,
+            "admission_id": str(admission_id),
+            "origin": "upload",
+            "certified": False,
+            "tenant_id": str(tenant_id),
+        }
+        self.promotions.append(body)
         return body
 
 
