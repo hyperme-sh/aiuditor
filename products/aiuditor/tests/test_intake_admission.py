@@ -174,12 +174,13 @@ def test_admission_sandbox_egress_fail_closed_and_llm_cannot_resolve():
         store,
         tenant,
         row.id,
+        sandbox_soak_ok=True,
         sandbox_egress_ok=False,
     )
     assert denied.status is AdmissionStatus.DENIED
     assert denied.reason == EGRESS_DETECTED
 
-    pending = submit_admission(
+    waiting = submit_admission(
         store,
         tenant,
         AdmissionCreate(
@@ -190,12 +191,13 @@ def test_admission_sandbox_egress_fail_closed_and_llm_cannot_resolve():
             size_bytes=1024,
         ),
     )
-    assert pending.status is AdmissionStatus.HOLD
+    # Missing soak/egress report stays sandboxing — does not pass by default.
+    assert waiting.status is AdmissionStatus.SANDBOXING
     with pytest.raises(HTTPException) as exc:
         resolve_admission(
             store,
             tenant,
-            pending.id,
+            waiting.id,
             AdmissionResolve(verdict=AdmissionVerdict.ALLOW),
             resolved_by="llm",
         )
@@ -203,6 +205,9 @@ def test_admission_sandbox_egress_fail_closed_and_llm_cannot_resolve():
 
 
 def test_admission_hold_for_human_before_verdict():
+    from aiuditor_service.admission import record_sandbox_result
+    from aiuditor_service.domain.models import AdmissionSandboxReport
+
     store = AdmissionStore()
     tenant = uuid.uuid4()
     row = submit_admission(
@@ -216,7 +221,17 @@ def test_admission_hold_for_human_before_verdict():
         ),
         run_pipeline=False,
     )
-    held = advance_admission(store, tenant, row.id, hold_for_human=True)
+    held = record_sandbox_result(
+        store,
+        tenant,
+        row.id,
+        AdmissionSandboxReport(
+            soak_passed=True,
+            egress_ok=True,
+            egress_reason="overlay_publish_only",
+        ),
+        hold_for_human=True,
+    )
     assert held.status is AdmissionStatus.HOLD
     allowed = resolve_admission(
         store,
@@ -230,7 +245,7 @@ def test_admission_hold_for_human_before_verdict():
 
 
 @pytest.mark.asyncio
-async def test_admission_async_queues_lab_and_holds_inbox():
+async def test_admission_async_queues_lab_and_awaits_soak():
     from aiuditor_service.admission import submit_admission_async
     from aiuditor_service.store import ApprovalStore
 
@@ -252,8 +267,9 @@ async def test_admission_async_queues_lab_and_holds_inbox():
         plane=hop,
         approvals=approvals,
     )
-    assert row.status is AdmissionStatus.HOLD
+    assert row.status is AdmissionStatus.SANDBOXING
     assert hop.soaks
     assert hop.soaks[0]["source_ref"] == "bartowski/Llama@main/model.gguf"
-    held = approvals.list_for(tenant)
-    assert any(a.purpose == "admission" for a in held)
+    assert hop.soaks[0]["admission_id"] == str(row.id)
+    # Approval inbox opens after sandbox report, not before soak.
+    assert not any(a.purpose == "admission" for a in approvals.list_for(tenant))

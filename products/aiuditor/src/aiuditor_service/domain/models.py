@@ -530,6 +530,17 @@ class AdmissionResolve(BaseModel):
     reason: str | None = Field(default=None, max_length=120)
 
 
+class AdmissionSandboxReport(BaseModel):
+    """Lab host soak + egress observation. Omitted egress_ok fails closed."""
+
+    soak_passed: bool
+    egress_ok: bool | None = Field(
+        default=None,
+        description="Explicit True required. Missing/None fails closed.",
+    )
+    egress_reason: str | None = Field(default=None, max_length=64)
+
+
 class Admission(BaseModel):
     """Uploaded-model admission row. Deny is a policy record, not a lease."""
 
@@ -546,6 +557,9 @@ class Admission(BaseModel):
     reason: str | None = None
     resolved_by: str | None = None
     size_bytes: int | None = None
+    sandbox_soak_ok: bool | None = None
+    sandbox_egress_ok: bool | None = None
+    sandbox_egress_reason: str | None = None
     created_at: datetime
     resolved_at: datetime | None = None
 
@@ -564,6 +578,9 @@ class Admission(BaseModel):
             "reason": self.reason,
             "resolved_by": self.resolved_by,
             "size_bytes": self.size_bytes,
+            "sandbox_soak_ok": self.sandbox_soak_ok,
+            "sandbox_egress_ok": self.sandbox_egress_ok,
+            "sandbox_egress_reason": self.sandbox_egress_reason,
         }
 
 

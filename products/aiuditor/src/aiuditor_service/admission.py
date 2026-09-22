@@ -5,8 +5,11 @@ lab host inside the workload jail. Fail closed on unexpected files, license
 denials, size/hash mismatch, or any egress outside the overlay peer. LLM is
 never resolved_by.
 
+Sandbox does not pass unless the lab host reports soak completed and
+egress_ok=True explicitly. Missing report or omitted flag fails closed.
 Allow promotes a Hypermesh catalog row for the intended class only (still
-uncertified). Deny stays a violation-style Admission record — not a lease.
+uncertified) only after that sandbox pass. Deny never promotes. Certified
+stays on the green lab scorecard path.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from aiuditor_service.domain.models import (
     Admission,
     AdmissionCreate,
     AdmissionResolve,
+    AdmissionSandboxReport,
     AdmissionStatus,
     AdmissionVerdict,
     ApprovalCreate,
@@ -43,6 +47,9 @@ UNEXPECTED_FILES = "unexpected files beside weights"
 SIZE_MISMATCH = "declared size does not match hash pin"
 FORMAT_DENIED = "format not allowed"
 EGRESS_DETECTED = "sandbox egress outside overlay peer"
+EGRESS_UNOBSERVED = "sandbox egress not observed"
+SOAK_REQUIRED = "lab soak must pass before allow"
+SOAK_FAILED = "lab soak failed"
 LLM_RESOLVER = "llm"
 PROMOTE_FAILED = "catalog promote failed"
 
@@ -73,6 +80,12 @@ def _now(clock: datetime | None) -> datetime:
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=UTC)
     return stamp
+
+
+def sandbox_passed(row: Admission) -> bool:
+    """True only when soak completed and egress was explicitly ok."""
+
+    return row.sandbox_soak_ok is True and row.sandbox_egress_ok is True
 
 
 def _deny(
@@ -161,6 +174,9 @@ def submit_admission(
         reason=None,
         resolved_by=None,
         size_bytes=body.size_bytes,
+        sandbox_soak_ok=None,
+        sandbox_egress_ok=None,
+        sandbox_egress_reason=None,
         created_at=clock,
         resolved_at=None,
     )
@@ -186,7 +202,7 @@ async def submit_admission_async(
     approvals: ApprovalStore | None = None,
     now: datetime | None = None,
 ) -> Admission:
-    """Submit + quarantine onto a lab host + approval inbox hold for testers."""
+    """Submit + quarantine onto a lab host + await soak before human hold."""
 
     row = submit_admission(store, tenant_id, body, now=now, run_pipeline=False)
     return await advance_admission_async(
@@ -207,11 +223,18 @@ def advance_admission(
     admission_id: uuid.UUID,
     *,
     body: AdmissionCreate | None = None,
-    sandbox_egress_ok: bool = True,
+    sandbox_egress_ok: bool | None = None,
+    sandbox_soak_ok: bool | None = None,
     hold_for_human: bool = False,
     now: datetime | None = None,
 ) -> Admission:
-    """Static gate → quarantine → sandbox. Fail closed. Optional human hold."""
+    """Static gate → quarantine → sandbox. Fail closed. Optional human hold.
+
+    ``sandbox_egress_ok`` and ``sandbox_soak_ok`` default to None (not
+    reported). Sandbox only advances toward a human verdict when both are
+    explicitly True. False egress or failed soak denies. Missing report
+    leaves the row quarantined / sandboxing — never defaults to True.
+    """
 
     row = store.get(tenant_id, admission_id)
     if row is None:
@@ -233,14 +256,30 @@ def advance_admission(
         return _deny(store, row, reason=reason, now=clock)
 
     # Quarantine: weights would land only on a lab host inside the jail.
-    row = row.model_copy(
-        update={"status": AdmissionStatus.QUARANTINED, "reason": "lab quarantine"}
-    )
+    updates: dict[str, object] = {
+        "status": AdmissionStatus.QUARANTINED,
+        "reason": "lab quarantine",
+    }
+    if sandbox_soak_ok is not None:
+        updates["sandbox_soak_ok"] = sandbox_soak_ok
+    if sandbox_egress_ok is not None:
+        updates["sandbox_egress_ok"] = sandbox_egress_ok
+    row = row.model_copy(update=updates)
     store.put(row)
 
-    # Sandbox timed sample + egress check. Fail closed on any other egress.
-    # Workload jail (internal net, no masquerade) enforces overlay-only egress.
-    if not sandbox_egress_ok:
+    soak_ok = row.sandbox_soak_ok
+    egress_ok = row.sandbox_egress_ok
+
+    # Fail closed: explicit False denies. Missing (None) does not pass.
+    if soak_ok is False:
+        return _deny(
+            store,
+            row,
+            reason=SOAK_FAILED,
+            resolved_by="sandbox",
+            now=clock,
+        )
+    if egress_ok is False:
         return _deny(
             store,
             row,
@@ -248,6 +287,17 @@ def advance_admission(
             resolved_by="sandbox",
             now=clock,
         )
+    if soak_ok is not True or egress_ok is not True:
+        # Awaiting lab soak / egress report. Do not pretend sandbox passed.
+        row = row.model_copy(
+            update={
+                "status": AdmissionStatus.SANDBOXING,
+                "reason": "awaiting lab soak",
+            }
+        )
+        store.put(row)
+        return row
+
     row = row.model_copy(
         update={"status": AdmissionStatus.SANDBOXING, "reason": "sandbox run"}
     )
@@ -264,7 +314,81 @@ def advance_admission(
         store.put(row)
         return row
 
-    # Pipeline ready for a named human verdict — stays pending of allow/deny.
+    row = row.model_copy(
+        update={
+            "status": AdmissionStatus.PENDING,
+            "reason": "awaiting named verdict",
+        }
+    )
+    store.put(row)
+    return row
+
+
+def record_sandbox_result(
+    store: AdmissionStore,
+    tenant_id: uuid.UUID,
+    admission_id: uuid.UUID,
+    body: AdmissionSandboxReport,
+    *,
+    approvals: ApprovalStore | None = None,
+    hold_for_human: bool = True,
+    now: datetime | None = None,
+) -> Admission:
+    """Apply lab soak + egress observation. Omitted egress_ok fails closed."""
+
+    row = store.get(tenant_id, admission_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
+    if row.verdict is not None:
+        return row
+    clock = _now(now)
+    # Explicit True only. Missing / None is not ok.
+    egress_ok = True if body.egress_ok is True else False
+    reason_code = _safe_text(body.egress_reason)
+    if body.egress_ok is not True and reason_code is None:
+        reason_code = "egress_unobserved" if body.egress_ok is None else "egress_denied"
+    row = row.model_copy(
+        update={
+            "sandbox_soak_ok": bool(body.soak_passed),
+            "sandbox_egress_ok": egress_ok if body.egress_ok is True else False,
+            "sandbox_egress_reason": (reason_code or None),
+            "status": AdmissionStatus.SANDBOXING,
+            "reason": "sandbox report",
+        }
+    )
+    store.put(row)
+
+    if not body.soak_passed:
+        return _deny(
+            store, row, reason=SOAK_FAILED, resolved_by="sandbox", now=clock
+        )
+    if body.egress_ok is not True:
+        deny_reason = (
+            EGRESS_UNOBSERVED if body.egress_ok is None else EGRESS_DETECTED
+        )
+        return _deny(
+            store, row, reason=deny_reason, resolved_by="sandbox", now=clock
+        )
+
+    if hold_for_human:
+        if approvals is not None:
+            hold_approval(
+                approvals,
+                tenant_id,
+                ApprovalCreate(
+                    purpose="admission",
+                    who=f"upload:{row.file_hash[:20]}",
+                    why=ApprovalWhy.LEASE,
+                    ttl_seconds=24 * 60 * 60,
+                ),
+                now=clock,
+            )
+        row = row.model_copy(
+            update={"status": AdmissionStatus.HOLD, "reason": "human hold"}
+        )
+        store.put(row)
+        return row
+
     row = row.model_copy(
         update={
             "status": AdmissionStatus.PENDING,
@@ -281,17 +405,19 @@ async def advance_admission_async(
     admission_id: uuid.UUID,
     *,
     body: AdmissionCreate | None = None,
-    sandbox_egress_ok: bool = True,
+    sandbox_egress_ok: bool | None = None,
+    sandbox_soak_ok: bool | None = None,
     hold_for_human: bool = True,
     plane: PlaneHop | None = None,
     approvals: ApprovalStore | None = None,
     now: datetime | None = None,
 ) -> Admission:
-    """Quarantine onto one lab host, sandbox, then approval-inbox hold.
+    """Quarantine onto one lab host; human hold waits for sandbox report.
 
     Crawl/lab-discovered packs are not routed here — missing admission must
     not block that path. Deny never promotes. Allow still promotes an
-    uncertified catalog row via ``resolve_admission_async``.
+    uncertified catalog row via ``resolve_admission_async`` only after
+    sandbox pass.
     """
 
     row = store.get(tenant_id, admission_id)
@@ -308,18 +434,35 @@ async def advance_admission_async(
         source_ref=source_ref,
         hold_for_human=hold_for_human,
     )
-    # Static gate + quarantine/sandbox status. Defer HOLD so we can queue lab.
+    # Static gate + quarantine. Do not claim sandbox pass without a report.
     advanced = advance_admission(
         store,
         tenant_id,
         admission_id,
         body=gate_body.model_copy(update={"hold_for_human": False}),
         sandbox_egress_ok=sandbox_egress_ok,
+        sandbox_soak_ok=sandbox_soak_ok,
         hold_for_human=False,
         now=now,
     )
     if advanced.verdict is not None:
         return advanced
+
+    if sandbox_passed(advanced):
+        # Explicit report already present (tests / re-entry).
+        return record_sandbox_result(
+            store,
+            tenant_id,
+            advanced.id,
+            AdmissionSandboxReport(
+                soak_passed=True,
+                egress_ok=True,
+                egress_reason=advanced.sandbox_egress_reason or "overlay_publish_only",
+            ),
+            approvals=approvals,
+            hold_for_human=hold_for_human,
+            now=now,
+        )
 
     if plane is not None:
         catalog_id = admission_catalog_id(
@@ -336,6 +479,7 @@ async def advance_admission_async(
                 runtime="nvidia",
                 source_ref=(gate_body.source_ref or None),
                 enqueue_pull=True,
+                admission_id=advanced.id,
             )
             advanced = advanced.model_copy(
                 update={
@@ -352,36 +496,22 @@ async def advance_admission_async(
                 }
             )
             store.put(advanced)
-            hold_for_human = True
+            if approvals is not None:
+                hold_approval(
+                    approvals,
+                    tenant_id,
+                    ApprovalCreate(
+                        purpose="admission",
+                        who=f"upload:{advanced.file_hash[:20]}",
+                        why=ApprovalWhy.LEASE,
+                        ttl_seconds=24 * 60 * 60,
+                    ),
+                    now=now,
+                )
+            return advanced
 
-    if hold_for_human or advanced.status is AdmissionStatus.HOLD:
-        if approvals is not None and advanced.status is not AdmissionStatus.DENIED:
-            hold_approval(
-                approvals,
-                tenant_id,
-                ApprovalCreate(
-                    purpose="admission",
-                    who=f"upload:{advanced.file_hash[:20]}",
-                    why=ApprovalWhy.LEASE,
-                    ttl_seconds=24 * 60 * 60,
-                ),
-                now=now,
-            )
-        if advanced.status is not AdmissionStatus.HOLD:
-            advanced = advanced.model_copy(
-                update={"status": AdmissionStatus.HOLD, "reason": "human hold"}
-            )
-            store.put(advanced)
-        return advanced
-
-    if advanced.status is AdmissionStatus.SANDBOXING:
-        advanced = advanced.model_copy(
-            update={
-                "status": AdmissionStatus.PENDING,
-                "reason": "awaiting named verdict",
-            }
-        )
-        store.put(advanced)
+    # Stay SANDBOXING until the lab host reports soak + egress.
+    # Do not open the allow path early.
     return advanced
 
 
@@ -397,6 +527,7 @@ def resolve_admission(
     """Named-human allow/deny. Deny is a violation-style record, not a lease.
 
     Prefer ``resolve_admission_async`` when a plane hop can promote on allow.
+    Allow requires a successful lab soak with explicit egress_ok.
     """
 
     actor = (resolved_by or "").strip()
@@ -407,6 +538,8 @@ def resolve_admission(
         raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
     if row.verdict is not None:
         raise HTTPException(status_code=409, detail=ADMISSION_ALREADY_RESOLVED)
+    if body.verdict is AdmissionVerdict.ALLOW and not sandbox_passed(row):
+        raise HTTPException(status_code=409, detail=SOAK_REQUIRED)
     clock = _now(now)
     status = (
         AdmissionStatus.ALLOWED
@@ -436,7 +569,11 @@ async def resolve_admission_async(
     plane: PlaneHop | None = None,
     now: datetime | None = None,
 ) -> Admission:
-    """Allow promotes a Hypermesh catalog row for that class; deny does not."""
+    """Allow promotes a Hypermesh catalog row for that class; deny does not.
+
+    Promote requires sandbox pass (soak + egress_ok). Certified still waits
+    for a green lab scorecard.
+    """
 
     updated = resolve_admission(
         store,

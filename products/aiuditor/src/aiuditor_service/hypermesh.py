@@ -265,6 +265,7 @@ class PlaneHop(Protocol):
         runtime: str | None = None,
         source_ref: str | None = None,
         enqueue_pull: bool = True,
+        admission_id: uuid.UUID | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]: ...
 
@@ -343,6 +344,7 @@ class ClosedPlaneHop:
         runtime: str | None = None,
         source_ref: str | None = None,
         enqueue_pull: bool = True,
+        admission_id: uuid.UUID | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
@@ -539,6 +541,7 @@ class HttpPlaneHop:
         runtime: str | None = None,
         source_ref: str | None = None,
         enqueue_pull: bool = True,
+        admission_id: uuid.UUID | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -556,6 +559,8 @@ class HttpPlaneHop:
             payload["runtime"] = runtime
         if source_ref:
             payload["source_ref"] = source_ref
+        if admission_id is not None:
+            payload["admission_id"] = str(admission_id)
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(
@@ -827,6 +832,7 @@ class FakePlaneHop:
         runtime: str | None = None,
         source_ref: str | None = None,
         enqueue_pull: bool = True,
+        admission_id: uuid.UUID | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         del headers
@@ -843,6 +849,7 @@ class FakePlaneHop:
             "quant": quant,
             "runtime": runtime,
             "source_ref": source_ref,
+            "admission_id": str(admission_id) if admission_id is not None else None,
             "tenant_id": tenant_id,
         }
         self.soaks.append(body)

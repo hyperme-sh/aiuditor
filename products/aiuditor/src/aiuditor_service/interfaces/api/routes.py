@@ -44,6 +44,7 @@ from aiuditor_service.domain.models import (
     Admission,
     AdmissionCreate,
     AdmissionResolve,
+    AdmissionSandboxReport,
     Approval,
     ApprovalCreate,
     ApprovalPolicy,
@@ -111,6 +112,7 @@ from aiuditor_service.program import (
     SUITE_MEMBER_NOT_FOUND,
     put_envelope,
     put_suite_member,
+    record_sandbox_result,
     resolve_admission,
     resolve_admission_async,
     seed_core_suite,
@@ -1063,6 +1065,32 @@ async def get_admission(request: Request, admission_id: uuid.UUID) -> Admission:
     if row is None:
         raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
     return row
+
+
+@router.post(
+    "/admissions/{admission_id}/sandbox",
+    response_model=Admission,
+    summary="Record lab soak + egress observation for an upload admission",
+    description=(
+        "Hypermesh hops here after a path_b quarantine soak whose catalog "
+        "carries admission_id. soak_passed and egress_ok=True are required "
+        "before a human allow can promote. Omitted egress_ok fails closed. "
+        "Does not certify the catalog row."
+    ),
+)
+async def report_admission_sandbox(
+    request: Request, admission_id: uuid.UUID, body: AdmissionSandboxReport
+) -> Admission:
+    require_grant_write(role_from_request(request))
+    tenant_id = require_auditor_actor(request)
+    return record_sandbox_result(
+        _admissions(request),
+        tenant_id,
+        admission_id,
+        body,
+        approvals=_approvals(request),
+        hold_for_human=True,
+    )
 
 
 @router.post(

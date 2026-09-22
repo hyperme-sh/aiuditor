@@ -91,6 +91,9 @@ def test_core_suite_seed_is_pack_v1_llama_on_public_classes():
 
 
 def test_admission_holds_for_named_verdict():
+    from aiuditor_service.admission import record_sandbox_result
+    from aiuditor_service.domain.models import AdmissionSandboxReport
+
     store = AdmissionStore()
     tenant = uuid.uuid4()
     row = submit_admission(
@@ -105,14 +108,26 @@ def test_admission_holds_for_named_verdict():
             credential="sk-publisher-secret",
         ),
     )
-    assert row.status is AdmissionStatus.HOLD
+    assert row.status is AdmissionStatus.SANDBOXING
     assert row.verdict is None
     assert row.credential_ref == credential_ref("sk-publisher-secret")
     assert "sk-publisher" not in str(row.model_dump())
-    allowed = resolve_admission(
+    held = record_sandbox_result(
         store,
         tenant,
         row.id,
+        AdmissionSandboxReport(
+            soak_passed=True,
+            egress_ok=True,
+            egress_reason="overlay_publish_only",
+        ),
+        hold_for_human=True,
+    )
+    assert held.status is AdmissionStatus.HOLD
+    allowed = resolve_admission(
+        store,
+        tenant,
+        held.id,
         AdmissionResolve(verdict=AdmissionVerdict.ALLOW, reason="lab soak green"),
         resolved_by="11111111-1111-1111-1111-111111111111",
     )
@@ -122,7 +137,7 @@ def test_admission_holds_for_named_verdict():
         resolve_admission(
             store,
             tenant,
-            row.id,
+            held.id,
             AdmissionResolve(verdict=AdmissionVerdict.DENY),
             resolved_by="22222222-2222-2222-2222-222222222222",
         )
@@ -166,7 +181,7 @@ async def test_program_http_and_hydrate(
         },
     )
     assert admission.status_code == 201, admission.text
-    assert admission.json()["status"] == "hold"
+    assert admission.json()["status"] == "sandboxing"
     assert admission.json()["credential_ref"] == credential_ref("publisher-token")
     assert "credential" not in admission.json() or admission.json().get("credential") is None
     verdict = await http_client.post(
