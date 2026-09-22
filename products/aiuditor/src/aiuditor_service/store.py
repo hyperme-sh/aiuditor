@@ -21,6 +21,7 @@ from aiuditor_service.domain.models import (
     ConnectionPurpose,
     Contract,
     ContractViolation,
+    CrawlCandidate,
     SuiteMember,
 )
 from aiuditor_service.persist import (
@@ -406,6 +407,63 @@ class AdmissionStore:
 
 
 @dataclass
+class CandidateStore:
+    candidates: dict[uuid.UUID, dict[uuid.UUID, CrawlCandidate]] = field(
+        default_factory=dict
+    )
+    persist: PersistSession = field(default_factory=MemoryPersistSession)
+    _hydrating: bool = False
+
+    def for_tenant(self, tenant_id: uuid.UUID) -> dict[uuid.UUID, CrawlCandidate]:
+        bucket = self.candidates.setdefault(tenant_id, {})
+        _reload(
+            bucket, self.persist, "candidates", tenant_id, hydrating=self._hydrating
+        )
+        return bucket
+
+    def list_for(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        class_id: str | None = None,
+        status: str | None = None,
+    ) -> list[CrawlCandidate]:
+        rows = list(self.for_tenant(tenant_id).values())
+        if class_id is not None:
+            rows = [row for row in rows if row.class_id == class_id]
+        if status:
+            rows = [row for row in rows if row.status.value == status]
+        rows.sort(key=lambda row: (row.class_id, row.catalog_id, row.updated_at))
+        return rows
+
+    def get(self, tenant_id: uuid.UUID, candidate_id: uuid.UUID) -> CrawlCandidate | None:
+        return self.for_tenant(tenant_id).get(candidate_id)
+
+    def for_source(
+        self,
+        tenant_id: uuid.UUID,
+        repo: str,
+        revision: str,
+        file_name: str,
+        class_id: str,
+    ) -> CrawlCandidate | None:
+        for row in self.for_tenant(tenant_id).values():
+            if (
+                row.repo == repo
+                and row.revision == revision
+                and row.file_name == file_name
+                and row.class_id == class_id
+            ):
+                return row
+        return None
+
+    def put(self, row: CrawlCandidate) -> CrawlCandidate:
+        _write(self.persist, "candidates", row, hydrating=self._hydrating)
+        self.candidates.setdefault(row.tenant_id, {})[row.id] = row
+        return row
+
+
+@dataclass
 class StoreBundle:
     persist: PersistSession
     connection_store: ConnectionStore
@@ -417,6 +475,7 @@ class StoreBundle:
     envelope_store: EnvelopeStore
     suite_store: SuiteStore
     admission_store: AdmissionStore
+    candidate_store: CandidateStore
 
 
 def new_stores(persist: PersistSession | None = None) -> StoreBundle:
@@ -432,6 +491,7 @@ def new_stores(persist: PersistSession | None = None) -> StoreBundle:
         envelope_store=EnvelopeStore(persist=session),
         suite_store=SuiteStore(persist=session),
         admission_store=AdmissionStore(persist=session),
+        candidate_store=CandidateStore(persist=session),
     )
     session.hydrate(bundle)
     return bundle

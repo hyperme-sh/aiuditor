@@ -44,6 +44,7 @@ from aiuditor_service.persist import (
 )
 from aiuditor_service.role import AiuditorRole, resolve_role, writer_for
 from aiuditor_service.store import new_stores
+from aiuditor_service.intake_loop import run_crawl_loop
 
 logger = get_logger(__name__)
 
@@ -87,6 +88,7 @@ def create_app(
         app.state.envelope_store = stores.envelope_store
         app.state.suite_store = stores.suite_store
         app.state.admission_store = stores.admission_store
+        app.state.candidate_store = stores.candidate_store
         logger.info(
             "AIuditor persist backend: %s role=%s writer=%s",
             type(persist).__name__,
@@ -146,9 +148,19 @@ def create_app(
         app.state.hydrate_stop = hydrate_stop
         hydrate_task = asyncio.create_task(run_hydrate_loop(app, stop=hydrate_stop))
         app.state.hydrate_task = hydrate_task
+        crawl_stop = asyncio.Event()
+        app.state.crawl_stop = crawl_stop
+        crawl_task = asyncio.create_task(run_crawl_loop(app, stop=crawl_stop))
+        app.state.crawl_task = crawl_task
 
         yield
 
+        crawl_stop.set()
+        crawl_task.cancel()
+        try:
+            await crawl_task
+        except asyncio.CancelledError:
+            pass
         hydrate_stop.set()
         hydrate_task.cancel()
         try:

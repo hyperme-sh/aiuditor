@@ -482,6 +482,9 @@ class SuiteMember(BaseModel):
 
 class AdmissionStatus(StrEnum):
     PENDING = "pending"
+    QUARANTINED = "quarantined"
+    SANDBOXING = "sandboxing"
+    HOLD = "hold"
     ALLOWED = "allowed"
     DENIED = "denied"
 
@@ -494,8 +497,8 @@ class AdmissionVerdict(StrEnum):
 class AdmissionCreate(BaseModel):
     """Uploaded-model submit. Credential is write-only; only the hash is stored.
 
-    Quarantine and sandbox are stubs in this cut: the row stays pending until
-    a named verdict. Fail closed — never auto-allow.
+    Static gate / quarantine / sandbox run on submit. Fail closed — never
+    auto-allow. A named human (or approval inbox) still issues the verdict.
     """
 
     file_hash: str = Field(..., min_length=1, max_length=256)
@@ -504,6 +507,11 @@ class AdmissionCreate(BaseModel):
     license: str = Field(..., min_length=1, max_length=64)
     intended_class: str = Field(..., min_length=1, max_length=64)
     credential: str | None = Field(default=None, min_length=1, max_length=4096)
+    size_bytes: int | None = Field(default=None, ge=0)
+    extra_files: list[str] | None = Field(
+        default=None,
+        description="Any unexpected files beside the weights. Non-empty → deny.",
+    )
 
 
 class AdmissionResolve(BaseModel):
@@ -528,6 +536,7 @@ class Admission(BaseModel):
     verdict: AdmissionVerdict | None = None
     reason: str | None = None
     resolved_by: str | None = None
+    size_bytes: int | None = None
     created_at: datetime
     resolved_at: datetime | None = None
 
@@ -545,7 +554,63 @@ class Admission(BaseModel):
             "verdict": self.verdict.value if self.verdict else None,
             "reason": self.reason,
             "resolved_by": self.resolved_by,
+            "size_bytes": self.size_bytes,
         }
+
+
+class CrawlCandidateStatus(StrEnum):
+    FIT = "fit"
+    DROPPED = "dropped"
+    QUEUED = "queued"
+    SKIPPED = "skipped"
+
+
+class CrawlCandidate(BaseModel):
+    """HF / GGUF publisher metadata pin. Weights are never stored here."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    repo: str
+    revision: str
+    file_name: str
+    size_bytes: int
+    license: str | None = None
+    quant: str | None = None
+    file_hash: str | None = None
+    publisher: str
+    catalog_id: str
+    class_id: str
+    status: CrawlCandidateStatus
+    soak_job_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "repo": self.repo,
+            "revision": self.revision,
+            "file_name": self.file_name,
+            "size_bytes": self.size_bytes,
+            "license": self.license,
+            "quant": self.quant,
+            "file_hash": self.file_hash,
+            "publisher": self.publisher,
+            "catalog_id": self.catalog_id,
+            "class_id": self.class_id,
+            "status": self.status.value,
+            "soak_job_id": self.soak_job_id,
+        }
+
+
+class CrawlRunResult(BaseModel):
+    crawled: int
+    stored: int
+    dropped_no_fit: int
+    queued: int
+    skipped_fresh: int
+    errors: list[str] = Field(default_factory=list)
 
 
 class ContractGrant(BaseModel):
