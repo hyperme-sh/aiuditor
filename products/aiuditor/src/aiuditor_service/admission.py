@@ -4,6 +4,9 @@ Weights never land on the plane. Quarantine/sandbox are job/state seams for a
 lab host inside the workload jail. Fail closed on unexpected files, license
 denials, size/hash mismatch, or any egress outside the overlay peer. LLM is
 never resolved_by.
+
+Allow promotes a Hypermesh catalog row for the intended class only (still
+uncertified). Deny stays a violation-style Admission record — not a lease.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException
 
+from aiuditor_service.admission_catalog import admission_catalog_id
 from aiuditor_service.approvals import _safe_text
 from aiuditor_service.credentials import credential_ref
 from aiuditor_service.domain.models import (
@@ -22,6 +26,7 @@ from aiuditor_service.domain.models import (
     AdmissionStatus,
     AdmissionVerdict,
 )
+from aiuditor_service.hypermesh import HostLookupUnavailable, PlaneHop
 from aiuditor_service.store import AdmissionStore
 
 FILE_HASH_REQUIRED = "file_hash is required"
@@ -37,6 +42,7 @@ SIZE_MISMATCH = "declared size does not match hash pin"
 FORMAT_DENIED = "format not allowed"
 EGRESS_DETECTED = "sandbox egress outside overlay peer"
 LLM_RESOLVER = "llm"
+PROMOTE_FAILED = "catalog promote failed"
 
 # Licenses we will run. Expand deliberately.
 LICENSE_ALLOWLIST: frozenset[str] = frozenset(
@@ -242,6 +248,11 @@ def resolve_admission(
     resolved_by: str,
     now: datetime | None = None,
 ) -> Admission:
+    """Named-human allow/deny. Deny is a violation-style record, not a lease.
+
+    Prefer ``resolve_admission_async`` when a plane hop can promote on allow.
+    """
+
     actor = (resolved_by or "").strip()
     if not actor or actor.lower() == LLM_RESOLVER:
         raise HTTPException(status_code=400, detail="resolved_by must be a named human")
@@ -266,4 +277,48 @@ def resolve_admission(
         }
     )
     store.put(updated)
+    return updated
+
+
+async def resolve_admission_async(
+    store: AdmissionStore,
+    tenant_id: uuid.UUID,
+    admission_id: uuid.UUID,
+    body: AdmissionResolve,
+    *,
+    resolved_by: str,
+    plane: PlaneHop | None = None,
+    now: datetime | None = None,
+) -> Admission:
+    """Allow promotes a Hypermesh catalog row for that class; deny does not."""
+
+    updated = resolve_admission(
+        store,
+        tenant_id,
+        admission_id,
+        body,
+        resolved_by=resolved_by,
+        now=now,
+    )
+    if updated.verdict is not AdmissionVerdict.ALLOW:
+        # Deny stays the Admission DENIED / policy-deny style record.
+        return updated
+    if plane is None:
+        return updated
+    catalog_id = admission_catalog_id(
+        intended_class=updated.intended_class, file_hash=updated.file_hash
+    )
+    try:
+        await plane.promote_catalog(
+            tenant_id,
+            catalog_id=catalog_id,
+            class_id=updated.intended_class,
+            artifact_name=catalog_id,
+            file_hash=updated.file_hash,
+            format=updated.format,
+            quant=updated.quant,
+            admission_id=updated.id,
+        )
+    except HostLookupUnavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or PROMOTE_FAILED) from exc
     return updated

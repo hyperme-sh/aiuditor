@@ -17,6 +17,7 @@ from aiuditor_service.admission import (
     ADMISSION_NOT_FOUND,
     advance_admission,
     resolve_admission,
+    resolve_admission_async,
     submit_admission,
 )
 from aiuditor_service.approvals import _safe_text
@@ -63,6 +64,7 @@ __all__ = [
     "put_envelope",
     "put_suite_member",
     "resolve_admission",
+    "resolve_admission_async",
     "seed_core_suite",
     "submit_admission",
 ]

@@ -112,6 +112,7 @@ from aiuditor_service.program import (
     put_envelope,
     put_suite_member,
     resolve_admission,
+    resolve_admission_async,
     seed_core_suite,
     submit_admission,
 )
@@ -1066,12 +1067,14 @@ async def verdict_admission(
 ) -> Admission:
     require_grant_write(role_from_request(request))
     tenant_id = require_auditor_actor(request)
-    row = resolve_admission(
+    plane = getattr(request.app.state, "plane_hop", None)
+    row = await resolve_admission_async(
         _admissions(request),
         tenant_id,
         admission_id,
         body,
         resolved_by=resolver_subject(request) or str(tenant_id),
+        plane=plane,
     )
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
