@@ -1,6 +1,6 @@
 """AIuditor persist session. A bounce must not lose grant rows.
 
-SQLAlchemy + Alembic + tenant_id + RLS live in controlplane-db (revision 0025).
+SQLAlchemy + Alembic + tenant_id + RLS live in controlplane-db (0025 + 0029).
 Tests use MemoryPersistSession so they run without Postgres. Production hydrates
 from SQL when DATABASE_URL is a real server. Prompt bodies, HMAC tickets, and
 sibling TURN/oracle/payment rows stay off these tables.
@@ -15,12 +15,15 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from aiuditor_service.domain.models import (
+    Admission,
     Approval,
     ApprovalPolicy,
     CatalogService,
+    ClassEnvelope,
     Connection,
     Contract,
     ContractViolation,
+    SuiteMember,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,9 @@ TABLES = (
     "contracts",
     "violations",
     "catalog",
+    "envelopes",
+    "suite_members",
+    "admissions",
 )
 
 _DOMAIN = {
@@ -47,6 +53,9 @@ _DOMAIN = {
     "contracts": Contract,
     "violations": ContractViolation,
     "catalog": CatalogService,
+    "envelopes": ClassEnvelope,
+    "suite_members": SuiteMember,
+    "admissions": Admission,
 }
 
 _BANNED = ("credential", "prompt", "ticket", "messages", "hmac")
@@ -126,6 +135,45 @@ _ALLOWED = {
         "meters",
         "created_at",
     },
+    "envelopes": {
+        "id",
+        "tenant_id",
+        "class_id",
+        "catalog_id",
+        "file_hash",
+        "quant",
+        "runtime",
+        "context",
+        "fit",
+        "decode_tok_s",
+        "thermal_c",
+        "created_at",
+        "updated_at",
+    },
+    "suite_members": {
+        "id",
+        "tenant_id",
+        "class_id",
+        "catalog_id",
+        "pack_id",
+        "created_at",
+    },
+    "admissions": {
+        "id",
+        "tenant_id",
+        "file_hash",
+        "format",
+        "quant",
+        "license",
+        "intended_class",
+        "credential_ref",
+        "status",
+        "verdict",
+        "reason",
+        "resolved_by",
+        "created_at",
+        "resolved_at",
+    },
 }
 
 
@@ -164,7 +212,19 @@ def sql_row(table: str, payload: dict[str, Any]) -> dict[str, Any]:
         data["meters"] = list(data.get("meters") or [])
     if table == "catalog":
         data["meters"] = list(data.get("meters") or [])
-    for key in ("kind", "purpose", "status", "why", "decision", "disposition", "rail", "backend", "action"):
+    for key in (
+        "kind",
+        "purpose",
+        "status",
+        "why",
+        "decision",
+        "disposition",
+        "rail",
+        "backend",
+        "action",
+        "verdict",
+        "format",
+    ):
         if key in data and data[key] is not None:
             data[key] = _plain(data[key])
     allowed = _ALLOWED[table]
@@ -222,6 +282,9 @@ def apply_snapshot(stores: Any, rows: dict[str, Any]) -> None:
         ("contracts", "contract_store"),
         ("violations", "violation_store"),
         ("catalog", "catalog_store"),
+        ("envelopes", "envelope_store"),
+        ("suite_members", "suite_store"),
+        ("admissions", "admission_store"),
     )
     for table, attr in mapping:
         store = getattr(stores, attr, None)
@@ -238,11 +301,14 @@ def apply_snapshot(stores: Any, rows: dict[str, Any]) -> None:
 
 def _sql_models():
     from controlplane_db.models import (
+        AiuditorAdmission,
         AiuditorApproval,
         AiuditorCatalog,
         AiuditorConnection,
         AiuditorContract,
+        AiuditorEnvelope,
         AiuditorPolicy,
+        AiuditorSuiteMember,
         AiuditorViolation,
     )
 
@@ -253,6 +319,9 @@ def _sql_models():
         "contracts": AiuditorContract,
         "violations": AiuditorViolation,
         "catalog": AiuditorCatalog,
+        "envelopes": AiuditorEnvelope,
+        "suite_members": AiuditorSuiteMember,
+        "admissions": AiuditorAdmission,
     }
 
 

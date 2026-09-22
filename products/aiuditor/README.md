@@ -2,7 +2,7 @@
 
 Enterprise grant plane on the existing Panopticon control plane. Copied from [`products/template/`](../template/) the way [`hypermesh/`](../hypermesh/) and [`tennessee-windage/`](../tennessee-windage/) were.
 
-**AIuditor** is connections, later contracts and approvals. **Hypermesh** stays classes, devices, host certs, and payout. The **AIuditor door** stays [`products/hypermesh-gateway/`](../hypermesh-gateway/). Site inbox stays `/api/v1/auditor` on hypermesh-service. Do not merge AImmune. Do not put this on hyperme.sh. Do not fork Keycloak or Stripe.
+**AIuditor** is connections, contracts, approvals, and the **model cert program** (class envelopes, core cert suite, admission verdicts). **Hypermesh** stays the measurement and lease store: classes, devices, scorecards, catalog stamps (`certified` / `tokens_per_sec`), and payout. The **AIuditor door** stays [`products/hypermesh-gateway/`](../hypermesh-gateway/). Site inbox stays `/api/v1/auditor` on hypermesh-service. Do not merge AImmune. Do not put this on hyperme.sh. Do not fork Keycloak or Stripe.
 
 Edge prefix: `/api/v1/aiuditor`. Wire prefix of the door (`hm_gw_`) is unchanged.
 
@@ -13,6 +13,9 @@ Edge prefix: `/api/v1/aiuditor`. Wire prefix of the door (`hm_gw_`) is unchanged
 | Connection | `kind` host\|provider, `purpose` lease\|auditor, `device_id` or HTTPS `endpoint`, `credential_ref` (hash), `status` |
 | Host assign | `kind=host` looks up the enrolled Hypermesh device (`HYPERMESH_SERVICE_URL`). Stores `device_id` only. Device secret and the standing WG peer stay on Hypermesh / the door. Unset URL fail-closes. |
 | Use | `POST …/connections/{id}/assign` binds a purpose=lease host to a Hypermesh renter/service lease. `POST …/ticket` mints a purpose=ir ticket on a purpose=auditor host. `POST …/classify` is an AIuditor-owned HTTPS hop on a purpose=auditor provider (hash-only credential; optional one-shot `X-Provider-Authorization`). |
+| Class envelope | `POST/GET /api/v1/aiuditor/envelopes` — one row per artifact per `class_id` (file hash, quant, runtime, context, fit, `decode_tok_s`, thermal). Written from lab soaks. Hypermesh still stamps the catalog row from a green scorecard. |
+| Core cert suite | `POST/GET /api/v1/aiuditor/suite` (and `POST …/suite/seed`) — which catalog/pack ids form the compact host cert. Seed starts from `pack-v1` / `llama-3.1-8b-q4` for `agx-large` and `nx-volume`. Compact-cert jobs live on Hypermesh. |
+| Admission | `POST/GET /api/v1/aiuditor/admissions`, `POST …/admissions/{id}/verdict` — allow/deny for uploaded-model admission. Quarantine/sandbox are stubs that fail closed (row stays `pending` until a named verdict). Full HF crawl is out of scope. |
 | Router | `GET/POST /api/v1/aiuditor/connections`, `GET /api/v1/aiuditor/connections/{id}` |
 | Desk | Connections registry and violations desk on `/dashboard/aiuditor`. Not hyperme.sh. |
 | Approval inbox | `POST/GET /api/v1/aiuditor/approvals`, `POST …/approvals/{id}/resolve` — hold an AI-use ask until a named human allow-once / allow-session / deny. Timeout is deny. Not `/api/v1/auditor`. LLM is never `resolved_by`. |
@@ -20,11 +23,20 @@ Edge prefix: `/api/v1/aiuditor`. Wire prefix of the door (`hm_gw_`) is unchanged
 | Event | `aiuditor.connection.created.v1` on `controlplane.events.v1`. Lock fields only. No raw credential. |
 | Export | `GET /api/v1/aiuditor/export` — contracts, violations, approvals. No prompt bodies. Derived copy, not the SoT. |
 
-Alembic 0025 `aiuditor_*` tables with tenant RLS on the shared `controlplane` Postgres. Production hydrates and writes through `SqlPersistSession` (RLS GUC per put) and fail-closes if `DATABASE_URL` is missing, dummy, or unreachable. Tests keep `MemoryPersistSession` (`enable_db_middleware=False`).
+Alembic `0025` / `0029` `aiuditor_*` tables with tenant RLS on the shared `controlplane` Postgres. Production hydrates and writes through `SqlPersistSession` (RLS GUC per put) and fail-closes if `DATABASE_URL` is missing, dummy, or unreachable. Tests keep `MemoryPersistSession` (`enable_db_middleware=False`).
 
-`AIUDITOR_ROLE` is `global` (Azure marketplace SoT), `operator` (private plane), or `witness` (host/door package). Same image. Witness fail-closes on fulfill, sign, bind, allocate, and ticket mint. `GET /meta` advertises `writer` (`market` / `private` / `none`). Hypermesh checkout GETs that before fulfill and refuses a non-market writer unless `AIUDITOR_REQUIRED_WRITER` is `private` or `any`. Witness `POST /hydrate/pull` copies a tenant snapshot from `AIUDITOR_PARENT_URL`. A host sidecar also pulls on a timer (`AIUDITOR_HYDRATE_TENANT_ID`, `AIUDITOR_HYDRATE_EVERY`). Witness binds `127.0.0.1` and uses memory persist unless `DATABASE_URL` is set. Handoff (spine D) is not this path. Package: [`deploy/witness/`](deploy/witness/). Do not put this on hyperme.sh.
+`AIUDITOR_ROLE` is `global` (Azure marketplace SoT), `operator` (private plane), or `witness` (host/door package). Same image. Witness fail-closes on fulfill, sign, bind, allocate, ticket mint, and program writes (`require_grant_write`). `GET /meta` advertises `writer` (`market` / `private` / `none`). Hypermesh checkout GETs that before fulfill and refuses a non-market writer unless `AIUDITOR_REQUIRED_WRITER` is `private` or `any`. Witness `POST /hydrate/pull` copies a tenant snapshot from `AIUDITOR_PARENT_URL` (connections, policies, contracts, violations, approvals, catalog, **envelopes**, **suite members**, **admissions**). A host sidecar also pulls on a timer (`AIUDITOR_HYDRATE_TENANT_ID`, `AIUDITOR_HYDRATE_EVERY`). Witness binds `127.0.0.1` and uses memory persist unless `DATABASE_URL` is set. Handoff (spine D) is not this path. Package: [`deploy/witness/`](deploy/witness/). Do not put this on hyperme.sh.
 
-Not in this product: Hypermesh classes, devices, certs, leases, catalog. Not a second door. Not a second IdP.
+## Boundary with Hypermesh
+
+| Fact | Owner |
+|------|--------|
+| What gets measured (class envelopes, core suite, admission allow/deny) | **AIuditor** |
+| Timed samples, scorecards, Path B, catalog `certified` / `tokens_per_sec`, leases | **Hypermesh** |
+| Compact-cert job execution on enrolled hosts | **Hypermesh** (reads suite membership from AIuditor / witness hydrate) |
+| Workload jail / WG-only lease publish | **hypermesh-host** |
+
+AIuditor does **not** own Path B or scorecards. The lease catalog remains Hypermesh. The program that decides what gets measured and which pack proves a box still matches its class lives here.
 
 ## Run locally
 

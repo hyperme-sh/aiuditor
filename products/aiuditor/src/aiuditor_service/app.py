@@ -84,6 +84,9 @@ def create_app(
         app.state.contract_store = stores.contract_store
         app.state.violation_store = stores.violation_store
         app.state.catalog_store = stores.catalog_store
+        app.state.envelope_store = stores.envelope_store
+        app.state.suite_store = stores.suite_store
+        app.state.admission_store = stores.admission_store
         logger.info(
             "AIuditor persist backend: %s role=%s writer=%s",
             type(persist).__name__,
@@ -164,9 +167,11 @@ def create_app(
         title="AIuditor",
         description=(
             "Enterprise grant plane: connections, approval inbox, org policy, "
-            "spine §D contracts, and a service catalog. "
-            "Edge prefix /api/v1/aiuditor. Does not absorb Hypermesh classes, devices, "
-            "or certs. Site inbox stays /api/v1/auditor. The door stays hypermesh-gateway."
+            "spine §D contracts, service catalog, and the model cert program "
+            "(class envelopes, core suite, admission). "
+            "Edge prefix /api/v1/aiuditor. Hypermesh stays measurement, leases, "
+            "and catalog stamps. Site inbox stays /api/v1/auditor. "
+            "The door stays hypermesh-gateway."
         ),
         version="0.1.0",
     )

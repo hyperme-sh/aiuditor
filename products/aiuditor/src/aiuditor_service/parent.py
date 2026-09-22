@@ -164,6 +164,13 @@ def build_hydrate(
         violations=[_row_dump(row) for row in stores.violation_store.list_for(tenant_id)],
         approvals=[_row_dump(row) for row in stores.approval_store.list_for(tenant_id)],
         catalog=[_row_dump(row) for row in stores.catalog_store.list_for(tenant_id)],
+        envelopes=[_row_dump(row) for row in stores.envelope_store.list_for(tenant_id)],
+        suite_members=[
+            _row_dump(row) for row in stores.suite_store.list_for(tenant_id)
+        ],
+        admissions=[
+            _row_dump(row) for row in stores.admission_store.list_for(tenant_id)
+        ],
     )
     _reject_bodies(payload.model_dump(mode="json"))
     return payload
@@ -179,6 +186,9 @@ def stores_from_app(app) -> StoreBundle:
         contract_store=app.state.contract_store,
         violation_store=app.state.violation_store,
         catalog_store=app.state.catalog_store,
+        envelope_store=app.state.envelope_store,
+        suite_store=app.state.suite_store,
+        admission_store=app.state.admission_store,
     )
 
 
@@ -228,6 +238,9 @@ def apply_hydrate(stores: StoreBundle, snapshot: HydrateSnapshot) -> HydrateSnap
         ("violations", snapshot.violations, stores.violation_store),
         ("approvals", snapshot.approvals, stores.approval_store),
         ("catalog", snapshot.catalog, stores.catalog_store),
+        ("envelopes", snapshot.envelopes, stores.envelope_store),
+        ("suite_members", snapshot.suite_members, stores.suite_store),
+        ("admissions", snapshot.admissions, stores.admission_store),
     )
     for table, rows, store in mapping:
         for payload in rows:

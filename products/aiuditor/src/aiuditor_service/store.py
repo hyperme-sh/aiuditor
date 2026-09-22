@@ -11,14 +11,17 @@ import uuid
 from dataclasses import dataclass, field
 
 from aiuditor_service.domain.models import (
+    Admission,
     Approval,
     ApprovalPolicy,
     CatalogService,
+    ClassEnvelope,
     Connection,
     ConnectionKind,
     ConnectionPurpose,
     Contract,
     ContractViolation,
+    SuiteMember,
 )
 from aiuditor_service.persist import (
     MemoryPersistSession,
@@ -282,6 +285,127 @@ class CatalogStore:
 
 
 @dataclass
+class EnvelopeStore:
+    envelopes: dict[uuid.UUID, dict[uuid.UUID, ClassEnvelope]] = field(
+        default_factory=dict
+    )
+    persist: PersistSession = field(default_factory=MemoryPersistSession)
+    _hydrating: bool = False
+
+    def for_tenant(self, tenant_id: uuid.UUID) -> dict[uuid.UUID, ClassEnvelope]:
+        bucket = self.envelopes.setdefault(tenant_id, {})
+        _reload(bucket, self.persist, "envelopes", tenant_id, hydrating=self._hydrating)
+        return bucket
+
+    def list_for(
+        self, tenant_id: uuid.UUID, *, class_id: str | None = None
+    ) -> list[ClassEnvelope]:
+        rows = list(self.for_tenant(tenant_id).values())
+        if class_id is not None:
+            rows = [row for row in rows if row.class_id == class_id]
+        rows.sort(key=lambda row: (row.class_id, row.catalog_id, row.created_at))
+        return rows
+
+    def get(self, tenant_id: uuid.UUID, envelope_id: uuid.UUID) -> ClassEnvelope | None:
+        return self.for_tenant(tenant_id).get(envelope_id)
+
+    def for_class_catalog(
+        self, tenant_id: uuid.UUID, class_id: str, catalog_id: str
+    ) -> ClassEnvelope | None:
+        for row in self.for_tenant(tenant_id).values():
+            if row.class_id == class_id and row.catalog_id == catalog_id:
+                return row
+        return None
+
+    def put(self, row: ClassEnvelope) -> ClassEnvelope:
+        _write(self.persist, "envelopes", row, hydrating=self._hydrating)
+        self.envelopes.setdefault(row.tenant_id, {})[row.id] = row
+        return row
+
+
+@dataclass
+class SuiteStore:
+    members: dict[uuid.UUID, dict[uuid.UUID, SuiteMember]] = field(default_factory=dict)
+    persist: PersistSession = field(default_factory=MemoryPersistSession)
+    _hydrating: bool = False
+
+    def for_tenant(self, tenant_id: uuid.UUID) -> dict[uuid.UUID, SuiteMember]:
+        bucket = self.members.setdefault(tenant_id, {})
+        _reload(
+            bucket, self.persist, "suite_members", tenant_id, hydrating=self._hydrating
+        )
+        return bucket
+
+    def list_for(
+        self, tenant_id: uuid.UUID, *, class_id: str | None = None
+    ) -> list[SuiteMember]:
+        rows = list(self.for_tenant(tenant_id).values())
+        if class_id is not None:
+            rows = [row for row in rows if row.class_id == class_id]
+        rows.sort(key=lambda row: (row.class_id, row.catalog_id, row.created_at))
+        return rows
+
+    def get(self, tenant_id: uuid.UUID, member_id: uuid.UUID) -> SuiteMember | None:
+        return self.for_tenant(tenant_id).get(member_id)
+
+    def for_class_catalog(
+        self, tenant_id: uuid.UUID, class_id: str, catalog_id: str
+    ) -> SuiteMember | None:
+        for row in self.for_tenant(tenant_id).values():
+            if row.class_id == class_id and row.catalog_id == catalog_id:
+                return row
+        return None
+
+    def put(self, row: SuiteMember) -> SuiteMember:
+        _write(self.persist, "suite_members", row, hydrating=self._hydrating)
+        self.members.setdefault(row.tenant_id, {})[row.id] = row
+        return row
+
+    def delete(self, tenant_id: uuid.UUID, member_id: uuid.UUID) -> SuiteMember | None:
+        row = self.for_tenant(tenant_id).pop(member_id, None)
+        if row is not None and not self._hydrating:
+            self.persist.delete("suite_members", tenant_id, member_id)
+        return row
+
+
+@dataclass
+class AdmissionStore:
+    admissions: dict[uuid.UUID, dict[uuid.UUID, Admission]] = field(
+        default_factory=dict
+    )
+    persist: PersistSession = field(default_factory=MemoryPersistSession)
+    _hydrating: bool = False
+
+    def for_tenant(self, tenant_id: uuid.UUID) -> dict[uuid.UUID, Admission]:
+        bucket = self.admissions.setdefault(tenant_id, {})
+        _reload(bucket, self.persist, "admissions", tenant_id, hydrating=self._hydrating)
+        return bucket
+
+    def list_for(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        status: str | None = None,
+        intended_class: str | None = None,
+    ) -> list[Admission]:
+        rows = list(self.for_tenant(tenant_id).values())
+        if status:
+            rows = [row for row in rows if row.status.value == status]
+        if intended_class is not None:
+            rows = [row for row in rows if row.intended_class == intended_class]
+        rows.sort(key=lambda row: row.created_at)
+        return rows
+
+    def get(self, tenant_id: uuid.UUID, admission_id: uuid.UUID) -> Admission | None:
+        return self.for_tenant(tenant_id).get(admission_id)
+
+    def put(self, row: Admission) -> Admission:
+        _write(self.persist, "admissions", row, hydrating=self._hydrating)
+        self.admissions.setdefault(row.tenant_id, {})[row.id] = row
+        return row
+
+
+@dataclass
 class StoreBundle:
     persist: PersistSession
     connection_store: ConnectionStore
@@ -290,6 +414,9 @@ class StoreBundle:
     contract_store: ContractStore
     violation_store: ViolationStore
     catalog_store: CatalogStore
+    envelope_store: EnvelopeStore
+    suite_store: SuiteStore
+    admission_store: AdmissionStore
 
 
 def new_stores(persist: PersistSession | None = None) -> StoreBundle:
@@ -302,6 +429,9 @@ def new_stores(persist: PersistSession | None = None) -> StoreBundle:
         contract_store=ContractStore(persist=session),
         violation_store=ViolationStore(persist=session),
         catalog_store=CatalogStore(persist=session),
+        envelope_store=EnvelopeStore(persist=session),
+        suite_store=SuiteStore(persist=session),
+        admission_store=AdmissionStore(persist=session),
     )
     session.hydrate(bundle)
     return bundle

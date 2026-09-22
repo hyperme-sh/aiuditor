@@ -1,6 +1,7 @@
 """AIuditor HTTP API under /api/v1/aiuditor.
 
-Domain: connections. Classes, devices, and certs stay on Hypermesh.
+Domain: connections and the model cert program (envelopes, suite, admissions).
+Path B, scorecards, and catalog stamps stay on Hypermesh.
 Site inbox stays /api/v1/auditor. The door stays products/hypermesh-gateway.
 """
 
@@ -40,6 +41,9 @@ from aiuditor_service.contracts import (
     sign_contract,
 )
 from aiuditor_service.domain.models import (
+    Admission,
+    AdmissionCreate,
+    AdmissionResolve,
     Approval,
     ApprovalCreate,
     ApprovalPolicy,
@@ -47,6 +51,8 @@ from aiuditor_service.domain.models import (
     ApprovalResolve,
     AiuditorMeta,
     AuditorGrant,
+    ClassEnvelope,
+    ClassEnvelopeCreate,
     Connection,
     ConnectionAssign,
     ConnectionClassify,
@@ -69,10 +75,14 @@ from aiuditor_service.domain.models import (
     GrantExport,
     HydrateSnapshot,
     ServiceCreate,
+    SuiteMember,
+    SuiteMemberCreate,
 )
 from aiuditor_service.export import build_grant_export
 from aiuditor_service.persist import MemoryPersistSession
 from aiuditor_service.events import (
+    ADMISSION_RESOLVED_V1,
+    ADMISSION_SUBMITTED_V1,
     APPROVAL_HELD_V1,
     APPROVAL_RESOLVED_V1,
     CONNECTION_ASSIGNED_V1,
@@ -84,12 +94,24 @@ from aiuditor_service.events import (
     CONTRACT_VIOLATED_V1,
     CATALOG_SERVICE_CREATED_V1,
     CATALOG_SERVICE_ALLOCATED_V1,
+    ENVELOPE_RECORDED_V1,
     POLICY_CREATED_V1,
     POLICY_DELETED_V1,
+    SUITE_MEMBER_RECORDED_V1,
 )
 from aiuditor_service.policies import (
     POLICY_NOT_FOUND,
     put_policy,
+)
+from aiuditor_service.program import (
+    ADMISSION_NOT_FOUND,
+    ENVELOPE_NOT_FOUND,
+    SUITE_MEMBER_NOT_FOUND,
+    put_envelope,
+    put_suite_member,
+    resolve_admission,
+    seed_core_suite,
+    submit_admission,
 )
 from aiuditor_service.hypermesh import (
     HOST_LOOKUP_FAILED,
@@ -114,12 +136,15 @@ from aiuditor_service.role import (
     writer_for,
 )
 from aiuditor_service.store import (
+    AdmissionStore,
     ApprovalStore,
     CatalogStore,
     ConnectionStore,
     ContractStore,
+    EnvelopeStore,
     PolicyStore,
     StoreBundle,
+    SuiteStore,
     ViolationStore,
 )
 from aiuditor_service.tenant import require_auditor_actor, require_tenant_id
@@ -209,6 +234,30 @@ def _catalog(request: Request) -> CatalogStore:
     return store
 
 
+def _envelopes(request: Request) -> EnvelopeStore:
+    store = getattr(request.app.state, "envelope_store", None)
+    if store is None:
+        store = EnvelopeStore()
+        request.app.state.envelope_store = store
+    return store
+
+
+def _suite(request: Request) -> SuiteStore:
+    store = getattr(request.app.state, "suite_store", None)
+    if store is None:
+        store = SuiteStore()
+        request.app.state.suite_store = store
+    return store
+
+
+def _admissions(request: Request) -> AdmissionStore:
+    store = getattr(request.app.state, "admission_store", None)
+    if store is None:
+        store = AdmissionStore()
+        request.app.state.admission_store = store
+    return store
+
+
 def _stores(request: Request) -> StoreBundle:
     persist = getattr(request.app.state, "aiuditor_persist", None)
     return StoreBundle(
@@ -219,6 +268,9 @@ def _stores(request: Request) -> StoreBundle:
         contract_store=_contracts(request),
         violation_store=_violations(request),
         catalog_store=_catalog(request),
+        envelope_store=_envelopes(request),
+        suite_store=_suite(request),
+        admission_store=_admissions(request),
     )
 
 
@@ -843,6 +895,178 @@ async def allocate_catalog_service(
         payload=allocation.to_event_payload(),
     )
     return allocation
+
+
+@router.post(
+    "/envelopes",
+    response_model=ClassEnvelope,
+    status_code=status.HTTP_201_CREATED,
+    summary="Record a lab class envelope. Not a Hypermesh scorecard stamp.",
+)
+async def record_envelope(
+    request: Request, body: ClassEnvelopeCreate
+) -> ClassEnvelope:
+    require_grant_write(role_from_request(request))
+    # Plane hop (Hypermesh lab soak) uses X-Internal-Token; operators use bound JWT.
+    tenant_id = require_hold_actor(request)
+    row = put_envelope(_envelopes(request), tenant_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=ENVELOPE_RECORDED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.get(
+    "/envelopes",
+    response_model=list[ClassEnvelope],
+    summary="Class envelopes for a tenant. Filter by class_id.",
+)
+async def list_envelopes(
+    request: Request,
+    class_id: str | None = Query(default=None),
+) -> list[ClassEnvelope]:
+    tenant_id = require_hold_actor(request)
+    return _envelopes(request).list_for(tenant_id, class_id=class_id)
+
+
+@router.get("/envelopes/{envelope_id}", response_model=ClassEnvelope)
+async def get_envelope(request: Request, envelope_id: uuid.UUID) -> ClassEnvelope:
+    tenant_id = require_hold_actor(request)
+    row = _envelopes(request).get(tenant_id, envelope_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=ENVELOPE_NOT_FOUND)
+    return row
+
+
+@router.post(
+    "/suite",
+    response_model=SuiteMember,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add a catalog/pack id to the compact host cert suite.",
+)
+async def record_suite_member(
+    request: Request, body: SuiteMemberCreate
+) -> SuiteMember:
+    require_grant_write(role_from_request(request))
+    tenant_id = require_auditor_actor(request)
+    row = put_suite_member(_suite(request), tenant_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=SUITE_MEMBER_RECORDED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.post(
+    "/suite/seed",
+    response_model=list[SuiteMember],
+    status_code=status.HTTP_201_CREATED,
+    summary="Seed pack-v1 / llama-3.1-8b-q4 for agx-large and nx-volume.",
+)
+async def seed_suite(request: Request) -> list[SuiteMember]:
+    require_grant_write(role_from_request(request))
+    tenant_id = require_auditor_actor(request)
+    rows = seed_core_suite(_suite(request), tenant_id)
+    for row in rows:
+        await get_tenant_event_publisher().publish(
+            tenant_id=tenant_id,
+            event_type=SUITE_MEMBER_RECORDED_V1,
+            payload=row.to_event_payload(),
+        )
+    return rows
+
+
+@router.get(
+    "/suite",
+    response_model=list[SuiteMember],
+    summary="Core cert suite membership. Compact-cert jobs read this list.",
+)
+async def list_suite_members(
+    request: Request,
+    class_id: str | None = Query(default=None),
+) -> list[SuiteMember]:
+    tenant_id = require_hold_actor(request)
+    return _suite(request).list_for(tenant_id, class_id=class_id)
+
+
+@router.get("/suite/{member_id}", response_model=SuiteMember)
+async def get_suite_member(request: Request, member_id: uuid.UUID) -> SuiteMember:
+    tenant_id = require_hold_actor(request)
+    row = _suite(request).get(tenant_id, member_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=SUITE_MEMBER_NOT_FOUND)
+    return row
+
+
+@router.post(
+    "/admissions",
+    response_model=Admission,
+    status_code=status.HTTP_201_CREATED,
+    summary="Submit an uploaded model. Stays pending until a named verdict.",
+)
+async def create_admission(request: Request, body: AdmissionCreate) -> Admission:
+    require_grant_write(role_from_request(request))
+    tenant_id = require_auditor_actor(request)
+    row = submit_admission(_admissions(request), tenant_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=ADMISSION_SUBMITTED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.get(
+    "/admissions",
+    response_model=list[Admission],
+    summary="Uploaded-model admissions. Filter by status or intended_class.",
+)
+async def list_admissions(
+    request: Request,
+    status_filter: str | None = Query(default=None, alias="status"),
+    intended_class: str | None = Query(default=None),
+) -> list[Admission]:
+    tenant_id = require_hold_actor(request)
+    return _admissions(request).list_for(
+        tenant_id, status=status_filter, intended_class=intended_class
+    )
+
+
+@router.get("/admissions/{admission_id}", response_model=Admission)
+async def get_admission(request: Request, admission_id: uuid.UUID) -> Admission:
+    tenant_id = require_hold_actor(request)
+    row = _admissions(request).get(tenant_id, admission_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
+    return row
+
+
+@router.post(
+    "/admissions/{admission_id}/verdict",
+    response_model=Admission,
+    summary="Allow or deny an upload. Quarantine/sandbox stubs fail closed.",
+)
+async def verdict_admission(
+    request: Request, admission_id: uuid.UUID, body: AdmissionResolve
+) -> Admission:
+    require_grant_write(role_from_request(request))
+    tenant_id = require_auditor_actor(request)
+    row = resolve_admission(
+        _admissions(request),
+        tenant_id,
+        admission_id,
+        body,
+        resolved_by=resolver_subject(request),
+    )
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id,
+        event_type=ADMISSION_RESOLVED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
 
 
 @router.get(

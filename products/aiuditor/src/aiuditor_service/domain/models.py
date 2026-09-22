@@ -1,8 +1,8 @@
-"""Connection registry. Kind host|provider, purpose lease|auditor.
+"""Connection registry and model cert program.
 
-Classes, devices, and host certs stay on Hypermesh. This row is an assignment
-reference: a Hypermesh device_id or a provider HTTPS endpoint. Credential is
-write-only; only the hash is stored.
+Classes, devices, Path B, and scorecards stay on Hypermesh. This product
+owns connections plus class envelopes, core suite membership, and
+uploaded-model admission verdicts.
 """
 
 from __future__ import annotations
@@ -396,6 +396,156 @@ class HydrateSnapshot(BaseModel):
     violations: list[dict[str, object]]
     approvals: list[dict[str, object]]
     catalog: list[dict[str, object]]
+    envelopes: list[dict[str, object]] = Field(default_factory=list)
+    suite_members: list[dict[str, object]] = Field(default_factory=list)
+    admissions: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ClassEnvelopeCreate(BaseModel):
+    """Lab-soak measurement for one artifact on one hardware class.
+
+    Written from a lab host of that class. Hypermesh still stamps the catalog
+    row; this is the program envelope a witness hydrates.
+    """
+
+    class_id: str = Field(..., min_length=1, max_length=64)
+    catalog_id: str = Field(..., min_length=1, max_length=64)
+    file_hash: str = Field(..., min_length=1, max_length=256)
+    quant: str | None = Field(default=None, max_length=32)
+    runtime: str = Field(..., min_length=1, max_length=64)
+    context: int | None = Field(default=None, ge=0, le=1_000_000)
+    fit: bool = True
+    decode_tok_s: float | None = Field(default=None, ge=0)
+    thermal_c: float | None = None
+
+
+class ClassEnvelope(BaseModel):
+    """One row per artifact per class_id. Not a Hypermesh scorecard."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    class_id: str
+    catalog_id: str
+    file_hash: str
+    quant: str | None = None
+    runtime: str
+    context: int | None = None
+    fit: bool
+    decode_tok_s: float | None = None
+    thermal_c: float | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "class_id": self.class_id,
+            "catalog_id": self.catalog_id,
+            "file_hash": self.file_hash,
+            "quant": self.quant,
+            "runtime": self.runtime,
+            "context": self.context,
+            "fit": self.fit,
+            "decode_tok_s": self.decode_tok_s,
+            "thermal_c": self.thermal_c,
+        }
+
+
+class SuiteMemberCreate(BaseModel):
+    """Catalog/pack id that forms the compact host cert for a class."""
+
+    class_id: str = Field(..., min_length=1, max_length=64)
+    catalog_id: str = Field(..., min_length=1, max_length=64)
+    pack_id: str = Field(default="pack-v1", min_length=1, max_length=64)
+
+
+class SuiteMember(BaseModel):
+    """Core cert suite membership. Compact-cert jobs read this list."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    class_id: str
+    catalog_id: str
+    pack_id: str
+    created_at: datetime
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "class_id": self.class_id,
+            "catalog_id": self.catalog_id,
+            "pack_id": self.pack_id,
+        }
+
+
+class AdmissionStatus(StrEnum):
+    PENDING = "pending"
+    ALLOWED = "allowed"
+    DENIED = "denied"
+
+
+class AdmissionVerdict(StrEnum):
+    ALLOW = "allow"
+    DENY = "deny"
+
+
+class AdmissionCreate(BaseModel):
+    """Uploaded-model submit. Credential is write-only; only the hash is stored.
+
+    Quarantine and sandbox are stubs in this cut: the row stays pending until
+    a named verdict. Fail closed — never auto-allow.
+    """
+
+    file_hash: str = Field(..., min_length=1, max_length=256)
+    format: str = Field(..., min_length=1, max_length=32)
+    quant: str | None = Field(default=None, max_length=32)
+    license: str = Field(..., min_length=1, max_length=64)
+    intended_class: str = Field(..., min_length=1, max_length=64)
+    credential: str | None = Field(default=None, min_length=1, max_length=4096)
+
+
+class AdmissionResolve(BaseModel):
+    """Allow or deny an uploaded artifact. LLM is never the resolver."""
+
+    verdict: AdmissionVerdict
+    reason: str | None = Field(default=None, max_length=120)
+
+
+class Admission(BaseModel):
+    """Uploaded-model admission row. Deny is a policy record, not a lease."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    file_hash: str
+    format: str
+    quant: str | None = None
+    license: str
+    intended_class: str
+    credential_ref: str | None = None
+    status: AdmissionStatus
+    verdict: AdmissionVerdict | None = None
+    reason: str | None = None
+    resolved_by: str | None = None
+    created_at: datetime
+    resolved_at: datetime | None = None
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "file_hash": self.file_hash,
+            "format": self.format,
+            "quant": self.quant,
+            "license": self.license,
+            "intended_class": self.intended_class,
+            "credential_ref": self.credential_ref,
+            "status": self.status.value,
+            "verdict": self.verdict.value if self.verdict else None,
+            "reason": self.reason,
+            "resolved_by": self.resolved_by,
+        }
 
 
 class ContractGrant(BaseModel):
