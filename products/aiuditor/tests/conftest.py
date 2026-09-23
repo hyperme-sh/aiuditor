@@ -105,17 +105,21 @@ def tenant_session_headers(
     tenant_id: uuid.UUID,
     *,
     sub: str = DEFAULT_SUB,
+    permissions: list[str] | None = None,
 ) -> dict[str, str]:
     from api.infrastructure.security.tenant_session_jwt import mint_tenant_session_jwt
 
+    claims: dict[str, object] = {
+        "sub": sub,
+        "email": "operator@example.com",
+        "realm_access": {"roles": ["ir"]},
+        "groups": ["ir"],
+        "scope": "openid",
+    }
+    if permissions:
+        claims["permissions"] = permissions
     token = mint_tenant_session_jwt(
-        claims={
-            "sub": sub,
-            "email": "operator@example.com",
-            "realm_access": {"roles": ["ir"]},
-            "groups": ["ir"],
-            "scope": "openid",
-        },
+        claims=claims,
         tenant_id=tenant_id,
         extra_roles=["ir"],
     )

@@ -249,6 +249,36 @@ def _envelopes(request: Request) -> EnvelopeStore:
     return store
 
 
+def _require_operator_program(request: Request) -> None:
+    """Suite membership edits require operator:program on a human session.
+
+    purpose=service automation may still seed. Support and purpose=ir cannot.
+    """
+
+    from aiuditor_service.tenant import bearer_secret
+    from api.domain.operator.claims import permissions_from_claims, program_may_edit_suite
+    from api.infrastructure.security.api_key_exchange_jwt import (
+        try_decode_api_key_session_jwt,
+    )
+    from api.infrastructure.security.tenant_session_jwt import (
+        try_decode_tenant_session_jwt,
+    )
+
+    secret = bearer_secret(request)
+    if not secret:
+        raise HTTPException(status_code=403, detail="operator:program required")
+    session = try_decode_tenant_session_jwt(secret)
+    if session is not None:
+        if not program_may_edit_suite(permissions_from_claims(session)):
+            raise HTTPException(status_code=403, detail="operator:program required")
+        return
+    exchange = try_decode_api_key_session_jwt(secret)
+    purpose = str((exchange or {}).get("purpose") or "").strip().lower()
+    if purpose == "service":
+        return
+    raise HTTPException(status_code=403, detail="operator:program required")
+
+
 def _suite(request: Request) -> SuiteStore:
     store = getattr(request.app.state, "suite_store", None)
     if store is None:
@@ -966,6 +996,7 @@ async def record_suite_member(
     request: Request, body: SuiteMemberCreate
 ) -> SuiteMember:
     require_grant_write(role_from_request(request))
+    _require_operator_program(request)
     tenant_id = require_auditor_actor(request)
     row = put_suite_member(_suite(request), tenant_id, body)
     await get_tenant_event_publisher().publish(
@@ -984,6 +1015,7 @@ async def record_suite_member(
 )
 async def seed_suite(request: Request) -> list[SuiteMember]:
     require_grant_write(role_from_request(request))
+    _require_operator_program(request)
     tenant_id = require_auditor_actor(request)
     rows = seed_core_suite(_suite(request), tenant_id)
     for row in rows:

@@ -22,6 +22,7 @@ from aiuditor_service.events import (
     ENVELOPE_RECORDED_V1,
     SUITE_MEMBER_RECORDED_V1,
 )
+from conftest import tenant_session_headers
 from aiuditor_service.program import (
     ADMISSION_ALREADY_RESOLVED,
     CATALOG_LLAMA_8B,
@@ -35,6 +36,14 @@ from aiuditor_service.program import (
 )
 from aiuditor_service.role import WITNESS_CANNOT_WRITE_GRANT, AiuditorRole
 from aiuditor_service.store import AdmissionStore, EnvelopeStore, SuiteStore
+
+
+@pytest.fixture
+def tenant_headers(tenant_a):
+    return tenant_session_headers(
+        tenant_a,
+        permissions=["operator:console", "operator:program"],
+    )
 
 
 def test_envelope_upserts_per_class_and_catalog():
