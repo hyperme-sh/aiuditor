@@ -40,8 +40,11 @@ from aiuditor_service.contracts import (
     require_signed_grant,
     sign_contract,
 )
+from aiuditor_service.allowed import allowed_host_set
 from aiuditor_service.domain.models import (
     Admission,
+    AllowedHost,
+    AllowedSet,
     AdmissionCreate,
     AdmissionResolve,
     AdmissionSandboxReport,
@@ -371,6 +374,33 @@ async def pull_hydrate(request: Request) -> HydrateSnapshot:
 async def list_connections(request: Request) -> list[Connection]:
     tenant_id = require_tenant_id(request)
     return _store(request).list_for(tenant_id)
+
+
+@router.get(
+    "/allowed",
+    response_model=AllowedSet,
+    summary="Hosts this tenant may lease",
+    description=(
+        "Every purpose=lease host connection that is not disabled. "
+        "Does not allocate, does not open a Hypermesh lease, and does not "
+        "replace POST /catalog/{service_id}/allocate (that call still binds one host)."
+    ),
+)
+async def list_allowed(request: Request) -> AllowedSet:
+    tenant_id = require_tenant_id(request)
+    hosts: list[AllowedHost] = []
+    for row in allowed_host_set(_store(request).list_for(tenant_id)):
+        if row.device_id is None:
+            continue
+        hosts.append(
+            AllowedHost(
+                connection_id=row.id,
+                device_id=row.device_id,
+                status=row.status,
+                lease_id=row.lease_id,
+            )
+        )
+    return AllowedSet(hosts=hosts)
 
 
 def _forward_headers(request: Request) -> dict[str, str]:
