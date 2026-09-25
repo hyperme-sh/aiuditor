@@ -352,3 +352,90 @@ async def test_http_plane_offers_lease_without_keeping_ticket(monkeypatch):
     assert captured["json"]["class_id"] == "agx-large"
     assert captured["json"]["contract_id"] == str(contract_id)
     assert captured["headers"]["Authorization"] == "Bearer session"
+
+
+def _capturing_post_client(captured: dict[str, object]):
+    class _Resp:
+        status_code = 201
+
+        def json(self):
+            return {"ok": True, "certified": False}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return _Resp()
+
+    return _Client
+
+
+@pytest.mark.asyncio
+async def test_lab_soak_and_promote_send_internal_token(monkeypatch):
+    monkeypatch.setenv("HYPERMESH_INTERNAL_TOKEN", "test-hypermesh-internal-token")
+    hop = HttpPlaneHop("http://hm.example")
+    admission_id = uuid.uuid4()
+
+    soak_captured: dict[str, object] = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _capturing_post_client(soak_captured))
+    await hop.queue_lab_soak(
+        TENANT,
+        class_id="agx-large",
+        catalog_id="hf-lab-soak",
+        artifact_name="Lab soak",
+        file_hash="sha256:abc",
+    )
+    assert soak_captured["url"] == "http://hm.example/api/v1/hypermesh/lab/soaks"
+    soak_headers = soak_captured["headers"]
+    assert soak_headers["X-Internal-Token"] == "test-hypermesh-internal-token"
+    assert soak_headers["X-Tenant-ID"] == str(TENANT)
+    assert "Authorization" not in soak_headers
+
+    promote_captured: dict[str, object] = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _capturing_post_client(promote_captured))
+    await hop.promote_catalog(
+        TENANT,
+        catalog_id="upload-route-check",
+        class_id="agx-large",
+        artifact_name="Promoted",
+        file_hash="sha256:" + ("ab" * 32),
+        admission_id=admission_id,
+    )
+    assert promote_captured["url"] == "http://hm.example/api/v1/hypermesh/catalog/promote"
+    promote_headers = promote_captured["headers"]
+    assert promote_headers["X-Internal-Token"] == "test-hypermesh-internal-token"
+    assert promote_headers["X-Tenant-ID"] == str(TENANT)
+    assert "Authorization" not in promote_headers
+
+
+@pytest.mark.asyncio
+async def test_lab_soak_and_promote_omit_token_when_unset(monkeypatch):
+    monkeypatch.delenv("HYPERMESH_INTERNAL_TOKEN", raising=False)
+    hop = HttpPlaneHop("http://hm.example")
+
+    soak_captured: dict[str, object] = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _capturing_post_client(soak_captured))
+    await hop.queue_lab_soak(TENANT, class_id="agx-large", catalog_id="hf-lab-soak")
+    assert "X-Internal-Token" not in soak_captured["headers"]
+
+    promote_captured: dict[str, object] = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _capturing_post_client(promote_captured))
+    await hop.promote_catalog(
+        TENANT,
+        catalog_id="upload-route-check",
+        class_id="agx-large",
+        artifact_name="Promoted",
+        file_hash="sha256:" + ("ab" * 32),
+        admission_id=uuid.uuid4(),
+    )
+    assert "X-Internal-Token" not in promote_captured["headers"]

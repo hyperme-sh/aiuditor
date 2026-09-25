@@ -566,11 +566,15 @@ class HttpPlaneHop:
             payload["source_ref"] = source_ref
         if admission_id is not None:
             payload["admission_id"] = str(admission_id)
+        hop = self._hop(tenant_id, headers)
+        token = (os.environ.get("HYPERMESH_INTERNAL_TOKEN") or "").strip()
+        if token:
+            hop["X-Internal-Token"] = token
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(
                     f"{self._base}/api/v1/hypermesh/lab/soaks",
-                    headers=self._hop(tenant_id, headers),
+                    headers=hop,
                     json=payload,
                 )
         except httpx.HTTPError as exc:
@@ -613,11 +617,15 @@ class HttpPlaneHop:
             payload["quant"] = quant
         if runtime:
             payload["runtime"] = runtime
+        hop = self._hop(tenant_id, headers)
+        token = (os.environ.get("HYPERMESH_INTERNAL_TOKEN") or "").strip()
+        if token:
+            hop["X-Internal-Token"] = token
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(
                     f"{self._base}/api/v1/hypermesh/catalog/promote",
-                    headers=self._hop(tenant_id, headers),
+                    headers=hop,
                     json=payload,
                 )
         except httpx.HTTPError as exc:
