@@ -98,6 +98,21 @@ class Connection(BaseModel):
         }
 
 
+class AllowedHost(BaseModel):
+    """One host AIuditor grants for a lease. Not an allocation."""
+
+    connection_id: uuid.UUID
+    device_id: uuid.UUID
+    status: ConnectionStatus
+    lease_id: uuid.UUID | None = None
+
+
+class AllowedSet(BaseModel):
+    """Every lease host this tenant may use. allocate still picks one."""
+
+    hosts: list[AllowedHost]
+
+
 class ConnectionAssign(BaseModel):
     """Bind a purpose=lease host row to an existing Hypermesh renter lease."""
 
