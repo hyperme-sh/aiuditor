@@ -26,7 +26,11 @@ def _repos_from_env() -> tuple[str, ...]:
 
 
 async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> None:
-    """Re-crawl daily when AIUDITOR_CRAWL_TENANT_ID is set on the global writer."""
+    """Re-crawl daily on the global or operator writer. Witness returns immediately.
+
+    The tenant is AIUDITOR_CRAWL_TENANT_ID, or the marketplace tenant the
+    hypermesh seed already uses when that variable is unset.
+    """
 
     role = getattr(app.state, "aiuditor_role", None)
     tenant_id = resolve_crawl_tenant()

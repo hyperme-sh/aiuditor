@@ -272,10 +272,15 @@ def resolve_crawl_every_s() -> float:
         return 86400.0
 
 
+# Same UUID as hypermesh_service.seed.MARKETPLACE_TENANT_ID. The test and
+# local writers crawl that tenant. Do not invent another one.
+MARKETPLACE_TENANT_ID = uuid.UUID("8f8e8d8c-7b6a-4a59-8c3d-2e1f0a9b8c7d")
+
+
 def resolve_crawl_tenant() -> uuid.UUID | None:
     raw = (os.environ.get("AIUDITOR_CRAWL_TENANT_ID") or "").strip()
     if not raw:
-        return None
+        return MARKETPLACE_TENANT_ID
     try:
         return uuid.UUID(raw)
     except ValueError:
