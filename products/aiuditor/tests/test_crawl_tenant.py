@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import uuid
 from pathlib import Path
@@ -80,3 +81,41 @@ async def test_witness_does_not_crawl(monkeypatch: pytest.MonkeyPatch) -> None:
     stop = asyncio.Event()
     await run_crawl_loop(_app(AiuditorRole.WITNESS), stop=stop)
     assert called == []
+
+
+@pytest.mark.asyncio
+async def test_intake_loop_logs_bounded_crawl_errors(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    stop = asyncio.Event()
+    errors = tuple(
+        [f"artifact-{i}: HTTP 409: no ready lab host for class" for i in range(10)]
+        + [
+            "hidden: Bearer super-secret-token",
+            "hidden: Authorization token=abc",
+        ]
+    )
+
+    async def fake_intake(**kwargs):
+        del kwargs
+        stop.set()
+        return IntakeReport(12, 0, 0, 0, 0, errors=errors)
+
+    monkeypatch.setattr("aiuditor_service.intake_loop.run_intake", fake_intake)
+    monkeypatch.delenv("AIUDITOR_CRAWL_TENANT_ID", raising=False)
+    with caplog.at_level(logging.WARNING, logger="aiuditor_service.intake_loop"):
+        await run_crawl_loop(_app(AiuditorRole.GLOBAL), stop=stop)
+    matched = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("aiuditor crawl errors")
+    ]
+    assert len(matched) == 1
+    text = matched[0]
+    assert "count=12" in text
+    assert "rest=2" in text
+    assert "HTTP 409: no ready lab host for class" in text
+    assert "artifact-0" in text
+    assert "artifact-9" in text
+    assert "Bearer" not in text
+    assert "super-secret-token" not in text

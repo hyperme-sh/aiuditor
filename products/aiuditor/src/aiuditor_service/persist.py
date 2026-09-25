@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -30,6 +32,10 @@ from aiuditor_service.domain.models import (
 logger = logging.getLogger(__name__)
 
 PERSIST_UNAVAILABLE = "AIuditor persist requires a real DATABASE_URL"
+
+# Task-local session so one candidate's writes share a transaction without
+# leaking into another request that awaits on the same process.
+_SCOPE: ContextVar[Any] = ContextVar("aiuditor_persist_scope", default=None)
 
 
 class PersistUnavailable(RuntimeError):
@@ -261,6 +267,8 @@ class PersistSession(Protocol):
 
     def upsert(self, table: str, tenant_id: uuid.UUID, key: object, payload: dict[str, Any]) -> None: ...
 
+    def candidate_scope(self): ...
+
     def delete(self, table: str, tenant_id: uuid.UUID, key: object) -> None: ...
 
     def snapshot(self) -> dict[str, Any]: ...
@@ -286,6 +294,12 @@ class MemoryPersistSession:
         for banned in _BANNED:
             body.pop(banned, None)
         bucket[str(key)] = body
+
+    @contextmanager
+    def candidate_scope(self):
+        """In-memory writes have no SQL transaction. The crawl still isolates errors."""
+
+        yield
 
     def delete(self, table: str, tenant_id: uuid.UUID, key: object) -> None:
         bucket = self.rows.setdefault(table, {}).setdefault(str(tenant_id), {})
@@ -421,20 +435,48 @@ class SqlPersistSession:
                         payload = {c.key: getattr(row, c.key) for c in row.__table__.columns}
                         memory.upsert(table, row.tenant_id, row.id, payload)
 
-    def upsert(self, table: str, tenant_id: uuid.UUID, key: object, payload: dict[str, Any]) -> None:
+    @contextmanager
+    def candidate_scope(self):
+        """One transaction per crawl candidate. Each upsert is a savepoint.
+
+        Do not share this session across tasks. The context var is task-local.
+        A failed savepoint rolls back that write; the caller rolls the
+        candidate back and the next candidate opens a new transaction.
+        """
+
+        with self._session_factory() as session:
+            token = _SCOPE.set(session)
+            try:
+                yield
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                _SCOPE.reset(token)
+
+    def _apply(self, session, model, tenant_id: uuid.UUID, row_data: dict[str, Any]) -> None:
         from sqlalchemy import text
 
-        model = _sql_models()[table]
-        body = dict(payload)
-        body.setdefault("tenant_id", tenant_id)
-        body.setdefault("id", key)
-        row_data = sql_row(table, body)
-        with self._session_factory() as session:
+        with session.begin_nested():
             session.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, true)"),
                 {"tid": str(tenant_id)},
             )
             session.merge(model(**row_data))
+
+    def upsert(self, table: str, tenant_id: uuid.UUID, key: object, payload: dict[str, Any]) -> None:
+        model = _sql_models()[table]
+        body = dict(payload)
+        body.setdefault("tenant_id", tenant_id)
+        body.setdefault("id", key)
+        row_data = sql_row(table, body)
+        scoped = _SCOPE.get()
+        if scoped is not None:
+            self._apply(scoped, model, tenant_id, row_data)
+            return
+        with self._session_factory() as session:
+            self._apply(session, model, tenant_id, row_data)
             session.commit()
 
     def load_rows(self, table: str, tenant_id: uuid.UUID) -> dict[str, dict[str, Any]]:

@@ -53,6 +53,17 @@ class IntakeReport:
     errors: tuple[str, ...] = ()
 
 
+def _error_text(exc: BaseException) -> str:
+    """Operator-facing failure. HTTP status stays; headers and tokens do not."""
+
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        detail = getattr(exc, "detail", None)
+        text = detail if detail is not None else exc
+        return f"HTTP {status}: {text}"
+    return str(exc)
+
+
 def _now(clock: datetime | None) -> datetime:
     stamp = clock if clock is not None else datetime.now(UTC)
     if stamp.tzinfo is None:
@@ -133,6 +144,116 @@ def upsert_candidate(
     return row
 
 
+async def _consume_artifact(
+    *,
+    tenant_id: uuid.UUID,
+    meta: ArtifactMeta,
+    candidates: CandidateStore,
+    envelopes: EnvelopeStore,
+    lab_hop: LabSoakHop | None,
+    soak_classes: tuple[str, ...],
+    runtime: str,
+    retention: timedelta,
+    clock: datetime,
+):
+    """Yield counter events for one artifact. Puts stay on the caller's transaction."""
+
+    fits = classes_that_fit(meta.size_bytes, class_ids=soak_classes)
+    if not fits:
+        yield "dropped", None
+        drop_class = soak_classes[0]
+        existing = candidates.for_source(
+            tenant_id, meta.repo, meta.revision, meta.file_name, drop_class
+        )
+        if existing is None:
+            candidates.put(
+                CrawlCandidate(
+                    id=uuid.uuid4(),
+                    tenant_id=tenant_id,
+                    repo=meta.repo[:256],
+                    revision=meta.revision[:128],
+                    file_name=meta.file_name[:256],
+                    size_bytes=meta.size_bytes,
+                    license=meta.license,
+                    quant=meta.quant,
+                    file_hash=meta.file_hash,
+                    publisher=meta.publisher[:64],
+                    catalog_id=meta.catalog_id,
+                    class_id=drop_class,
+                    status=CrawlCandidateStatus.DROPPED,
+                    soak_job_id=None,
+                    created_at=clock,
+                    updated_at=clock,
+                )
+            )
+            yield "stored", None
+        else:
+            candidates.put(
+                existing.model_copy(
+                    update={
+                        "status": CrawlCandidateStatus.DROPPED,
+                        "size_bytes": meta.size_bytes,
+                        "updated_at": clock,
+                    }
+                )
+            )
+        return
+
+    for class_id in fits:
+        row = upsert_candidate(
+            candidates, tenant_id, meta, class_id=class_id, now=clock
+        )
+        yield "stored", None
+        envelope = envelopes.for_class_catalog(tenant_id, class_id, row.catalog_id)
+        if not needs_resoaking(
+            envelope,
+            file_hash=row.file_hash,
+            quant=row.quant,
+            runtime=runtime,
+            now=clock,
+            retention=retention,
+        ):
+            yield "skipped", None
+            candidates.put(
+                row.model_copy(
+                    update={
+                        "status": CrawlCandidateStatus.SKIPPED,
+                        "updated_at": clock,
+                    }
+                )
+            )
+            continue
+        if lab_hop is None:
+            yield "error", f"no lab hop for {row.catalog_id}/{class_id}"
+            continue
+        try:
+            queued_body = await lab_hop.queue_lab_soak(
+                tenant_id,
+                class_id=class_id,
+                catalog_id=row.catalog_id,
+                artifact_name=meta.file_name,
+                file_hash=row.file_hash,
+                quant=row.quant,
+                runtime=runtime,
+                source_ref=meta.source_ref,
+                enqueue_pull=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — this class fails; other classes continue
+            yield "error", f"{row.catalog_id}/{class_id}: {_error_text(exc)}"
+            continue
+        soak_id = queued_body.get("soak_job_id")
+        candidates.put(
+            row.model_copy(
+                update={
+                    "status": CrawlCandidateStatus.QUEUED,
+                    "soak_job_id": str(soak_id) if soak_id else None,
+                    "updated_at": clock,
+                }
+            )
+        )
+        yield "queued", None
+
+
 async def run_intake(
     *,
     tenant_id: uuid.UUID,
@@ -155,102 +276,32 @@ async def run_intake(
     soak_classes = class_ids or ("agx-large", "nx-volume")
 
     for meta in artifacts:
-        fits = classes_that_fit(meta.size_bytes, class_ids=soak_classes)
-        if not fits:
-            dropped += 1
-            # Record one dropped row against the first soak class for audit.
-            drop_class = soak_classes[0]
-            existing = candidates.for_source(
-                tenant_id, meta.repo, meta.revision, meta.file_name, drop_class
-            )
-            clock_row = clock
-            if existing is None:
-                candidates.put(
-                    CrawlCandidate(
-                        id=uuid.uuid4(),
-                        tenant_id=tenant_id,
-                        repo=meta.repo[:256],
-                        revision=meta.revision[:128],
-                        file_name=meta.file_name[:256],
-                        size_bytes=meta.size_bytes,
-                        license=meta.license,
-                        quant=meta.quant,
-                        file_hash=meta.file_hash,
-                        publisher=meta.publisher[:64],
-                        catalog_id=meta.catalog_id,
-                        class_id=drop_class,
-                        status=CrawlCandidateStatus.DROPPED,
-                        soak_job_id=None,
-                        created_at=clock_row,
-                        updated_at=clock_row,
-                    )
-                )
-                stored += 1
-            else:
-                candidates.put(
-                    existing.model_copy(
-                        update={
-                            "status": CrawlCandidateStatus.DROPPED,
-                            "size_bytes": meta.size_bytes,
-                            "updated_at": clock_row,
-                        }
-                    )
-                )
-            continue
-
-        for class_id in fits:
-            row = upsert_candidate(
-                candidates, tenant_id, meta, class_id=class_id, now=clock
-            )
-            stored += 1
-            envelope = envelopes.for_class_catalog(tenant_id, class_id, row.catalog_id)
-            if not needs_resoaking(
-                envelope,
-                file_hash=row.file_hash,
-                quant=row.quant,
-                runtime=runtime,
-                now=clock,
-                retention=retention,
-            ):
-                skipped += 1
-                candidates.put(
-                    row.model_copy(
-                        update={
-                            "status": CrawlCandidateStatus.SKIPPED,
-                            "updated_at": clock,
-                        }
-                    )
-                )
-                continue
-            if lab_hop is None:
-                errors.append(f"no lab hop for {row.catalog_id}/{class_id}")
-                continue
-            try:
-                queued_body = await lab_hop.queue_lab_soak(
-                    tenant_id,
-                    class_id=class_id,
-                    catalog_id=row.catalog_id,
-                    artifact_name=meta.file_name,
-                    file_hash=row.file_hash,
-                    quant=row.quant,
+        try:
+            with candidates.persist.candidate_scope():
+                _intake_one = _consume_artifact(
+                    tenant_id=tenant_id,
+                    meta=meta,
+                    candidates=candidates,
+                    envelopes=envelopes,
+                    lab_hop=lab_hop,
+                    soak_classes=soak_classes,
                     runtime=runtime,
-                    source_ref=meta.source_ref,
-                    enqueue_pull=True,
+                    retention=retention,
+                    clock=clock,
                 )
-            except Exception as exc:  # noqa: BLE001 — intake continues per artifact
-                errors.append(f"{row.catalog_id}/{class_id}: {exc}")
-                continue
-            soak_id = queued_body.get("soak_job_id")
-            candidates.put(
-                row.model_copy(
-                    update={
-                        "status": CrawlCandidateStatus.QUEUED,
-                        "soak_job_id": str(soak_id) if soak_id else None,
-                        "updated_at": clock,
-                    }
-                )
-            )
-            queued += 1
+                async for kind, payload in _intake_one:
+                    if kind == "dropped":
+                        dropped += 1
+                    elif kind == "stored":
+                        stored += 1
+                    elif kind == "skipped":
+                        skipped += 1
+                    elif kind == "queued":
+                        queued += 1
+                    elif kind == "error":
+                        errors.append(str(payload))
+        except Exception as exc:  # noqa: BLE001 — one candidate must not abort the crawl
+            errors.append(f"{meta.source_ref}: {_error_text(exc)}")
 
     return IntakeReport(
         crawled=len(artifacts),

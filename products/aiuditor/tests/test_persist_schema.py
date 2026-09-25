@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy import BigInteger
+
 from controlplane_db.models import (
     AiuditorCatalog,
     AiuditorCandidate,
@@ -40,6 +42,9 @@ def test_orm_tables_are_grant_store_not_siblings():
     assert "verdict" in AiuditorAdmission.__table__.c
     assert "size_bytes" in AiuditorAdmission.__table__.c
     assert "repo" in AiuditorCandidate.__table__.c
+    # GGUF metadata can exceed int4. The ORM bind has to be BIGINT.
+    assert type(AiuditorCandidate.__table__.c.size_bytes.type) is BigInteger
+    assert type(AiuditorAdmission.__table__.c.size_bytes.type) is BigInteger
 
 
 def test_contract_row_is_spine_d_only():

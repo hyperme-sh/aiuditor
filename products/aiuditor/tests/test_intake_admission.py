@@ -25,7 +25,7 @@ from aiuditor_service.domain.models import (
     ClassEnvelopeCreate,
 )
 from aiuditor_service.fit import classes_that_fit, fits_class
-from aiuditor_service.hypermesh import FakePlaneHop
+from aiuditor_service.hypermesh import FakePlaneHop, HostLookupUnavailable
 from aiuditor_service.intake import needs_resoaking, run_intake
 from aiuditor_service.program import put_envelope
 from aiuditor_service.store import AdmissionStore, CandidateStore, EnvelopeStore
@@ -120,8 +120,119 @@ async def test_intake_queues_fit_artifacts_and_drops_too_large():
     assert report.crawled == 2
     assert report.dropped_no_fit == 1
     assert report.queued >= 1
+    assert report.errors == ()
     assert hop.soaks
     assert all(s["class_id"] in {"agx-large", "nx-volume"} for s in hop.soaks)
+
+
+@pytest.mark.asyncio
+async def test_one_candidate_failure_does_not_abort_the_crawl():
+    tenant = uuid.uuid4()
+    store = CandidateStore()
+    real_put = store.put
+
+    def boom(row):
+        if row.repo.startswith("bad/"):
+            raise RuntimeError("integer out of range")
+        return real_put(row)
+
+    store.put = boom  # type: ignore[method-assign]
+    source = StaticMetadataSource(
+        [
+            ArtifactMeta(
+                repo="bad/overflow",
+                revision="main",
+                file_name="Huge.gguf",
+                size_bytes=11264441216,
+                license="llama3",
+                quant="Q4_K_M",
+                file_hash="sha256:" + ("33" * 32),
+                publisher="bartowski",
+            ),
+            ArtifactMeta(
+                repo="bartowski/Llama-3.1-8B-Instruct-GGUF",
+                revision="main",
+                file_name="Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+                size_bytes=int(4.5 * GIB),
+                license="llama3",
+                quant="Q4_K_M",
+                file_hash="sha256:" + ("44" * 32),
+                publisher="bartowski",
+            ),
+        ]
+    )
+    report = await run_intake(
+        tenant_id=tenant,
+        source=source,
+        candidates=store,
+        envelopes=EnvelopeStore(),
+        lab_hop=FakePlaneHop(),
+        class_ids=("agx-large",),
+    )
+    assert report.crawled == 2
+    assert report.queued == 1
+    assert len(report.errors) == 1
+    assert "bad/overflow@main/Huge.gguf" in report.errors[0]
+    assert "integer out of range" in report.errors[0]
+    stored = store.list_for(tenant)
+    assert len(stored) == 1
+    assert stored[0].repo == "bartowski/Llama-3.1-8B-Instruct-GGUF"
+
+
+class _StatusHop:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def queue_lab_soak(self, tenant_id, *, catalog_id: str, **kwargs):
+        del tenant_id, kwargs
+        self.calls.append(catalog_id)
+        if catalog_id.startswith("hf-bartowski-broken"):
+            raise HostLookupUnavailable("no ready lab host for class", status_code=409)
+        return {"soak_job_id": "job-ok"}
+
+
+@pytest.mark.asyncio
+async def test_lab_hop_http_error_is_recorded_and_the_crawl_continues():
+    tenant = uuid.uuid4()
+    hop = _StatusHop()
+    source = StaticMetadataSource(
+        [
+            ArtifactMeta(
+                repo="bartowski/broken",
+                revision="main",
+                file_name="broken.gguf",
+                size_bytes=int(4.5 * GIB),
+                license="llama3",
+                quant="Q4_K_M",
+                file_hash="sha256:" + ("55" * 32),
+                publisher="bartowski",
+            ),
+            ArtifactMeta(
+                repo="bartowski/ok",
+                revision="main",
+                file_name="ok.gguf",
+                size_bytes=int(4.5 * GIB),
+                license="llama3",
+                quant="Q4_K_M",
+                file_hash="sha256:" + ("66" * 32),
+                publisher="bartowski",
+            ),
+        ]
+    )
+    report = await run_intake(
+        tenant_id=tenant,
+        source=source,
+        candidates=CandidateStore(),
+        envelopes=EnvelopeStore(),
+        lab_hop=hop,
+        class_ids=("agx-large",),
+    )
+    assert report.crawled == 2
+    assert report.queued == 1
+    assert hop.calls == ["hf-bartowski-broken", "hf-bartowski-ok"]
+    assert report.errors == (
+        "hf-bartowski-broken/agx-large: HTTP 409: no ready lab host for class",
+    )
 
 
 def test_admission_static_gate_denies_bad_license_and_extra_files():

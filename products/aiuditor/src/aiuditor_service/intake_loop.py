@@ -17,6 +17,23 @@ from aiuditor_service.role import AiuditorRole
 
 logger = logging.getLogger(__name__)
 
+_MAX_LOGGED_ERRORS = 10
+
+
+def _log_crawl_errors(errors: tuple[str, ...]) -> None:
+    """Warning log of crawl failures. Bounded. No headers or tokens."""
+
+    if not errors:
+        return
+    shown = list(errors[:_MAX_LOGGED_ERRORS])
+    rest = len(errors) - len(shown)
+    logger.warning(
+        "aiuditor crawl errors count=%s rest=%s errors=%s",
+        len(errors),
+        rest,
+        shown,
+    )
+
 
 def _repos_from_env() -> tuple[str, ...]:
     raw = (os.environ.get("AIUDITOR_CRAWL_REPOS") or "").strip()
@@ -61,6 +78,7 @@ async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> No
                 report.dropped_no_fit,
                 report.skipped_fresh,
             )
+            _log_crawl_errors(report.errors)
         except Exception as exc:  # noqa: BLE001
             logger.warning("aiuditor crawl failed: %s", exc)
         try:

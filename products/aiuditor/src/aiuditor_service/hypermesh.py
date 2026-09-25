@@ -25,6 +25,11 @@ HOST_ROLE = "host"
 class HostLookupUnavailable(Exception):
     """Hypermesh is unset or the hop failed. Assignment fail-closes."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.detail = message
+
 
 @dataclass(frozen=True)
 class HostView:
@@ -571,7 +576,8 @@ class HttpPlaneHop:
         except httpx.HTTPError as exc:
             raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
         if response.status_code >= 400:
-            raise HostLookupUnavailable(_http_detail(response) or PLANE_HOP_FAILED)
+            detail = _http_detail(response) or PLANE_HOP_FAILED
+            raise HostLookupUnavailable(detail, status_code=response.status_code)
         try:
             body = response.json()
         except ValueError as exc:

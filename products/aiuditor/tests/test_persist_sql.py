@@ -17,9 +17,11 @@ from aiuditor_service.domain.models import (
     Contract,
     ContractParty,
     ContractStatus,
+    CrawlCandidate,
+    CrawlCandidateStatus,
 )
 from aiuditor_service.persist import SqlPersistSession, resolve_persist
-from aiuditor_service.store import new_stores
+from aiuditor_service.store import CandidateStore, new_stores
 
 pytestmark = pytest.mark.integration
 
@@ -121,3 +123,64 @@ def test_resolve_persist_pings_migrated_postgres(migrated_postgres: str) -> None
     persist = resolve_persist(True, migrated_postgres)
     assert isinstance(persist, SqlPersistSession)
     persist.ping()
+
+
+_OVERSIZE = 11_264_441_216
+
+
+def _candidate(tenant: uuid.UUID, *, file_name: str, size_bytes: int = _OVERSIZE) -> CrawlCandidate:
+    now = datetime.now(UTC)
+    return CrawlCandidate(
+        id=uuid.uuid4(),
+        tenant_id=tenant,
+        repo="bartowski/Llama-3.1-8B-Instruct-GGUF",
+        revision="main",
+        file_name=file_name,
+        size_bytes=size_bytes,
+        license="llama3",
+        quant="Q4_K_M",
+        file_hash="sha256:" + ("ab" * 32),
+        publisher="bartowski",
+        catalog_id="hf-llama-8b",
+        class_id="agx-large",
+        status=CrawlCandidateStatus.FIT,
+        soak_job_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def test_sql_persist_stores_size_bytes_above_integer_max(migrated_postgres: str) -> None:
+    tenant = uuid.uuid4()
+    _plant_tenant(migrated_postgres, tenant)
+    row = _candidate(tenant, file_name="Llama-3.1-8B-Instruct-Q4_K_M.gguf")
+    writer = CandidateStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    writer.put(row)
+
+    bounced = CandidateStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    restored = bounced.get(tenant, row.id)
+    assert restored is not None
+    assert restored.size_bytes == _OVERSIZE
+
+
+def test_failed_candidate_savepoint_does_not_drop_the_next_write(
+    migrated_postgres: str,
+) -> None:
+    tenant = uuid.uuid4()
+    _plant_tenant(migrated_postgres, tenant)
+    persist = SqlPersistSession.from_url(migrated_postgres)
+    missing_tenant = uuid.uuid4()
+    bad = _candidate(missing_tenant, file_name="bad.gguf")
+    good = _candidate(tenant, file_name="ok.gguf")
+
+    with persist.candidate_scope():
+        with pytest.raises(Exception):
+            persist.upsert("candidates", missing_tenant, bad.id, bad.model_dump())
+        persist.upsert("candidates", tenant, good.id, good.model_dump())
+
+    restored = CandidateStore(persist=SqlPersistSession.from_url(migrated_postgres)).get(
+        tenant, good.id
+    )
+    assert restored is not None
+    assert restored.size_bytes == _OVERSIZE
+    assert restored.file_name == "ok.gguf"
