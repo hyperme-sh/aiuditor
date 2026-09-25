@@ -455,10 +455,24 @@ class SqlPersistSession:
             finally:
                 _SCOPE.reset(token)
 
-    def _apply(self, session, model, tenant_id: uuid.UUID, row_data: dict[str, Any]) -> None:
+    def _apply(
+        self,
+        session,
+        model,
+        tenant_id: uuid.UUID,
+        row_data: dict[str, Any],
+        *,
+        savepoint: bool,
+    ) -> None:
+        from contextlib import nullcontext
+
         from sqlalchemy import text
 
-        with session.begin_nested():
+        # Inside a candidate transaction each write is a savepoint, so one
+        # bad upsert does not abort the session. A lone upsert is its own
+        # transaction and does not need a nested one.
+        ctx = session.begin_nested() if savepoint else nullcontext()
+        with ctx:
             session.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, true)"),
                 {"tid": str(tenant_id)},
@@ -473,10 +487,10 @@ class SqlPersistSession:
         row_data = sql_row(table, body)
         scoped = _SCOPE.get()
         if scoped is not None:
-            self._apply(scoped, model, tenant_id, row_data)
+            self._apply(scoped, model, tenant_id, row_data, savepoint=True)
             return
         with self._session_factory() as session:
-            self._apply(session, model, tenant_id, row_data)
+            self._apply(session, model, tenant_id, row_data, savepoint=False)
             session.commit()
 
     def load_rows(self, table: str, tenant_id: uuid.UUID) -> dict[str, dict[str, Any]]:
