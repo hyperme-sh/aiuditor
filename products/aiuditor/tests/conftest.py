@@ -63,7 +63,6 @@ def app(event_sink, host_lookup, plane_hop, provider_hop, monkeypatch):
         "database_url",
         "postgresql+asyncpg://x:x@localhost:1/x",
     )
-    monkeypatch.setattr(api_config.settings, "kafka_bootstrap_servers", None)
     monkeypatch.setattr(api_config.settings, "service_name", "aiuditor-service-test")
 
     from aiuditor_service.app import create_app
