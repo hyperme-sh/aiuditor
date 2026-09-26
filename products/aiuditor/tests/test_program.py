@@ -251,7 +251,6 @@ async def test_witness_cannot_write_program(
         "database_url",
         "postgresql+asyncpg://x:x@localhost:1/x",
     )
-    monkeypatch.setattr(api_config.settings, "kafka_bootstrap_servers", None)
     app = create_app(
         test_event_sink=event_sink,
         enable_db_middleware=False,

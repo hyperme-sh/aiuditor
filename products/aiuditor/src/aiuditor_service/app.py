@@ -12,16 +12,14 @@ from api.common.logging import configure_logging
 from api.common.utils import get_logger
 from api.core.config import settings
 from api.infrastructure.messaging.tenant_event_publisher import (
-    KafkaTenantEventPublisher,
-    NoOpTenantEventPublisher,
+    install_tenant_event_publisher,
     set_tenant_event_publisher,
+    shutdown_tenant_event_publisher,
 )
 from api.infrastructure.persistence.db_session import configure_session_maker
 from api.infrastructure.service_cors import add_optional_service_cors
 from api.interfaces.api_controllers.health_endpoint import router as health_router
 from controlplane_db.session import normalize_database_url
-from controlplane_events import AioKafkaEventProducer
-
 from aiuditor_service.hypermesh import (
     HostLookup,
     PlaneHop,
@@ -127,22 +125,8 @@ def create_app(
                     )
 
             set_tenant_event_publisher(_ListSink())
-        elif settings.kafka_bootstrap_servers:
-            kafka_producer = AioKafkaEventProducer(
-                settings.kafka_bootstrap_servers,
-                client_id=f"{svc_name}-events",
-            )
-            await kafka_producer.start()
-            set_tenant_event_publisher(
-                KafkaTenantEventPublisher(
-                    kafka_producer,
-                    settings.kafka_events_topic,
-                    svc_name,
-                )
-            )
-            app.state.kafka_producer = kafka_producer
         else:
-            set_tenant_event_publisher(NoOpTenantEventPublisher())
+            await install_tenant_event_publisher(service_name=svc_name)
 
         hydrate_stop = asyncio.Event()
         app.state.hydrate_stop = hydrate_stop
@@ -167,10 +151,7 @@ def create_app(
             await hydrate_task
         except asyncio.CancelledError:
             pass
-        set_tenant_event_publisher(None)
-        kp = getattr(app.state, "kafka_producer", None)
-        if kp is not None:
-            await kp.stop()
+        await shutdown_tenant_event_publisher()
         if engine is not None:
             await engine.dispose()
 
