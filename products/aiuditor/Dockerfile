@@ -13,7 +13,9 @@ LABEL com.fyberlabs.alembic-head="${ALEMBIC_HEAD}"
 COPY core/events ./core/events
 COPY core/lib/controlplane-core ./core/lib/controlplane-core
 COPY products/aiuditor ./products/aiuditor
-RUN uv sync --frozen --no-dev --package aiuditor-service
+ARG CONTROLPLANE_SERVICEBUS=0
+RUN uv sync --frozen --no-dev --package aiuditor-service \
+ && if [ "$CONTROLPLANE_SERVICEBUS" = "1" ]; then uv pip install --python /app/.venv 'azure-servicebus>=7.12.0'; fi
 ENV PYTHONPATH=/app/core/lib/controlplane-core/src:/app/core/lib/controlplane-db/src:/app/core/events/src:/app/products/aiuditor/src
 WORKDIR /app/products/aiuditor
 CMD ["uv", "run", "--project", "/app/products/aiuditor", "python", "-m", "aiuditor_service.main"]
