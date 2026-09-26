@@ -7,6 +7,9 @@ from aiuditor_service.role import resolve_role
 
 
 def main() -> None:
+    from api.infrastructure.metrics import start_metrics_server
+
+    start_metrics_server()
     from aiuditor_service.app import app
 
     role = resolve_role()

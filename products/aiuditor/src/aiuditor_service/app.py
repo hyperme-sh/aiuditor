@@ -224,6 +224,9 @@ def create_app(
     logger.info(
         "AIuditor: health + connections + inbox + policy + contracts + catalog + optional CORS"
     )
+    from api.infrastructure.metrics import install_http_metrics
+
+    install_http_metrics(app)
     return app
 
 
