@@ -394,12 +394,14 @@ async def test_lab_soak_and_promote_send_internal_token(monkeypatch):
         catalog_id="hf-lab-soak",
         artifact_name="Lab soak",
         file_hash="sha256:abc",
+        size_bytes=20 * 1024**3,
     )
     assert soak_captured["url"] == "http://hm.example/api/v1/hypermesh/lab/soaks"
     soak_headers = soak_captured["headers"]
     assert soak_headers["X-Internal-Token"] == "test-hypermesh-internal-token"
     assert soak_headers["X-Tenant-ID"] == str(TENANT)
     assert "Authorization" not in soak_headers
+    assert soak_captured["json"]["size_bytes"] == 20 * 1024**3
 
     promote_captured: dict[str, object] = {}
     monkeypatch.setattr(httpx, "AsyncClient", _capturing_post_client(promote_captured))

@@ -39,6 +39,7 @@ class LabSoakHop(Protocol):
         runtime: str | None = None,
         source_ref: str | None = None,
         enqueue_pull: bool = True,
+        size_bytes: int | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]: ...
 
@@ -237,6 +238,7 @@ async def _consume_artifact(
                 runtime=runtime,
                 source_ref=meta.source_ref,
                 enqueue_pull=True,
+                size_bytes=meta.size_bytes,
             )
         except Exception as exc:  # noqa: BLE001 — this class fails; other classes continue
             yield "error", f"{row.catalog_id}/{class_id}: {_error_text(exc)}"
