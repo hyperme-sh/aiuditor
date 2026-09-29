@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 import uuid
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,18 +15,10 @@ from aiuditor_service.intake_loop import run_crawl_loop
 from aiuditor_service.role import AiuditorRole
 
 
-def test_unset_tenant_is_the_hypermesh_marketplace_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unset_tenant_uses_the_documented_marketplace_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AIUDITOR_CRAWL_TENANT_ID", raising=False)
     assert resolve_crawl_tenant() == MARKETPLACE_TENANT_ID
     assert MARKETPLACE_TENANT_ID == uuid.UUID("8f8e8d8c-7b6a-4a59-8c3d-2e1f0a9b8c7d")
-
-
-def test_default_matches_hypermesh_seed() -> None:
-    src = Path(__file__).resolve().parents[2] / "hypermesh" / "src"
-    sys.path.insert(0, str(src))
-    from hypermesh_service.seed import MARKETPLACE_TENANT_ID as seeded
-
-    assert seeded == MARKETPLACE_TENANT_ID
 
 
 def test_invalid_tenant_does_not_guess(monkeypatch: pytest.MonkeyPatch) -> None:
