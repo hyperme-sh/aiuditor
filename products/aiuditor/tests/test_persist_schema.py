@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import BigInteger
 
-from controlplane_db.models import (
+from aiuditor_service.models import (
     AiuditorCatalog,
     AiuditorCandidate,
     AiuditorConnection,
@@ -10,7 +10,6 @@ from controlplane_db.models import (
     AiuditorEnvelope,
     AiuditorSuiteMember,
     AiuditorAdmission,
-    HypermeshLease,
 )
 
 
@@ -33,7 +32,6 @@ def test_orm_tables_are_grant_store_not_siblings():
         "aiuditor_admissions",
         "aiuditor_candidates",
     }
-    assert "contract_id" in HypermeshLease.__table__.c
     assert not any("turn" in name or "oracle" in name or "payment" in name for name in names)
     assert "prompt" not in AiuditorContract.__table__.c
     assert "ticket" not in AiuditorContract.__table__.c

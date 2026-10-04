@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from controlplane_db.models import AiuditorContract, AiuditorPolicy
+from aiuditor_service.models import AiuditorContract, AiuditorPolicy
 
 from aiuditor_service.domain.models import (
     ApprovalPolicy,
