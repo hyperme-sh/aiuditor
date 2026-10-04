@@ -3,6 +3,8 @@
 ## Ownership
 The aiuditor product implementation, its routes and tests. Use the package README for route, state, and OpenAPI details; do not infer another service owns this behavior.
 
+ORM models live in `aiuditor_service.models`. Tests must not import Hypermesh ORM internals; the logical contract reference is tracked by issue #299.
+
 ## Public interface
 Allowed shared imports and cross-package exceptions are defined in [`scripts/import_boundaries.json`](../../scripts/import_boundaries.json). No unrelated product may import this implementation. Event integration uses typed `controlplane_events` payloads on `controlplane.events.v1`; consult the package README and events module for publishers/consumers.
 The contract is exact-module based, not permission to import every descendant.

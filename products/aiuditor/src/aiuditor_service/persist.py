@@ -340,7 +340,7 @@ def apply_snapshot(stores: Any, rows: dict[str, Any]) -> None:
 
 
 def _sql_models():
-    from controlplane_db.models import (
+    from aiuditor_service.models import (
         AiuditorAdmission,
         AiuditorApproval,
         AiuditorCatalog,
