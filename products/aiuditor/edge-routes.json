@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "product": "aiuditor",
+  "edge_routes": [
+    {
+      "prefix": "/api/v1/aiuditor",
+      "service_id": "aiuditor",
+      "url_attr": "aiuditor_service_url"
+    }
+  ]
+}
