@@ -62,7 +62,7 @@ def _claims_tenant(claims: dict[str, Any]) -> uuid.UUID | None:
 
 def _bound_jwt_claims(secret: str) -> dict[str, Any] | None:
     try:
-        from api.infrastructure.security.tenant_session_jwt import (
+        from controlplane_identity.security.tenant_session_jwt import (
             try_decode_tenant_session_jwt,
         )
     except Exception:
@@ -72,7 +72,7 @@ def _bound_jwt_claims(secret: str) -> dict[str, Any] | None:
         if session is not None:
             return session
     try:
-        from api.infrastructure.security.api_key_exchange_jwt import (
+        from controlplane_identity.security.api_key_exchange_jwt import (
             try_decode_api_key_session_jwt,
         )
     except Exception:
@@ -125,7 +125,7 @@ def require_auditor_actor(request: Request) -> uuid.UUID:
     if secret is None:
         raise HTTPException(status_code=401, detail=AUDITOR_ACTOR_REQUIRED)
     try:
-        from api.infrastructure.security.tenant_session_jwt import (
+        from controlplane_identity.security.tenant_session_jwt import (
             try_decode_tenant_session_jwt,
         )
     except Exception:
@@ -135,7 +135,7 @@ def require_auditor_actor(request: Request) -> uuid.UUID:
         if session is not None:
             return tenant_id
     try:
-        from api.infrastructure.security.api_key_exchange_jwt import (
+        from controlplane_identity.security.api_key_exchange_jwt import (
             try_decode_api_key_session_jwt,
         )
     except Exception:

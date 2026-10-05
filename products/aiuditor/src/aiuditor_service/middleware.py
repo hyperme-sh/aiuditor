@@ -5,12 +5,12 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from api.infrastructure.persistence.db_session import (
+from controlplane_tenancy.db_session import (
     get_session_maker,
     reset_db_session,
     set_db_session,
 )
-from api.infrastructure.persistence.tenant_guc import set_current_tenant_id_guc
+from controlplane_tenancy.tenant_guc import set_current_tenant_id_guc
 
 from aiuditor_service.tenant import rls_tenant_id
 

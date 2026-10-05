@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, Request, status
 
-from api.common.internal_token import request_has_internal_token
+from controlplane_identity.internal_token import request_has_internal_token
 
 from aiuditor_service.domain.models import (
     Approval,
@@ -115,7 +115,7 @@ def resolver_subject(request: Request) -> str:
 
 def _actor_claims(secret: str) -> dict[str, object] | None:
     try:
-        from api.infrastructure.security.tenant_session_jwt import (
+        from controlplane_identity.security.tenant_session_jwt import (
             try_decode_tenant_session_jwt,
         )
     except Exception:
@@ -125,7 +125,7 @@ def _actor_claims(secret: str) -> dict[str, object] | None:
         if session is not None:
             return session
     try:
-        from api.infrastructure.security.api_key_exchange_jwt import (
+        from controlplane_identity.security.api_key_exchange_jwt import (
             try_decode_api_key_session_jwt,
         )
     except Exception:

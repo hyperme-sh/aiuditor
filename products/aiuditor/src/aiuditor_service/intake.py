@@ -325,9 +325,8 @@ def resolve_crawl_every_s() -> float:
         return 86400.0
 
 
-# Same UUID as hypermesh_service.seed.MARKETPLACE_TENANT_ID. The test and
-# local writers crawl that tenant. Do not invent another one.
-MARKETPLACE_TENANT_ID = uuid.UUID("8f8e8d8c-7b6a-4a59-8c3d-2e1f0a9b8c7d")
+# Default crawl tenant comes from the shared tenancy setting.
+from controlplane_tenancy.marketplace import MARKETPLACE_TENANT_ID
 
 
 def resolve_crawl_tenant() -> uuid.UUID | None:
