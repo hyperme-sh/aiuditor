@@ -28,4 +28,4 @@ ARG BUILT_AT=
 ENV GIT_SHA=${GIT_SHA}
 ENV BUILT_AT=${BUILT_AT}
 WORKDIR /app/products/aiuditor
-CMD ["uv", "run", "--project", "/app/products/aiuditor", "python", "-m", "aiuditor_service.main"]
+CMD ["/app/.venv/bin/python", "-m", "aiuditor_service.main"]
