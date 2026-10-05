@@ -8,6 +8,8 @@ version = "0.1.0"
 requires-python = ">=3.13"
 description = "AIuditor grant plane: connections, later contracts and approvals"
 dependencies = [
+    "controlplane-tenancy",
+    "controlplane-identity",
     "controlplane-core",
     "controlplane-db",
     "controlplane-events",
@@ -24,6 +26,8 @@ dev = [
 ]
 
 [tool.uv.sources]
+controlplane-tenancy = { workspace = true }
+controlplane-identity = { workspace = true }
 controlplane-core = { workspace = true }
 controlplane-db = { workspace = true }
 controlplane-events = { workspace = true }

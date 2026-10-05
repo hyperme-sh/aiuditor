@@ -16,7 +16,7 @@ from api.infrastructure.messaging.tenant_event_publisher import (
     set_tenant_event_publisher,
     shutdown_tenant_event_publisher,
 )
-from api.infrastructure.persistence.db_session import configure_session_maker
+from controlplane_tenancy.db_session import configure_session_maker
 from api.infrastructure.service_cors import add_optional_service_cors
 from api.interfaces.api_controllers.health_endpoint import router as health_router
 from api.interfaces.api_controllers.version_endpoint import router as version_router
