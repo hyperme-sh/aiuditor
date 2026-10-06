@@ -153,6 +153,7 @@ async def _consume_artifact(
     envelopes: EnvelopeStore,
     lab_hop: LabSoakHop | None,
     soak_classes: tuple[str, ...],
+    queue_benchmarks: bool,
     runtime: str,
     retention: timedelta,
     clock: datetime,
@@ -224,6 +225,8 @@ async def _consume_artifact(
                 )
             )
             continue
+        if not queue_benchmarks:
+            continue
         if lab_hop is None:
             yield "error", f"no lab hop for {row.catalog_id}/{class_id}"
             continue
@@ -264,6 +267,7 @@ async def run_intake(
     envelopes: EnvelopeStore,
     lab_hop: LabSoakHop | None,
     class_ids: tuple[str, ...] | None = None,
+    queue_benchmarks: bool = False,
     runtime: str = DEFAULT_RUNTIME,
     retention: timedelta = DEFAULT_RETENTION,
     now: datetime | None = None,
@@ -287,6 +291,7 @@ async def run_intake(
                     envelopes=envelopes,
                     lab_hop=lab_hop,
                     soak_classes=soak_classes,
+                    queue_benchmarks=queue_benchmarks,
                     runtime=runtime,
                     retention=retention,
                     clock=clock,

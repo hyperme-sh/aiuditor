@@ -102,3 +102,12 @@ when its earlier missing-reference lookup succeeded.
 `POST /api/v1/aiuditor/envelopes/initial` always applies this condition. Automatic
 onboarding uses this dedicated endpoint so an older AIuditor rejects the request
 instead of ignoring a new conditional header during a rolling deployment.
+
+### Demand-driven discovery
+
+Daily discovery and `/crawl/run` now store metadata candidates without queuing
+weight downloads or lab soaks. Branches are resolved to immutable commits before
+listing files. Actual downloads follow an accepted lease or explicit reviewed
+benchmark/qualification work, within the target host's cache quota. The low-level
+intake API requires `queue_benchmarks=True` for an explicit scheduling caller;
+a daily crawl does not opt in. See Hypermesh's `docs/model-cache.md`.

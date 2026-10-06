@@ -110,7 +110,7 @@ async def test_intake_queues_fit_artifacts_and_drops_too_large():
         ]
     )
     report = await run_intake(
-        tenant_id=tenant,
+        queue_benchmarks=True,        tenant_id=tenant,
         source=source,
         candidates=CandidateStore(),
         envelopes=EnvelopeStore(),
@@ -162,7 +162,7 @@ async def test_one_candidate_failure_does_not_abort_the_crawl():
         ]
     )
     report = await run_intake(
-        tenant_id=tenant,
+        queue_benchmarks=True,        tenant_id=tenant,
         source=source,
         candidates=store,
         envelopes=EnvelopeStore(),
@@ -220,7 +220,7 @@ async def test_lab_hop_http_error_is_recorded_and_the_crawl_continues():
         ]
     )
     report = await run_intake(
-        tenant_id=tenant,
+        queue_benchmarks=True,        tenant_id=tenant,
         source=source,
         candidates=CandidateStore(),
         envelopes=EnvelopeStore(),
