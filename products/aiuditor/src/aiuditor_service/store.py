@@ -318,6 +318,12 @@ class EnvelopeStore:
                 return row
         return None
 
+    def create_if_absent(self, row: ClassEnvelope) -> bool:
+        if not self.persist.create_envelope(dump_for_persist(row)):
+            return False
+        self.envelopes.setdefault(row.tenant_id, {})[row.id] = row
+        return True
+
     def put(self, row: ClassEnvelope) -> ClassEnvelope:
         _write(self.persist, "envelopes", row, hydrating=self._hydrating)
         self.envelopes.setdefault(row.tenant_id, {})[row.id] = row

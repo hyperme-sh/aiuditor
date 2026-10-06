@@ -973,6 +973,7 @@ async def allocate_catalog_service(
     return allocation
 
 
+@router.post("/envelopes/initial", response_model=ClassEnvelope, status_code=status.HTTP_201_CREATED)
 @router.post(
     "/envelopes",
     response_model=ClassEnvelope,
@@ -985,7 +986,10 @@ async def record_envelope(
     require_grant_write(role_from_request(request))
     # Plane hop (Hypermesh lab soak) uses X-Internal-Token; operators use bound JWT.
     tenant_id = require_hold_actor(request)
-    row = put_envelope(_envelopes(request), tenant_id, body)
+    condition = request.headers.get("If-None-Match")
+    if condition not in (None, "*"):
+        raise HTTPException(400, "Use If-None-Match: * for conditional creation")
+    row = put_envelope(_envelopes(request), tenant_id, body, if_absent=condition == "*" or request.url.path.endswith("/envelopes/initial"))
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
         event_type=ENVELOPE_RECORDED_V1,

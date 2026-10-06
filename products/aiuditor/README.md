@@ -89,3 +89,16 @@ class envelopes or benchmark measurements, activate an agent, or enable selling.
 A registered host reporting `missing_suite` needs this server-side configuration,
 not another device login. Remaining hardware intake and certification gates
 require operator approval and measured evidence through their existing workflows.
+
+### Conditional first-reference publication
+
+`POST /api/v1/aiuditor/envelopes` accepts `If-None-Match: *` for initial references.
+The write uses the tenant/class/catalog unique constraint with an atomic insert;
+if any writer has already stored that reference, it returns 409 without changing
+it or emitting a new envelope event. Omitting the header retains ordinary lab
+upsert behavior. Automatic onboarding publication uses the conditional form even
+when its earlier missing-reference lookup succeeded.
+
+`POST /api/v1/aiuditor/envelopes/initial` always applies this condition. Automatic
+onboarding uses this dedicated endpoint so an older AIuditor rejects the request
+instead of ignoring a new conditional header during a rolling deployment.

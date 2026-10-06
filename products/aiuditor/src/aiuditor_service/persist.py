@@ -267,6 +267,8 @@ class PersistSession(Protocol):
 
     def upsert(self, table: str, tenant_id: uuid.UUID, key: object, payload: dict[str, Any]) -> None: ...
 
+    def create_envelope(self, payload: dict[str, Any]) -> bool: ...
+
     def candidate_scope(self): ...
 
     def program_bootstrap_scope(self, tenant_id: uuid.UUID): ...
@@ -296,6 +298,16 @@ class MemoryPersistSession:
         for banned in _BANNED:
             body.pop(banned, None)
         bucket[str(key)] = body
+
+    def create_envelope(self, payload: dict[str, Any]) -> bool:
+        # Memory mode is used within the synchronous service event-loop path.
+        tenant = str(payload["tenant_id"])
+        bucket = self.rows.setdefault("envelopes", {}).setdefault(tenant, {})
+        if any(row["class_id"] == payload["class_id"] and row["catalog_id"] == payload["catalog_id"]
+               for row in bucket.values()):
+            return False
+        bucket[str(payload["id"])] = dict(payload)
+        return True
 
     @contextmanager
     def candidate_scope(self):
@@ -405,6 +417,20 @@ class SqlPersistSession:
             sync = "postgresql+psycopg://" + sync.split("postgresql://", 1)[1]
         engine = create_engine(sync)
         return cls(sessionmaker(engine, expire_on_commit=False))
+
+    def create_envelope(self, payload: dict[str, Any]) -> bool:
+        """Unique-key insertion is atomic across all writers and replicas."""
+        from sqlalchemy import text
+        from sqlalchemy.dialects.postgresql import insert
+        model = _sql_models()["envelopes"]
+        with self._session_factory() as session:
+            session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"),
+                            {"tid": str(payload["tenant_id"])})
+            inserted = session.execute(insert(model).values(**sql_row("envelopes", payload))
+                .on_conflict_do_nothing(constraint="uq_aiuditor_envelope_class_catalog")
+                .returning(model.id)).scalar_one_or_none()
+            session.commit()
+            return inserted is not None
 
     def ping(self) -> None:
         from sqlalchemy import text
