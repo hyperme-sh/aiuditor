@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # Small allowlist of GGUF publishers on Hugging Face. Expand deliberately.
 GGUF_PUBLISHER_ALLOWLIST: frozenset[str] = frozenset(
@@ -110,8 +113,12 @@ class HuggingFaceMetadataSource:
                 publisher = _publisher(repo)
                 if publisher not in GGUF_PUBLISHER_ALLOWLIST:
                     continue
-                license_name, revision = await self._metadata(client, repo)
-                tree = await self._tree(client, repo, revision)
+                try:
+                    license_name, revision = await self._metadata(client, repo)
+                    tree = await self._tree(client, repo, revision)
+                except (httpx.HTTPError, ValueError) as exc:
+                    logger.warning("model repository lookup failed repo=%s error=%s", repo, type(exc).__name__)
+                    continue
                 for entry in tree:
                     if not isinstance(entry, dict):
                         continue
@@ -144,6 +151,8 @@ class HuggingFaceMetadataSource:
         response = await client.get(f"https://huggingface.co/api/models/{repo}/revision/{self._revision}")
         response.raise_for_status()
         body = response.json()
+        if not isinstance(body, dict):
+            raise ValueError("model repository metadata must be an object")
         commit = body.get("sha", "")
         if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
             raise ValueError("model repository has no immutable commit")
@@ -157,11 +166,10 @@ class HuggingFaceMetadataSource:
             params={"recursive": "true"},
         )
         response.raise_for_status()
-        try:
-            body = response.json()
-        except ValueError:
-            return []
-        return body if isinstance(body, list) else []
+        body = response.json()
+        if not isinstance(body, list):
+            raise ValueError("model repository tree must be a list")
+        return body
 
 
 def default_seed_repos() -> tuple[str, ...]:

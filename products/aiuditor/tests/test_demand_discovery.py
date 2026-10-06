@@ -38,3 +38,30 @@ async def test_crawl_resolves_branch_before_listing_artifact():
     assert rows[0].revision == commit
     assert rows[0].source_ref == f"bartowski/model@{commit}/model-Q4_K_M.gguf"
     assert all("/resolve/" not in path for path in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["revision", "tree"])
+@pytest.mark.parametrize("failure", [401, 404, 429, 503, "timeout", "invalid_json"])
+async def test_crawl_isolates_failed_repository(stage, failure, caplog):
+    commit = "a" * 40
+    def handler(request):
+        if "/broken/" in request.url.path and f"/{stage}/" in request.url.path:
+            if failure == "timeout":
+                raise httpx.ReadTimeout("upstream timed out", request=request)
+            if failure == "invalid_json":
+                return httpx.Response(200, content=b"invalid json")
+            return httpx.Response(failure)
+        if "/revision/" in request.url.path:
+            return httpx.Response(200, json={"sha": commit})
+        return httpx.Response(200, json=[{
+            "type": "file", "path": "model-Q4_K_M.gguf", "size": 123,
+            "lfs": {"oid": "b" * 64},
+        }])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await HuggingFaceMetadataSource(
+            ["bartowski/first", "bartowski/broken", "bartowski/last"], client=client,
+        ).list_artifacts()
+    assert [row.repo for row in rows] == ["bartowski/first", "bartowski/last"]
+    assert all(row.revision == commit for row in rows)
+    assert "repo=bartowski/broken" in caplog.text
