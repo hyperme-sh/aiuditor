@@ -110,8 +110,8 @@ class HuggingFaceMetadataSource:
                 publisher = _publisher(repo)
                 if publisher not in GGUF_PUBLISHER_ALLOWLIST:
                     continue
-                license_name = await self._license(client, repo)
-                tree = await self._tree(client, repo)
+                license_name, revision = await self._metadata(client, repo)
+                tree = await self._tree(client, repo, revision)
                 for entry in tree:
                     if not isinstance(entry, dict):
                         continue
@@ -126,7 +126,7 @@ class HuggingFaceMetadataSource:
                     out.append(
                         ArtifactMeta(
                             repo=repo,
-                            revision=self._revision,
+                            revision=revision,
                             file_name=path,
                             size_bytes=size,
                             license=license_name,
@@ -140,27 +140,23 @@ class HuggingFaceMetadataSource:
                 await client.aclose()
         return out
 
-    async def _license(self, client: httpx.AsyncClient, repo: str) -> str | None:
-        response = await client.get(f"https://huggingface.co/api/models/{repo}")
-        if response.status_code >= 400:
-            return None
-        try:
-            body = response.json()
-        except ValueError:
-            return None
-        if not isinstance(body, dict):
-            return None
+    async def _metadata(self, client: httpx.AsyncClient, repo: str) -> tuple[str | None, str]:
+        response = await client.get(f"https://huggingface.co/api/models/{repo}/revision/{self._revision}")
+        response.raise_for_status()
+        body = response.json()
+        commit = body.get("sha", "")
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise ValueError("model repository has no immutable commit")
         card = body.get("cardData") if isinstance(body.get("cardData"), dict) else {}
-        lic = card.get("license") or body.get("license")
-        return str(lic).strip().lower()[:64] if lic else None
+        license_name = card.get("license") or body.get("license")
+        return (str(license_name).strip().lower()[:64] if license_name else None), commit
 
-    async def _tree(self, client: httpx.AsyncClient, repo: str) -> list:
+    async def _tree(self, client: httpx.AsyncClient, repo: str, revision: str) -> list:
         response = await client.get(
-            f"https://huggingface.co/api/models/{repo}/tree/{self._revision}",
+            f"https://huggingface.co/api/models/{repo}/tree/{revision}",
             params={"recursive": "true"},
         )
-        if response.status_code >= 400:
-            return []
+        response.raise_for_status()
         try:
             body = response.json()
         except ValueError:
@@ -172,6 +168,6 @@ def default_seed_repos() -> tuple[str, ...]:
     """Conservative starter set. Operators expand via AIUDITOR_CRAWL_REPOS."""
 
     return (
-        "bartowski/Llama-3.1-8B-Instruct-GGUF",
+        "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
         "bartowski/Qwen2.5-32B-Instruct-GGUF",
     )
