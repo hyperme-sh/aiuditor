@@ -269,6 +269,8 @@ class PersistSession(Protocol):
 
     def candidate_scope(self): ...
 
+    def program_bootstrap_scope(self, tenant_id: uuid.UUID): ...
+
     def delete(self, table: str, tenant_id: uuid.UUID, key: object) -> None: ...
 
     def snapshot(self) -> dict[str, Any]: ...
@@ -299,6 +301,10 @@ class MemoryPersistSession:
     def candidate_scope(self):
         """In-memory writes have no SQL transaction. The crawl still isolates errors."""
 
+        yield
+
+    @contextmanager
+    def program_bootstrap_scope(self, tenant_id: uuid.UUID):
         yield
 
     def delete(self, table: str, tenant_id: uuid.UUID, key: object) -> None:
@@ -454,6 +460,19 @@ class SqlPersistSession:
                 raise
             finally:
                 _SCOPE.reset(token)
+
+    @contextmanager
+    def program_bootstrap_scope(self, tenant_id: uuid.UUID):
+        """Serialize default program initialization across writer replicas."""
+        from sqlalchemy import text
+
+        with self.candidate_scope():
+            session = _SCOPE.get()
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                {"key": f"aiuditor-core-suite:{tenant_id}"},
+            )
+            yield
 
     def _apply(
         self,

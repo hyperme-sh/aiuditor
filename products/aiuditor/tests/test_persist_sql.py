@@ -184,3 +184,40 @@ def test_failed_candidate_savepoint_does_not_drop_the_next_write(
     assert restored is not None
     assert restored.size_bytes == _OVERSIZE
     assert restored.file_name == "ok.gguf"
+
+
+def test_core_suite_bootstrap_serializes_replicas(migrated_postgres: str) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from aiuditor_service.program_bootstrap import bootstrap_core_suite
+    from aiuditor_service.store import SuiteStore
+
+    tenant = uuid.uuid4()
+    _plant_tenant(migrated_postgres, tenant)
+    barrier = Barrier(2)
+
+    def initialize():
+        store = SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres))
+        barrier.wait(timeout=10)
+        return bootstrap_core_suite(store, tenant)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        results = list(workers.map(lambda _: initialize(), range(2)))
+    assert sorted(results) == [0, 2]
+    reloaded = SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    assert len(reloaded.list_for(tenant)) == 2
+    assert bootstrap_core_suite(reloaded, tenant) == 0
+
+
+def test_core_suite_bootstrap_waits_for_real_tenant(migrated_postgres: str) -> None:
+    from sqlalchemy.exc import IntegrityError
+    from aiuditor_service.program_bootstrap import bootstrap_core_suite
+    from aiuditor_service.store import SuiteStore
+
+    tenant = uuid.uuid4()
+    store = SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    with pytest.raises(IntegrityError):
+        bootstrap_core_suite(store, tenant)
+    assert store.list_for(tenant) == []
+    _plant_tenant(migrated_postgres, tenant)
+    assert bootstrap_core_suite(store, tenant) == 2

@@ -67,3 +67,25 @@ cd products/aiuditor && uv run pytest --cov=aiuditor_service --cov-report=term-m
 ```
 
 HTTP tests disable DB middleware so they run without Docker. Compose still enables GUC middleware against Postgres.
+
+### Core suite deployment initialization
+
+Compose enables `AIUDITOR_BOOTSTRAP_CORE_SUITE=true` on the global AIuditor.
+At startup it initializes the documented `pack-v1` / `llama-3.1-8b-q4` suite for
+empty `agx-large` and `nx-volume` classes in `MARKETPLACE_TENANT_ID`. This restores
+the program configuration after a test database rebuild without tying it to a
+particular host. Existing class suites, including custom catalogs and packs,
+remain unchanged. Set the flag to `false` when deliberately managing an empty
+program; private operators and witnesses never run this initialization.
+
+Initialization retries if the marketplace tenant has not been created yet.
+PostgreSQL serializes concurrent initializer replicas and commits both classes
+in one transaction. Logs report `core suite initialized` or the redacted
+`core suite initialization pending` state. Normal suite reads and witness
+hydration use the persisted rows.
+
+This provisions membership only: it does not approve hardware intake, invent
+class envelopes or benchmark measurements, activate an agent, or enable selling.
+A registered host reporting `missing_suite` needs this server-side configuration,
+not another device login. Remaining hardware intake and certification gates
+require operator approval and measured evidence through their existing workflows.

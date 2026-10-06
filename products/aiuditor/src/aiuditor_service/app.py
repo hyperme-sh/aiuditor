@@ -44,6 +44,7 @@ from aiuditor_service.persist import (
 from aiuditor_service.role import AiuditorRole, resolve_role, writer_for
 from aiuditor_service.store import new_stores
 from aiuditor_service.intake_loop import run_crawl_loop
+from aiuditor_service.program_bootstrap import run_program_bootstrap
 
 logger = get_logger(__name__)
 
@@ -129,6 +130,10 @@ def create_app(
         else:
             await install_tenant_event_publisher(service_name=svc_name)
 
+        program_stop = asyncio.Event()
+        program_task = asyncio.create_task(run_program_bootstrap(app, stop=program_stop))
+        app.state.program_bootstrap_task = program_task
+
         hydrate_stop = asyncio.Event()
         app.state.hydrate_stop = hydrate_stop
         hydrate_task = asyncio.create_task(run_hydrate_loop(app, stop=hydrate_stop))
@@ -140,6 +145,8 @@ def create_app(
 
         yield
 
+        program_stop.set()
+        await program_task
         crawl_stop.set()
         crawl_task.cancel()
         try:
