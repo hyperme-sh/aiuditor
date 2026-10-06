@@ -221,3 +221,23 @@ def test_core_suite_bootstrap_waits_for_real_tenant(migrated_postgres: str) -> N
     assert store.list_for(tenant) == []
     _plant_tenant(migrated_postgres, tenant)
     assert bootstrap_core_suite(store, tenant) == 2
+
+
+def test_conditional_envelope_insert_is_atomic_across_sessions(migrated_postgres):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from aiuditor_service.domain.models import ClassEnvelope
+    tenant=uuid.uuid4();_plant_tenant(migrated_postgres,tenant)
+    clock=datetime.now(UTC)
+    barrier=Barrier(2)
+    def attempt(rate):
+        persist=SqlPersistSession.from_url(migrated_postgres)
+        payload=ClassEnvelope(id=uuid.uuid4(),tenant_id=tenant,class_id="agx-large",catalog_id="race-model",file_hash="sha256:"+"a"*64,runtime="nvidia",fit=True,decode_tok_s=rate,created_at=clock,updated_at=clock).model_dump()
+        barrier.wait(timeout=10)
+        return persist.create_envelope(payload),rate
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results=list(pool.map(attempt,[11.0,23.0]))
+    assert sum(created for created,_ in results)==1
+    rows=SqlPersistSession.from_url(migrated_postgres).load_rows("envelopes",tenant)
+    assert len(rows)==1
+    assert next(iter(rows.values()))["decode_tok_s"]==next(rate for created,rate in results if created)

@@ -310,3 +310,42 @@ def test_suite_member_put_is_idempotent():
     )
     assert a.id == b.id
     assert len(store.list_for(tenant)) == 1
+
+
+def test_conditional_creation_loses_race_without_overwriting_or_caching(monkeypatch):
+    from aiuditor_service.persist import MemoryPersistSession
+    persist = MemoryPersistSession()
+    store, competing = EnvelopeStore(persist=persist), EnvelopeStore(persist=persist)
+    tenant = uuid.uuid4()
+    body = ClassEnvelopeCreate(class_id="agx-large", catalog_id="model", file_hash="sha256:"+"a"*64, runtime="nvidia", decode_tok_s=10)
+    original = persist.create_envelope
+    winner = []
+    def raced(payload):
+        winner.append(put_envelope(competing, tenant, body.model_copy(update={"decode_tok_s":23})))
+        return original(payload)
+    monkeypatch.setattr(persist,"create_envelope",raced)
+    with pytest.raises(HTTPException) as conflict:
+        put_envelope(store,tenant,body,if_absent=True)
+    assert conflict.value.status_code==409
+    assert store.envelopes.get(tenant,{})=={}
+    assert store.for_class_catalog(tenant,"agx-large","model").id==winner[0].id
+    assert store.for_class_catalog(tenant,"agx-large","model").decode_tok_s==23
+
+
+def test_conditional_creation_retains_first_reference():
+    store=EnvelopeStore();tenant=uuid.uuid4()
+    body=ClassEnvelopeCreate(class_id="agx-large",catalog_id="model",file_hash="sha256:"+"a"*64,runtime="nvidia")
+    first=put_envelope(store,tenant,body,if_absent=True)
+    with pytest.raises(HTTPException):put_envelope(store,tenant,body,if_absent=True)
+    assert store.for_class_catalog(tenant,"agx-large","model").id==first.id
+
+@pytest.mark.asyncio
+async def test_http_conditional_envelope_rejects_existing_reference(http_client,tenant_headers):
+    body={"class_id":"agx-large","catalog_id":"first-reference","file_hash":"sha256:"+"a"*64,"runtime":"nvidia","decode_tok_s":12}
+    headers={**tenant_headers,"If-None-Match":"*"}
+    first=await http_client.post("/api/v1/aiuditor/envelopes",headers=headers,json=body)
+    assert first.status_code==201,first.text
+    second=await http_client.post("/api/v1/aiuditor/envelopes",headers=headers,json={**body,"decode_tok_s":99})
+    assert second.status_code==409
+    rows=(await http_client.get("/api/v1/aiuditor/envelopes",headers=tenant_headers)).json()
+    assert next(row for row in rows if row["id"]==first.json()["id"])["decode_tok_s"]==12

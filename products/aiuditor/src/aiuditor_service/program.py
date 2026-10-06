@@ -89,6 +89,7 @@ def put_envelope(
     body: ClassEnvelopeCreate,
     *,
     now: datetime | None = None,
+    if_absent: bool = False,
 ) -> ClassEnvelope:
     class_id = _safe_text(body.class_id)
     catalog_id = _safe_text(body.catalog_id)
@@ -104,6 +105,8 @@ def put_envelope(
         raise HTTPException(status_code=400, detail=RUNTIME_REQUIRED)
     clock = _now(now)
     existing = store.for_class_catalog(tenant_id, class_id, catalog_id)
+    if existing is not None and if_absent:
+        raise HTTPException(409, "Reference envelope already exists")
     if existing is not None:
         row = existing.model_copy(
             update={
@@ -133,7 +136,11 @@ def put_envelope(
             created_at=clock,
             updated_at=clock,
         )
-    store.put(row)
+    if if_absent:
+        if not store.create_if_absent(row):
+            raise HTTPException(409, "Reference envelope already exists")
+    else:
+        store.put(row)
     return row
 
 
