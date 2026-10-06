@@ -1189,12 +1189,12 @@ async def verdict_admission(
 @router.post(
     "/crawl/run",
     response_model=CrawlRunResult,
-    summary="Run one metadata crawl + fit-filter + lab soak queue",
+    summary="Run one metadata discovery and fit filter",
     description=(
         "Control-plane intake. Fetches Hugging Face / allowlisted GGUF publisher "
         "metadata only (no weight download). Drops artifacts that cannot fit the "
-        "class after OS reserve + KV headroom. Queues a lab soak on one ready "
-        "lab host when hash/quant/runtime changed or the envelope aged out."
+        "class after OS reserve + KV headroom. Stores candidates for reviewed "
+        "qualification; discovery does not schedule downloads or benchmarks."
     ),
 )
 async def run_crawl(request: Request) -> CrawlRunResult:
