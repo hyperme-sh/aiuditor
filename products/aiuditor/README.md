@@ -98,3 +98,7 @@ if any writer has already stored that reference, it returns 409 without changing
 it or emitting a new envelope event. Omitting the header retains ordinary lab
 upsert behavior. Automatic onboarding publication uses the conditional form even
 when its earlier missing-reference lookup succeeded.
+
+`POST /api/v1/aiuditor/envelopes/initial` always applies this condition. Automatic
+onboarding uses this dedicated endpoint so an older AIuditor rejects the request
+instead of ignoring a new conditional header during a rolling deployment.

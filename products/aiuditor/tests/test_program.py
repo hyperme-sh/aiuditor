@@ -340,12 +340,13 @@ def test_conditional_creation_retains_first_reference():
     assert store.for_class_catalog(tenant,"agx-large","model").id==first.id
 
 @pytest.mark.asyncio
-async def test_http_conditional_envelope_rejects_existing_reference(http_client,tenant_headers):
+@pytest.mark.parametrize("path",["/api/v1/aiuditor/envelopes", "/api/v1/aiuditor/envelopes/initial"])
+async def test_http_conditional_envelope_rejects_existing_reference(http_client,tenant_headers,path):
     body={"class_id":"agx-large","catalog_id":"first-reference","file_hash":"sha256:"+"a"*64,"runtime":"nvidia","decode_tok_s":12}
     headers={**tenant_headers,"If-None-Match":"*"}
-    first=await http_client.post("/api/v1/aiuditor/envelopes",headers=headers,json=body)
+    first=await http_client.post(path,headers=headers,json=body)
     assert first.status_code==201,first.text
-    second=await http_client.post("/api/v1/aiuditor/envelopes",headers=headers,json={**body,"decode_tok_s":99})
+    second=await http_client.post(path,headers=headers,json={**body,"decode_tok_s":99})
     assert second.status_code==409
     rows=(await http_client.get("/api/v1/aiuditor/envelopes",headers=tenant_headers)).json()
     assert next(row for row in rows if row["id"]==first.json()["id"])["decode_tok_s"]==12
