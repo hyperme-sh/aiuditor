@@ -23,7 +23,7 @@ AUDITOR_ACTOR_REQUIRED = (
 _AUDITOR_EXCHANGE_PURPOSES = frozenset({"ir", "service"})
 
 TENANT_CLAIM = "https://panopticon.dev/tenant_id"
-_MACHINE_PREFIXES = ("hm_dev_", "hm_gw_", "hm_site_", "hm1.")
+_MACHINE_PREFIXES = ("hm_msi_", "hm_ct_", "hm_dev_", "hm_gw_", "hm_site_", "hm1.")
 
 
 def bearer_secret(request: Request) -> str | None:
