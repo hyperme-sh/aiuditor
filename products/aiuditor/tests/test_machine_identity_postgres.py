@@ -75,6 +75,19 @@ async def test_binding_rotation_contract_isolation_and_revocation(
         assert (
             await post("token", proofs[winner].model_dump(mode="json"))
         ).status_code == 401
+        # No control-plane service token or human login is needed for renewal.
+        direct = await post(
+            "renew",
+            signed(key).model_dump(mode="json"),
+            headers={"X-Tenant-ID": str(tid)},
+        )
+        assert direct.status_code == 200, direct.text
+        unknown = await post(
+            "renew",
+            signed(keys[1 - winner]).model_dump(mode="json"),
+            headers={"X-Tenant-ID": str(tid)},
+        )
+        assert unknown.status_code == 401, unknown.text
         lookup = {
             "device_id": str(device),
             "request_id": str(registration),

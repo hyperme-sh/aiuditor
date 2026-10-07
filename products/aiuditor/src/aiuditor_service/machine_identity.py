@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from controlplane_tenancy.db_session import get_session_maker
 from controlplane_tenancy.tenant_guc import set_current_tenant_id_guc
 from aiuditor_service.models import AiuditorMachineIdentity
-from aiuditor_service.machine_proof import Proof, issue, access_allowed
+from aiuditor_service.machine_proof import Proof, issue, access_allowed, verified_proof
 from aiuditor_service.role import require_grant_write, role_from_request
 
 router = APIRouter(prefix="/aiuditor/machine", tags=["machine-identity"])
@@ -80,8 +80,34 @@ def match(tid, plane, device):
     )
 
 
-async def exchange(request, body, response, bind):
-    tid, plane = actor(request)
+async def exchange(request, body, response, bind, *, direct=False):
+    if direct:
+        import time
+
+        require_grant_write(role_from_request(request))
+        try:
+            tid = uuid.UUID(request.headers.get("X-Tenant-ID", ""))
+        except ValueError:
+            raise HTTPException(400, "Tenant cross-check required") from None
+        plane = body.control_plane_id
+        raw = os.environ.get("AIUDITOR_CONTROL_PLANE_TOKENS")
+        try:
+            trusted = (
+                json.loads(raw)
+                if raw
+                else {"local": os.environ.get("AIUDITOR_INTERNAL_TOKEN", "")}
+            )
+        except ValueError:
+            raise HTTPException(
+                503, "Control-plane trust configuration invalid"
+            ) from None
+        if not isinstance(trusted, dict) or not trusted.get(plane):
+            raise HTTPException(403, "Enrollment attester is no longer trusted")
+        # A header selects only a lookup namespace. The bound signing key and
+        # signed tenant/authority/registration authenticate the request below.
+        verified_proof(tid, body, time.time())
+    else:
+        tid, plane = actor(request)
     validate_audience(body, plane)
     response.headers["Cache-Control"] = "no-store"
     async with transaction(tid) as session:
@@ -121,6 +147,11 @@ async def bind(request: Request, body: Proof, response: Response):
 @router.post("/token")
 async def renew(request: Request, body: Proof, response: Response):
     return await exchange(request, body, response, False)
+
+
+@router.post("/renew")
+async def direct_renew(request: Request, body: Proof, response: Response):
+    return await exchange(request, body, response, False, direct=True)
 
 
 class Lookup(BaseModel):
