@@ -5,7 +5,6 @@ import uuid
 import pytest
 
 from aiuditor_service.catalog import (
-    CHECKOUT_URLS_REQUIRED,
     NO_LIVE_CONNECTION,
     PROVIDER_NOT_READY,
 )
@@ -53,7 +52,7 @@ async def _ready_provider(http_client, headers):
 
 
 @pytest.mark.asyncio
-async def test_p1_allocate_picks_matching_host_and_offers_checkout(
+async def test_p1_allocate_picks_matching_host_and_returns_usdc_payment(
     http_client, tenant_headers, host_lookup, plane_hop, tenant_a, event_sink
 ):
     host_lookup.enroll(
@@ -67,19 +66,18 @@ async def test_p1_allocate_picks_matching_host_and_offers_checkout(
     allocated = await http_client.post(
         f"/api/v1/aiuditor/catalog/{service['id']}/allocate",
         headers=tenant_headers,
-        json={
-            "renter": "acme-renter",
-            "success_url": "https://app.example/ok",
-            "cancel_url": "https://app.example/cancel",
-        },
+        json={"renter": "acme-renter"},
     )
     assert allocated.status_code == 201, allocated.text
     body = allocated.json()
     assert body["connection_id"] == host["id"]
     assert body["backend"] == "hypermesh_class"
     assert body["purpose"] == "renter"
-    assert body["checkout_url"] == "https://checkout.test/session"
+    assert "checkout_url" not in body
     assert body["lease_id"] is not None
+    assert uuid.UUID(body["billing_record_id"])
+    assert body["payment_amount_atoms"] == plane_hop.offer_amount_atoms
+    assert body["payment_test_credit_available"] is False
     assert body["contract"]["status"] == "signed"
     assert body["contract"]["lease_id"] == body["lease_id"]
     assert body["contract"]["connection_id"] == host["id"]
@@ -89,6 +87,7 @@ async def test_p1_allocate_picks_matching_host_and_offers_checkout(
     payload = [e["payload"] for e in event_sink if e["event_type"] == CATALOG_SERVICE_ALLOCATED_V1][0]
     assert "ticket" not in payload
     assert "checkout_url" not in payload
+    assert "billing_record_id" not in payload
     assert "messages" not in str(event_sink)
 
 
@@ -117,11 +116,7 @@ async def test_p2_allocate_matches_loaded_catalog(
     allocated = await http_client.post(
         f"/api/v1/aiuditor/catalog/{service.json()['id']}/allocate",
         headers=tenant_headers,
-        json={
-            "renter": "acme-renter",
-            "success_url": "https://app.example/ok",
-            "cancel_url": "https://app.example/cancel",
-        },
+        json={"renter": "acme-renter"},
     )
     assert allocated.status_code == 201, allocated.text
     assert allocated.json()["connection_id"] == host["id"]
@@ -131,7 +126,7 @@ async def test_p2_allocate_matches_loaded_catalog(
 
 
 @pytest.mark.asyncio
-async def test_provider_allocate_signs_without_hypermesh_checkout(
+async def test_provider_allocate_signs_without_a_hypermesh_lease(
     http_client, tenant_headers, plane_hop
 ):
     provider = await _ready_provider(http_client, tenant_headers)
@@ -154,7 +149,9 @@ async def test_provider_allocate_signs_without_hypermesh_checkout(
     body = allocated.json()
     assert body["connection_id"] == provider["id"]
     assert body["lease_id"] is None
-    assert body["checkout_url"] is None
+    assert body["billing_record_id"] is None
+    assert body["payment_amount_atoms"] is None
+    assert body["payment_test_credit_available"] is False
     assert body["purpose"] == "lease"
     assert body["contract"]["status"] == "signed"
     assert plane_hop.offers == []
@@ -203,11 +200,7 @@ async def test_no_matching_host_is_409(
     allocated = await http_client.post(
         f"/api/v1/aiuditor/catalog/{service['id']}/allocate",
         headers=tenant_headers,
-        json={
-            "renter": "acme-renter",
-            "success_url": "https://app.example/ok",
-            "cancel_url": "https://app.example/cancel",
-        },
+        json={"renter": "acme-renter"},
     )
     assert allocated.status_code == 409
     assert allocated.json()["detail"] == NO_LIVE_CONNECTION
@@ -228,20 +221,18 @@ async def test_suspended_host_is_skipped(
     allocated = await http_client.post(
         f"/api/v1/aiuditor/catalog/{service['id']}/allocate",
         headers=tenant_headers,
-        json={
-            "renter": "acme-renter",
-            "success_url": "https://app.example/ok",
-            "cancel_url": "https://app.example/cancel",
-        },
+        json={"renter": "acme-renter"},
     )
     assert allocated.status_code == 409
     assert allocated.json()["detail"] == NO_LIVE_CONNECTION
 
 
 @pytest.mark.asyncio
-async def test_host_allocate_needs_checkout_urls(
-    http_client, tenant_headers, host_lookup, tenant_a
+async def test_host_allocate_passes_on_test_credit_availability(
+    http_client, tenant_headers, host_lookup, plane_hop, tenant_a
 ):
+    plane_hop.offer_test_credit_available = True
+    plane_hop.offer_amount_atoms = 12_000_000
     host_lookup.enroll(
         FYBER_AGX_DEVICE_ID, tenant_id=tenant_a, class_id="agx-large"
     )
@@ -252,8 +243,11 @@ async def test_host_allocate_needs_checkout_urls(
         headers=tenant_headers,
         json={"renter": "acme-renter"},
     )
-    assert allocated.status_code == 400
-    assert allocated.json()["detail"] == CHECKOUT_URLS_REQUIRED
+    assert allocated.status_code == 201, allocated.text
+    body = allocated.json()
+    assert body["payment_amount_atoms"] == 12_000_000
+    assert body["payment_test_credit_available"] is True
+    assert uuid.UUID(body["billing_record_id"])
 
 
 @pytest.mark.asyncio
@@ -285,7 +279,7 @@ async def test_host_with_existing_renter_lease_reuses_it(
     )
     assert allocated.status_code == 201, allocated.text
     assert allocated.json()["lease_id"] == str(lease_id)
-    assert allocated.json()["checkout_url"] is None
+    assert allocated.json()["billing_record_id"] is None
     assert plane_hop.offers == []
 
 

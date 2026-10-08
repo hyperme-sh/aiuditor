@@ -212,6 +212,20 @@ class OfferedLease:
     device_id: uuid.UUID
     purpose: str
     contract_id: uuid.UUID | None = None
+    # Pending USDC payment Hypermesh opened for this lease.
+    billing_record_id: uuid.UUID | None = None
+    payment_amount_atoms: int | None = None
+    payment_test_credit_available: bool = False
+
+
+def _optional_uuid(raw: object) -> uuid.UUID | None:
+    return uuid.UUID(str(raw)) if raw else None
+
+
+def _optional_int(raw: object) -> int | None:
+    if raw is None or isinstance(raw, bool):
+        return None
+    return int(raw)
 
 
 class PlaneHop(Protocol):
@@ -522,6 +536,9 @@ class HttpPlaneHop:
                 device_id=uuid.UUID(str(raw_device)),
                 purpose=str(body.get("purpose") or "renter"),
                 contract_id=uuid.UUID(str(raw_cid)) if raw_cid else None,
+                billing_record_id=_optional_uuid(body.get("billing_record_id")),
+                payment_amount_atoms=_optional_int(body.get("payment_amount_atoms")),
+                payment_test_credit_available=body.get("payment_test_credit_available") is True,
             )
         except (KeyError, ValueError, TypeError) as exc:
             raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
@@ -680,6 +697,8 @@ class FakePlaneHop:
     mint_error: str | None = None
     violate_error: str | None = None
     offer_error: str | None = None
+    offer_amount_atoms: int | None = 1_000_000
+    offer_test_credit_available: bool = False
     soak_error: str | None = None
     promote_error: str | None = None
 
@@ -810,6 +829,9 @@ class FakePlaneHop:
             device_id=device_id,
             purpose="renter",
             contract_id=contract_id,
+            billing_record_id=uuid.uuid4(),
+            payment_amount_atoms=self.offer_amount_atoms,
+            payment_test_credit_available=self.offer_test_credit_available,
         )
         self.offers.append(
             {

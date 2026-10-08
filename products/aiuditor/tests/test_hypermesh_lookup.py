@@ -288,8 +288,6 @@ async def test_closed_plane_offer_fail_closes():
             device_id=DEVICE,
             reserved_hours=1,
             contract_id=uuid.uuid4(),
-            success_url="https://app.example/ok",
-            cancel_url="https://app.example/cancel",
             class_id="agx-large",
         )
     assert str(exc.value) == PLANE_HOP_REQUIRED
@@ -300,6 +298,7 @@ async def test_http_plane_offers_lease_without_keeping_ticket(monkeypatch):
     captured: dict[str, object] = {}
     lease_id = uuid.uuid4()
     contract_id = uuid.uuid4()
+    billing_id = uuid.uuid4()
 
     class _Resp:
         status_code = 201
@@ -309,8 +308,10 @@ async def test_http_plane_offers_lease_without_keeping_ticket(monkeypatch):
                 "id": str(lease_id),
                 "device_id": str(DEVICE),
                 "purpose": "renter",
-                "checkout_url": "https://checkout.example/session",
                 "contract_id": str(contract_id),
+                "billing_record_id": str(billing_id),
+                "payment_amount_atoms": 12_000_000,
+                "payment_test_credit_available": True,
                 "ticket": "hm1.must-not-be-stored",
             }
 
@@ -337,14 +338,15 @@ async def test_http_plane_offers_lease_without_keeping_ticket(monkeypatch):
         device_id=DEVICE,
         reserved_hours=2,
         contract_id=contract_id,
-        success_url="https://app.example/ok",
-        cancel_url="https://app.example/cancel",
         class_id="agx-large",
         headers={"Authorization": "Bearer session"},
     )
     assert offered.lease_id == lease_id
     assert offered.purpose == "renter"
-    assert offered.checkout_url == "https://checkout.example/session"
+    assert offered.billing_record_id == billing_id
+    assert offered.payment_amount_atoms == 12_000_000
+    assert offered.payment_test_credit_available is True
+    assert not hasattr(offered, "checkout_url")
     assert not hasattr(offered, "ticket")
     assert "hm1.must-not-be-stored" not in str(offered)
     assert captured["url"] == "http://hm.example/api/v1/hypermesh/leases"

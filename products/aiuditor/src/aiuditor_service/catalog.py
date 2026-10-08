@@ -246,6 +246,7 @@ async def allocate_service(
     signed = sign_contract(contracts, tenant_id, draft.id, signed_by=signed_by, now=clock)
     lease_id = row.lease_id
     purpose = "lease"
+    offered = None
     if service.backend is ServiceBackend.PROVIDER:
         if row.status is not ConnectionStatus.READY:
             row = row.model_copy(update={"status": ConnectionStatus.READY})
@@ -305,4 +306,9 @@ async def allocate_service(
         lease_id=lease_id,
         purpose=purpose,
         exp=current.until,
+        billing_record_id=offered.billing_record_id if offered else None,
+        payment_amount_atoms=offered.payment_amount_atoms if offered else None,
+        payment_test_credit_available=(
+            offered.payment_test_credit_available if offered else False
+        ),
     )

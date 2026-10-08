@@ -776,6 +776,12 @@ class ServiceAllocation(BaseModel):
     lease_id: uuid.UUID | None = None
     purpose: str = "lease"
     exp: datetime | None = None
+    # Set when this grant opened a new lease: the pending USDC payment the
+    # renter settles before the lease starts. Pay it in USDC, or with
+    # POST /api/v1/payments/usdc/lease-payments/{id}/test-credit where offered.
+    billing_record_id: uuid.UUID | None = None
+    payment_amount_atoms: int | None = None
+    payment_test_credit_available: bool = False
 
     def to_event_payload(self) -> dict[str, object]:
         return {
