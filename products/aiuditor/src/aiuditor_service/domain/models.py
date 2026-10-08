@@ -48,6 +48,11 @@ class ConnectionCreate(BaseModel):
     device_id: uuid.UUID | None = None
     endpoint: str | None = Field(default=None, max_length=2048)
     credential: str | None = Field(default=None, min_length=1, max_length=4096)
+    # Owning control plane. Must equal the attesting plane (or "local" when the
+    # request carries no attestation); omitted means "the attesting plane".
+    control_plane_id: str | None = Field(
+        default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
 
     @model_validator(mode="after")
     def _kind_fields(self) -> Self:

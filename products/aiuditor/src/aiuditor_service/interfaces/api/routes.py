@@ -439,6 +439,9 @@ async def create_connection(request: Request, body: ConnectionCreate) -> Connect
         attested_tenant, plane = actor(request)
         if attested_tenant != tenant_id:
             raise HTTPException(403, "Control-plane tenant mismatch")
+    if body.control_plane_id is not None and body.control_plane_id != plane:
+        # The body names the owner; only that plane's attestation may claim it.
+        raise HTTPException(403, "Connection control plane must match the attesting plane")
     store = _store(request)
     if body.kind is ConnectionKind.HOST:
         assert body.device_id is not None

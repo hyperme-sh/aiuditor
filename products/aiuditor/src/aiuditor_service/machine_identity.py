@@ -13,11 +13,11 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 
-from controlplane_tenancy.db_session import get_session_maker
+from controlplane_tenancy.db_session import get_db_session, get_session_maker
 from controlplane_tenancy.tenant_guc import set_current_tenant_id_guc
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -61,6 +61,29 @@ def actor(request):
 
 @asynccontextmanager
 async def transaction(tid):
+    """One unit of work, on the request session when the SQL middleware set one.
+
+    The direct renewal route is public; a second pooled session per request
+    would let parallel unauthenticated calls exhaust the pool.
+    """
+    try:
+        request_session = get_db_session()
+    except RuntimeError:
+        request_session = None
+    if request_session is not None:
+        try:
+            await set_current_tenant_id_guc(request_session, tid)
+            yield request_session
+            await request_session.commit()
+            # Keep tenant context for the middleware's final commit.
+            await set_current_tenant_id_guc(request_session, tid)
+        except SQLAlchemyError:
+            await request_session.rollback()
+            raise HTTPException(503, "Machine identity storage unavailable") from None
+        except BaseException:
+            await request_session.rollback()
+            raise
+        return
     async with get_session_maker()() as session:
         try:
             await set_current_tenant_id_guc(session, tid)
@@ -184,11 +207,22 @@ async def introspect(request: Request, body: Lookup, response: Response):
 class Revoke(BaseModel):
     model_config = ConfigDict(extra="forbid")
     device_id: uuid.UUID
-    request_id: uuid.UUID
+    # Optional cross-check. Host retirement revokes whatever registration is
+    # bound to the device in this plane's namespace.
+    request_id: uuid.UUID | None = None
 
 
 @router.post("/revoke")
 async def revoke(request: Request, body: Revoke, response: Response):
+    """Retire a host: revoke its signing key and every credential it holds.
+
+    Also disables this plane's host connections for the device, so signed
+    contracts on them stop authorizing contract credentials immediately.
+    Idempotent: a host that never bound a key still has its connections
+    disabled.
+    """
+    from aiuditor_service.models import AiuditorConnection
+
     tid, plane = actor(request)
     response.headers["Cache-Control"] = "no-store"
     async with transaction(tid) as session:
@@ -197,11 +231,27 @@ async def revoke(request: Request, body: Revoke, response: Response):
             .where(*match(tid, plane, body.device_id))
             .with_for_update()
         )
-        if row is None or row.request_id != body.request_id:
+        if (
+            row is not None
+            and body.request_id is not None
+            and row.request_id != body.request_id
+        ):
             raise HTTPException(404, "Machine registration not found")
-        row.revoked = True
-        row.state = {**row.state, "tokens": []}
-    return {"revoked": True}
+        if row is not None:
+            row.revoked = True
+            row.state = {**row.state, "tokens": [], "contracts": []}
+        disabled = await session.execute(
+            update(AiuditorConnection)
+            .where(
+                AiuditorConnection.tenant_id == tid,
+                AiuditorConnection.control_plane_id == plane,
+                AiuditorConnection.device_id == body.device_id,
+                AiuditorConnection.kind == "host",
+                AiuditorConnection.status != "disabled",
+            )
+            .values(status="disabled")
+        )
+    return {"revoked": row is not None, "connections_disabled": disabled.rowcount}
 
 
 class ContractProof(Proof):

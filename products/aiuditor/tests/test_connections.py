@@ -228,3 +228,19 @@ async def test_connection_records_authenticated_plane(http_client, tenant_header
     assert result.json()["control_plane_id"] == "plane-a"
     result = await http_client.post("/api/v1/aiuditor/connections", headers={**headers, "X-Internal-Token": "wrong"}, json=body)
     assert result.status_code == 401
+    owned = {**body, "control_plane_id": "plane-a"}
+    result = await http_client.post("/api/v1/aiuditor/connections", headers=headers, json=owned)
+    assert result.status_code == 201, result.text
+    assert result.json()["control_plane_id"] == "plane-a"
+    # A body cannot claim a plane its attestation does not prove.
+    result = await http_client.post(
+        "/api/v1/aiuditor/connections", headers=headers, json={**body, "control_plane_id": "plane-b"}
+    )
+    assert result.status_code == 403
+    result = await http_client.post("/api/v1/aiuditor/connections", headers=tenant_headers, json=owned)
+    assert result.status_code == 403
+    result = await http_client.post(
+        "/api/v1/aiuditor/connections", headers=tenant_headers, json={**body, "control_plane_id": "local"}
+    )
+    assert result.status_code == 201, result.text
+    assert result.json()["control_plane_id"] == "local"

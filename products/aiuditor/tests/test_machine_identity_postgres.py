@@ -173,13 +173,101 @@ async def test_binding_rotation_contract_isolation_and_revocation(
                 {**lookup, "digest": hashlib.sha256(grants[1].encode()).hexdigest()},
             )
         ).json()["active"]
-        assert (
-            await post(
-                "revoke", {"device_id": str(device), "request_id": str(registration)}
-            )
-        ).status_code == 200
+        revoked = await post(
+            "revoke", {"device_id": str(device), "request_id": str(registration)}
+        )
+        assert revoked.status_code == 200, revoked.text
+        assert revoked.json() == {"revoked": True, "connections_disabled": 1}
         assert not await check(1)
+        async with maker() as s:
+            assert (await s.get(AiuditorConnection, conn)).status == "disabled"
         assert not (await post("introspect", lookup)).json()["active"]
         assert (
             await post("token", signed(key).model_dump(mode="json"))
         ).status_code == 410
+
+
+async def test_contract_token_for_a_non_local_plane(async_engine, monkeypatch):
+    maker = async_sessionmaker(async_engine, expire_on_commit=False)
+    monkeypatch.setattr(service, "get_session_maker", lambda: maker)
+    monkeypatch.setenv(
+        "AIUDITOR_CONTROL_PLANE_TOKENS",
+        '{"plane-a": "plane-a-test-secret", "local": "local-test-secret"}',
+    )
+    tid, device, registration = (uuid.uuid4() for _ in range(3))
+    key = Ed25519PrivateKey.generate()
+    now = datetime.now(UTC)
+    by_plane = {"plane-a": uuid.uuid4(), "local": uuid.uuid4()}
+    async with maker() as s:
+        s.add(Tenant(id=tid, name=str(tid), is_active=True))
+        await s.flush()
+        for plane, cid in by_plane.items():
+            conn = uuid.uuid4()
+            s.add(
+                AiuditorConnection(
+                    id=conn,
+                    tenant_id=tid,
+                    control_plane_id=plane,
+                    kind="host",
+                    purpose="lease",
+                    device_id=device,
+                    status="ready",
+                    created_at=now,
+                )
+            )
+            await s.flush()
+            s.add(
+                AiuditorContract(
+                    id=cid,
+                    tenant_id=tid,
+                    parties=[],
+                    meters=["wall_time"],
+                    rail="stripe",
+                    until=now + timedelta(hours=1),
+                    connection_id=conn,
+                    status="signed",
+                    created_at=now,
+                )
+            )
+        await s.commit()
+    app = FastAPI()
+    app.include_router(service.router, prefix="/api/v1")
+    headers = {
+        "X-Tenant-ID": str(tid),
+        "X-Control-Plane-ID": "plane-a",
+        "X-Internal-Token": "plane-a-test-secret",
+    }
+
+    def signed(**extra):
+        body = proof(key, tid, now=int(time.time()), device=device, request=registration)
+        body = (service.ContractProof if extra else service.Proof)(
+            **{**body.model_dump(), "control_plane_id": "plane-a", **extra}
+        )
+        body.signature = base64.b64encode(
+            key.sign(machine_proof.message(tid, body))
+        ).decode()
+        return body.model_dump(mode="json")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://issuer.test"
+    ) as client:
+
+        async def post(path, body):
+            return await client.post(
+                "/api/v1/aiuditor/machine/" + path, headers=headers, json=body
+            )
+
+        bound = await post("bind", signed())
+        assert bound.status_code == 200, bound.text
+        granted = await post("contract-token", signed(contract_id=by_plane["plane-a"]))
+        assert granted.status_code == 200, granted.text
+        # The other plane's connection never authorizes this plane's host.
+        denied = await post("contract-token", signed(contract_id=by_plane["local"]))
+        assert denied.status_code == 403, denied.text
+        lookup = {
+            "device_id": str(device),
+            "request_id": str(registration),
+            "digest": hashlib.sha256(granted.json()["access_token"].encode()).hexdigest(),
+            "contract_id": str(by_plane["plane-a"]),
+        }
+        assert (await post("contract-introspect", lookup)).json() == {"active": True}
