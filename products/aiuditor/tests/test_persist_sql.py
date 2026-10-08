@@ -66,6 +66,9 @@ def migrated_postgres() -> str:
         url = _normalize_sync_url(pg.get_connection_url())
         os.environ["DATABASE_URL"] = url
         command.upgrade(Config(str(ini)), "head")
+        import controlplane_db.migrations as migrations
+        migrations.stamp_baselines(url)
+        migrations.upgrade(url)
         yield url
 
 
@@ -241,3 +244,17 @@ def test_conditional_envelope_insert_is_atomic_across_sessions(migrated_postgres
     rows=SqlPersistSession.from_url(migrated_postgres).load_rows("envelopes",tenant)
     assert len(rows)==1
     assert next(iter(rows.values()))["decode_tok_s"]==next(rate for created,rate in results if created)
+
+
+def test_connection_plane_survives_reload(migrated_postgres):
+    from aiuditor_service.domain.models import Connection, ConnectionKind, ConnectionPurpose, ConnectionStatus
+    tenant = uuid.uuid4()
+    _plant_tenant(migrated_postgres, tenant)
+    row = Connection(id=uuid.uuid4(), tenant_id=tenant, control_plane_id="plane-a",
+                     kind=ConnectionKind.PROVIDER, purpose=ConnectionPurpose.AUDITOR,
+                     endpoint="https://example.test", status=ConnectionStatus.PENDING,
+                     created_at=datetime.now(UTC))
+    writer = new_stores(SqlPersistSession.from_url(migrated_postgres))
+    writer.connection_store.put(row)
+    reader = new_stores(SqlPersistSession.from_url(migrated_postgres))
+    assert reader.connection_store.get(tenant, row.id).control_plane_id == "plane-a"

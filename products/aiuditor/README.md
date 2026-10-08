@@ -111,3 +111,13 @@ listing files. Actual downloads follow an accepted lease or explicit reviewed
 benchmark/qualification work, within the target host's cache quota. The low-level
 intake API requires `queue_benchmarks=True` for an explicit scheduling caller;
 a daily crawl does not opt in. See Hypermesh's `docs/model-cache.md`.
+
+### Machine credential authority
+
+AIuditor owns host signing-key bindings, replay protection, renewal/rotation,
+revocation and short-lived contract credentials. Hypermesh attests completed
+owner enrollment and relays proofs; it does not mint tokens. The private SQL
+identity table is isolated by authority, attesting control plane, tenant and
+host. A witness cannot issue credentials. See
+[host machine identity](../hypermesh/docs/host-machine-identity.md) for the wire
+protocol, trust registries, deployment order and remaining dispatcher work.

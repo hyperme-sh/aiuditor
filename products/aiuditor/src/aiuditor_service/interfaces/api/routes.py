@@ -433,6 +433,15 @@ async def _require_enrolled_host(request: Request, tenant_id: uuid.UUID, device_
 @router.post("/connections", response_model=Connection, status_code=status.HTTP_201_CREATED)
 async def create_connection(request: Request, body: ConnectionCreate) -> Connection:
     tenant_id = require_tenant_id(request)
+    plane = "local"
+    if request.headers.get("X-Control-Plane-ID"):
+        from aiuditor_service.machine_identity import actor
+        attested_tenant, plane = actor(request)
+        if attested_tenant != tenant_id:
+            raise HTTPException(403, "Control-plane tenant mismatch")
+    if body.control_plane_id is not None and body.control_plane_id != plane:
+        # The body names the owner; only that plane's attestation may claim it.
+        raise HTTPException(403, "Connection control plane must match the attesting plane")
     store = _store(request)
     if body.kind is ConnectionKind.HOST:
         assert body.device_id is not None
@@ -443,6 +452,7 @@ async def create_connection(request: Request, body: ConnectionCreate) -> Connect
     row = Connection(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
+        control_plane_id=plane,
         kind=body.kind,
         purpose=body.purpose,
         device_id=body.device_id,

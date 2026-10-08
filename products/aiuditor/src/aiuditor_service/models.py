@@ -35,6 +35,8 @@ import controlplane_db.models as _platform_models  # noqa: F401; register FK tar
 class AiuditorConnection(Base):
     """AIuditor connection row. Hash only. Device secret stays on Hypermesh."""
 
+    control_plane_id: Mapped[str] = mapped_column(String(128), nullable=False, server_default="local")
+
     __tablename__ = "aiuditor_connections"
     __table_args__ = (
         Index("ix_aiuditor_connections_tenant", "tenant_id"),
@@ -287,3 +289,15 @@ class AiuditorCandidate(Base):
     soak_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AiuditorMachineIdentity(Base):
+    """Credential authority state, isolated for every attesting control plane."""
+    __tablename__ = "aiuditor_machine_identities"
+    authority_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True)
+    control_plane_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    device_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    state: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
