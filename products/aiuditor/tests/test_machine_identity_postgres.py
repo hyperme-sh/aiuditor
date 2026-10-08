@@ -93,14 +93,14 @@ async def test_binding_rotation_contract_isolation_and_revocation(
             "request_id": str(registration),
             "digest": hashlib.sha256(token.encode()).hexdigest(),
         }
-        assert (await post("introspect", lookup)).json() == {"active": True}
+        assert (await post("introspect", lookup)).json() == {"active": True, "bound": True}
         assert (
             await post(
                 "introspect", lookup, headers={**headers, "X-Control-Plane-ID": "other"}
             )
         ).status_code == 401
         monkeypatch.setenv("AIUDITOR_ID", "another-authority")
-        assert (await post("introspect", lookup)).json() == {"active": False}
+        assert (await post("introspect", lookup)).json() == {"active": False, "bound": False}
         monkeypatch.setenv("AIUDITOR_ID", "local")
         wrong = signed(key)
         wrong.authority_id = "other"

@@ -5,21 +5,24 @@ These host-management tokens never authorize contracts or paid workloads.
 """
 
 from __future__ import annotations
+
 import hashlib
 import hmac
 import json
 import os
 import uuid
 from contextlib import asynccontextmanager
+
+from controlplane_tenancy.db_session import get_session_maker
+from controlplane_tenancy.tenant_guc import set_current_tenant_id_guc
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
-from controlplane_tenancy.db_session import get_session_maker
-from controlplane_tenancy.tenant_guc import set_current_tenant_id_guc
+
+from aiuditor_service.machine_proof import Proof, access_allowed, issue, verified_proof
 from aiuditor_service.models import AiuditorMachineIdentity
-from aiuditor_service.machine_proof import Proof, issue, access_allowed, verified_proof
 from aiuditor_service.role import require_grant_write, role_from_request
 
 router = APIRouter(prefix="/aiuditor/machine", tags=["machine-identity"])
@@ -175,7 +178,7 @@ async def introspect(request: Request, body: Lookup, response: Response):
             and row.request_id == body.request_id
             and access_allowed(row.state, body.digest)
         )
-    return {"active": active}
+    return {"active": active, "bound": row is not None}
 
 
 class Revoke(BaseModel):
@@ -208,7 +211,8 @@ class ContractProof(Proof):
 async def live_contract(session, tid, plane, device_id, contract_id):
     """Fresh authority: a signed, unexpired contract bound to this live connection."""
     from datetime import UTC, datetime
-    from aiuditor_service.models import AiuditorContract, AiuditorConnection
+
+    from aiuditor_service.models import AiuditorConnection, AiuditorContract
 
     row = await session.scalar(
         select(AiuditorContract)

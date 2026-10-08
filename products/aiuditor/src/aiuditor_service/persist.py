@@ -71,6 +71,7 @@ _BANNED = ("credential", "prompt", "ticket", "messages", "hmac")
 
 _ALLOWED = {
     "connections": {
+        "control_plane_id",
         "id",
         "tenant_id",
         "kind",

@@ -217,3 +217,14 @@ async def test_response_never_echoes_raw_credential(http_client, tenant_headers)
     text = created.text
     assert secret not in text
     assert created.json()["credential_ref"] == credential_ref(secret)
+
+
+async def test_connection_records_authenticated_plane(http_client, tenant_headers, monkeypatch):
+    monkeypatch.setenv("AIUDITOR_CONTROL_PLANE_TOKENS", '{"plane-a":"plane-a-secret"}')
+    headers = {**tenant_headers, "X-Control-Plane-ID": "plane-a", "X-Internal-Token": "plane-a-secret"}
+    body = {"kind": "provider", "purpose": "auditor", "endpoint": "https://llm.example/v1"}
+    result = await http_client.post("/api/v1/aiuditor/connections", headers=headers, json=body)
+    assert result.status_code == 201, result.text
+    assert result.json()["control_plane_id"] == "plane-a"
+    result = await http_client.post("/api/v1/aiuditor/connections", headers={**headers, "X-Internal-Token": "wrong"}, json=body)
+    assert result.status_code == 401

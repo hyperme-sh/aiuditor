@@ -75,6 +75,7 @@ class Connection(BaseModel):
 
     id: uuid.UUID
     tenant_id: uuid.UUID
+    control_plane_id: str = Field(default="local", min_length=1, max_length=128)
     kind: ConnectionKind
     purpose: ConnectionPurpose
     device_id: uuid.UUID | None = None
