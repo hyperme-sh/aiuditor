@@ -48,7 +48,6 @@ PROVIDER_NOT_LEASE = "only a purpose=lease provider connection can be cataloged"
 CONNECTION_NOT_FOUND = "Connection not found"
 CONNECTION_DISABLED = "connection is disabled"
 NO_LIVE_CONNECTION = "no live connection matches this service"
-CHECKOUT_URLS_REQUIRED = "host allocate requires success_url and cancel_url"
 RENTER_REQUIRED = "renter is required"
 PROVIDER_NOT_READY = "provider connection is not ready"
 LEASE_IS_AUDITOR = "auditor tickets are minted; they are not bound as renter leases"
@@ -247,7 +246,6 @@ async def allocate_service(
     signed = sign_contract(contracts, tenant_id, draft.id, signed_by=signed_by, now=clock)
     lease_id = row.lease_id
     purpose = "lease"
-    checkout_url = None
     if service.backend is ServiceBackend.PROVIDER:
         if row.status is not ConnectionStatus.READY:
             row = row.model_copy(update={"status": ConnectionStatus.READY})
@@ -271,10 +269,6 @@ async def allocate_service(
             raise HTTPException(status_code=409, detail=LEASE_IS_AUDITOR)
         purpose = lease.purpose
     else:
-        success = (body.success_url or "").strip()
-        cancel = (body.cancel_url or "").strip()
-        if not success or not cancel:
-            raise HTTPException(status_code=400, detail=CHECKOUT_URLS_REQUIRED)
         kind = (
             "p1_hardware"
             if service.backend is ServiceBackend.HYPERMESH_CLASS
@@ -286,15 +280,12 @@ async def allocate_service(
             device_id=row.device_id,
             reserved_hours=hours,
             contract_id=signed.id,
-            success_url=success,
-            cancel_url=cancel,
             class_id=service.class_id,
             catalog_id=service.catalog_id,
             headers=headers,
         )
         lease_id = offered.lease_id
         purpose = offered.purpose
-        checkout_url = offered.checkout_url
     current = contracts.get(tenant_id, signed.id) or signed
     if current.lease_id is None:
         current = bind_contract(
@@ -313,6 +304,5 @@ async def allocate_service(
         backend=service.backend,
         lease_id=lease_id,
         purpose=purpose,
-        checkout_url=checkout_url,
         exp=current.until,
     )

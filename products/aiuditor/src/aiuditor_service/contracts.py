@@ -173,7 +173,7 @@ def fulfill_checkout_contract(
     *,
     now: datetime | None = None,
 ) -> Contract:
-    """Mint or bind a signed Contract for Stripe checkout / first motion.
+    """Mint or bind a signed Contract for lease checkout / first motion.
 
     Internal only. A named human still uses draft + sign. This path is
     the auto-sign the HMAC ticket waits on.

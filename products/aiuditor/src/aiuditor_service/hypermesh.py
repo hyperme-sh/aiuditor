@@ -184,7 +184,7 @@ class FakeHostLookup:
 
 @dataclass(frozen=True)
 class LeaseView:
-    """Lock fields from GET /leases/{id}. No checkout URL or ticket blob."""
+    """Fields from GET /leases/{id}. No payment detail or ticket blob."""
 
     id: uuid.UUID
     device_id: uuid.UUID | None
@@ -206,12 +206,11 @@ class IssuedGrant:
 
 @dataclass(frozen=True)
 class OfferedLease:
-    """Checkout session for a catalog host row. HMAC stays on Hypermesh."""
+    """Offered lease for a catalog host row. HMAC stays on Hypermesh."""
 
     lease_id: uuid.UUID
     device_id: uuid.UUID
     purpose: str
-    checkout_url: str | None = None
     contract_id: uuid.UUID | None = None
 
 
@@ -251,8 +250,6 @@ class PlaneHop(Protocol):
         device_id: uuid.UUID,
         reserved_hours: int,
         contract_id: uuid.UUID,
-        success_url: str,
-        cancel_url: str,
         class_id: str | None = None,
         catalog_id: str | None = None,
         headers: dict[str, str] | None = None,
@@ -330,8 +327,6 @@ class ClosedPlaneHop:
         device_id: uuid.UUID,
         reserved_hours: int,
         contract_id: uuid.UUID,
-        success_url: str,
-        cancel_url: str,
         class_id: str | None = None,
         catalog_id: str | None = None,
         headers: dict[str, str] | None = None,
@@ -485,8 +480,6 @@ class HttpPlaneHop:
         device_id: uuid.UUID,
         reserved_hours: int,
         contract_id: uuid.UUID,
-        success_url: str,
-        cancel_url: str,
         class_id: str | None = None,
         catalog_id: str | None = None,
         headers: dict[str, str] | None = None,
@@ -496,8 +489,6 @@ class HttpPlaneHop:
             "device_id": str(device_id),
             "reserved_hours": reserved_hours,
             "contract_id": str(contract_id),
-            "success_url": success_url,
-            "cancel_url": cancel_url,
             "purpose": "renter",
         }
         if class_id:
@@ -530,7 +521,6 @@ class HttpPlaneHop:
                 lease_id=uuid.UUID(str(raw_id)),
                 device_id=uuid.UUID(str(raw_device)),
                 purpose=str(body.get("purpose") or "renter"),
-                checkout_url=str(body["checkout_url"]) if body.get("checkout_url") else None,
                 contract_id=uuid.UUID(str(raw_cid)) if raw_cid else None,
             )
         except (KeyError, ValueError, TypeError) as exc:
@@ -795,8 +785,6 @@ class FakePlaneHop:
         device_id: uuid.UUID,
         reserved_hours: int,
         contract_id: uuid.UUID,
-        success_url: str,
-        cancel_url: str,
         class_id: str | None = None,
         catalog_id: str | None = None,
         headers: dict[str, str] | None = None,
@@ -821,7 +809,6 @@ class FakePlaneHop:
             lease_id=lease_id,
             device_id=device_id,
             purpose="renter",
-            checkout_url="https://checkout.test/session",
             contract_id=contract_id,
         )
         self.offers.append(
@@ -831,8 +818,6 @@ class FakePlaneHop:
                 "device_id": device_id,
                 "reserved_hours": reserved_hours,
                 "contract_id": contract_id,
-                "success_url": success_url,
-                "cancel_url": cancel_url,
                 "class_id": class_id,
                 "catalog_id": catalog_id,
             }

@@ -764,12 +764,10 @@ class ServiceAllocate(BaseModel):
 
     renter: str = Field(..., min_length=1, max_length=256)
     reserved_hours: int = Field(default=1, ge=1, le=24 * 30)
-    success_url: str | None = Field(default=None, max_length=2048)
-    cancel_url: str | None = Field(default=None, max_length=2048)
 
 
 class ServiceAllocation(BaseModel):
-    """Catalog grant. Provider hop has no HMAC; host checkout mints the ticket."""
+    """Catalog grant. The provider hop has no ticket; a host grant mints one."""
 
     service_id: uuid.UUID
     contract: Contract
@@ -777,7 +775,6 @@ class ServiceAllocation(BaseModel):
     backend: ServiceBackend
     lease_id: uuid.UUID | None = None
     purpose: str = "lease"
-    checkout_url: str | None = None
     exp: datetime | None = None
 
     def to_event_payload(self) -> dict[str, object]:
