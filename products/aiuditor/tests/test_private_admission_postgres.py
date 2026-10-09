@@ -50,7 +50,7 @@ async def plane(async_engine, monkeypatch):
         )
 
 
-async def human(maker, tenant, role="auditor", subject=None):
+async def human(maker, tenant, role="auditor", subject=None, amr=("pwd",)):
     subject = subject or str(uuid.uuid4())
     user_id, role_id, group_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     async with maker() as session:
@@ -77,7 +77,7 @@ async def human(maker, tenant, role="auditor", subject=None):
         )
         await session.commit()
     token = mint_tenant_session_jwt(
-        claims={"sub": subject, "azp": "controlplane-frontend"}, tenant_id=tenant
+        claims={"sub": subject, "azp": "controlplane-frontend", "amr": list(amr)}, tenant_id=tenant
     )
     return {"Authorization": f"Bearer {token}", "X-Tenant-ID": str(tenant)}, user_id
 
@@ -228,7 +228,7 @@ async def test_missing_egress_never_advances_and_changed_scope_never_reuses_appr
 async def test_renter_setup_service_and_model_subjects_cannot_resolve(plane):
     client, maker, tenant, service = plane
     renter, _ = await human(maker, tenant, role="renter")
-    model, _ = await human(maker, tenant, role="auditor", subject="llm")
+    model, _ = await human(maker, tenant, role="auditor", subject="model-runner-42", amr=())
     body = declaration()
     await client.post(INTERNAL, headers=service, json=body)
     path = f"{HUMAN}/{body['admission_id']}/verdict"
@@ -246,3 +246,13 @@ async def test_renter_setup_service_and_model_subjects_cannot_resolve(plane):
             json=decision,
         )
     ).status_code == 401
+
+
+@pytest.mark.parametrize("amr", [[], ["client_credentials"], ["service_account"]])
+async def test_opaque_machine_identity_cannot_use_auditor_membership(plane, amr):
+    client, maker, tenant, service = plane
+    actor, _ = await human(maker, tenant, subject=str(uuid.uuid4()), amr=amr)
+    body = declaration()
+    assert (await client.post(INTERNAL, headers=service, json=body)).status_code == 200
+    assert (await client.post(f"{HUMAN}/{body['admission_id']}/verdict", headers=actor,
+        json={"verdict": "deny", "reason": "reviewed"})).status_code == 403

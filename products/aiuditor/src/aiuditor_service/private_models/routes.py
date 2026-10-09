@@ -17,6 +17,7 @@ from aiuditor_service.private_models.contracts import (
 from aiuditor_service.role import require_grant_write, role_from_request
 from aiuditor_service.tenant import bearer_secret, require_tenant_id
 from controlplane_identity.security.tenant_session_jwt import (
+    is_smoke_session,
     try_decode_tenant_session_jwt,
 )
 from controlplane_tenancy.db_session import get_db_session, get_session_maker
@@ -49,16 +50,22 @@ def human(request):
     if (
         not claims
         or claims.get("azp") != "controlplane-frontend"
-        or claims.get("hypermesh_smoke") is True
+        or is_smoke_session(claims)
     ):
         raise HTTPException(401, "Named human tenant session required")
+    # AMR is copied from verified IdP claims into the signed tenant session.
+    # Missing or machine-only authentication evidence cannot grant human authority.
+    methods = claims.get("amr")
+    if not isinstance(methods, list) or not any(
+        isinstance(method, str) and method in {"pwd", "otp", "mfa", "webauthn", "hwk"}
+        for method in methods
+    ):
+        raise HTTPException(403, "Verified interactive authentication is required")
     subject = claims.get("sub")
     if (
         not isinstance(subject, str)
         or not subject.strip()
         or len(subject) > 512
-        or subject.lower()
-        in {"llm", "model", "assistant", "gpt", "claude", "ai", "bot"}
     ):
         raise HTTPException(403, "A named human must resolve admission")
     tenant = require_tenant_id(request)
