@@ -29,6 +29,7 @@ from aiuditor_service.hypermesh import (
 )
 from aiuditor_service.interfaces.api.routes import router as aiuditor_router
 from aiuditor_service.machine_identity import router as machine_router
+from aiuditor_service.private_models.routes import router as private_model_router
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
 from aiuditor_service.package import (
     resolve_hydrate_tenant,
@@ -231,6 +232,7 @@ def create_app(
     app.include_router(version_router)
     app.include_router(machine_router, prefix="/api/v1")
     app.include_router(aiuditor_router, prefix="/api/v1")
+    app.include_router(private_model_router, prefix="/api/v1")
     add_optional_service_cors(app, env_var="AIUDITOR_SERVICE_CORS_ORIGINS")
     logger.info(
         "AIuditor: health + connections + inbox + policy + contracts + catalog + optional CORS"

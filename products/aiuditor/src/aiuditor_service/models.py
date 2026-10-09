@@ -301,3 +301,25 @@ class AiuditorMachineIdentity(Base):
     request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     state: Mapped[dict] = mapped_column(JSONB, nullable=False)
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class AiuditorPrivateModelAdmission(Base):
+    """Private scoped verdicts never enter the public catalog promotion path."""
+
+    __tablename__ = "aiuditor_private_model_admissions"
+    __table_args__ = (
+        Index("ix_aud_private_admission_tenant", "tenant_id", "created_at"),
+        CheckConstraint("status IN ('sandboxing', 'hold', 'failed', 'allowed', 'denied', 'revoked')", name="ck_aud_private_admission_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    owner_sub: Mapped[str] = mapped_column(String(512), nullable=False)
+    target: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    target_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    lab_job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    lab_device_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    evidence: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    audit: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -121,3 +121,9 @@ identity table is isolated by authority, attesting control plane, tenant and
 host. A witness cannot issue credentials. See
 [host machine identity](../hypermesh/docs/host-machine-identity.md) for the wire
 protocol, trust registries, deployment order and remaining dispatcher work.
+
+Private-model human decisions require a signed tenant session with a verified IdP
+`amr` entry (`pwd`, `otp`, `mfa`, `webauthn`, or `hwk`) and current auditor/admin
+membership. Configure the IdP to emit authentication-method evidence; missing AMR,
+service credentials, and smoke sessions fail closed. Subject names never establish
+human authority.
