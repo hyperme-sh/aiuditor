@@ -19,6 +19,10 @@ class AiuditorServiceDbMiddleware(BaseHTTPMiddleware):
     """Sets app.current_tenant_id from the bound credential for RLS."""
 
     async def dispatch(self, request: Request, call_next):
+        # These purpose-authenticated routes own their transaction/GUC. Their
+        # service credential cannot authenticate any other AIuditor endpoint.
+        if request.url.path.startswith("/api/v1/aiuditor/internal/private-model-admissions"):
+            return await call_next(request)
         maker = get_session_maker()
         async with maker() as session:
             token = set_db_session(session)
