@@ -50,7 +50,7 @@ async def plane(async_engine, monkeypatch):
         )
 
 
-async def human(maker, tenant, role="auditor", subject=None, amr=("pwd",)):
+async def human(maker, tenant, role="auditor", subject=None, amr=("pwd",), account_type="human"):
     subject = subject or str(uuid.uuid4())
     user_id, role_id, group_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     async with maker() as session:
@@ -77,7 +77,7 @@ async def human(maker, tenant, role="auditor", subject=None, amr=("pwd",)):
         )
         await session.commit()
     token = mint_tenant_session_jwt(
-        claims={"sub": subject, "azp": "controlplane-frontend", "amr": list(amr)}, tenant_id=tenant
+        claims={"sub": subject, "azp": "controlplane-frontend", "amr": list(amr), "account_type": account_type}, tenant_id=tenant
     )
     return {"Authorization": f"Bearer {token}", "X-Tenant-ID": str(tenant)}, user_id
 
@@ -280,3 +280,11 @@ async def test_direct_role_assignment_authorizes_without_a_group_and_is_rechecke
         user.role_id = None
         await session.commit()
     assert (await client.post(f"{HUMAN}/{body['admission_id']}/revoke", headers=actor)).status_code == 403
+
+
+@pytest.mark.parametrize("account_type", [None, "service"])
+async def test_password_authenticated_nonhuman_cannot_resolve_admission(plane, account_type):
+    client, maker, tenant, _ = plane
+    actor, _ = await human(maker, tenant, account_type=account_type)
+    response = await client.get("/api/v1/aiuditor/private-model-admissions", headers=actor)
+    assert response.status_code == 403

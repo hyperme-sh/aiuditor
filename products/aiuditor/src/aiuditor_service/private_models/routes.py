@@ -55,6 +55,8 @@ def human(request):
         raise HTTPException(401, "Named human tenant session required")
     # AMR is copied from verified IdP claims into the signed tenant session.
     # Missing or machine-only authentication evidence cannot grant human authority.
+    if claims.get("account_type") != "human":
+        raise HTTPException(403, "Verified human account binding is required")
     methods = claims.get("amr")
     if not isinstance(methods, list) or not any(
         isinstance(method, str) and method in {"pwd", "otp", "mfa", "webauthn", "hwk"}
