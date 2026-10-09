@@ -16,6 +16,7 @@ from aiuditor_service.private_models.contracts import (
 )
 from aiuditor_service.role import require_grant_write, role_from_request
 from aiuditor_service.tenant import bearer_secret, require_tenant_id
+from controlplane_db.models import Role, Tenant, User
 from controlplane_identity.security.tenant_session_jwt import (
     is_smoke_session,
     try_decode_tenant_session_jwt,
@@ -24,7 +25,7 @@ from controlplane_tenancy.db_session import get_db_session, get_session_maker
 from controlplane_tenancy.tenant_guc import set_current_tenant_id_guc
 from controlplane_tenancy.tenant_membership import get_active_tenant_role_member
 from fastapi import APIRouter, HTTPException, Request, Response
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
 router = APIRouter(prefix="/aiuditor", tags=["private-model-admission"])
@@ -108,6 +109,15 @@ async def transaction(tenant, response):
 
 
 async def approver(session, tenant, subject):
+    direct = await session.scalar(select(User.id).join(Tenant, Tenant.id == User.tenant_id)
+        .join(Role, Role.id == User.role_id).where(
+            User.tenant_id == tenant, User.keycloak_sub == subject,
+            User.deleted_at.is_(None), User.is_active.is_(True), Tenant.is_active.is_(True),
+            or_(Role.tenant_id == tenant, Role.tenant_id.is_(None)),
+            func.lower(Role.name).in_(("auditor", "admin")),
+        ).limit(1))
+    if direct is not None:
+        return
     for role in ("auditor", "admin"):
         if (
             await get_active_tenant_role_member(

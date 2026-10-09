@@ -256,3 +256,27 @@ async def test_opaque_machine_identity_cannot_use_auditor_membership(plane, amr)
     assert (await client.post(INTERNAL, headers=service, json=body)).status_code == 200
     assert (await client.post(f"{HUMAN}/{body['admission_id']}/verdict", headers=actor,
         json={"verdict": "deny", "reason": "reviewed"})).status_code == 403
+
+
+@pytest.mark.parametrize("role", ["admin", "auditor"])
+async def test_direct_role_assignment_authorizes_without_a_group_and_is_rechecked(plane, role):
+    client, maker, tenant, service = plane
+    actor, user_id = await human(maker, tenant)
+    async with maker() as session:
+        await session.execute(delete(UserGroupMembership).where(UserGroupMembership.user_id == user_id))
+        direct = Role(id=uuid.uuid4(), tenant_id=tenant, name=role, permissions=[])
+        session.add(direct)
+        await session.flush()
+        user = await session.get(User, user_id)
+        user.role_id = direct.id
+        await session.commit()
+    body = declaration()
+    await client.post(INTERNAL, headers=service, json=body)
+    await client.post(f"{INTERNAL}/{body['admission_id']}/sandbox", headers=service, json=evidence(body))
+    path = f"{HUMAN}/{body['admission_id']}/verdict"
+    assert (await client.post(path, headers=actor, json={"verdict": "allow", "reason": "reviewed"})).status_code == 200
+    async with maker() as session:
+        user = await session.get(User, user_id)
+        user.role_id = None
+        await session.commit()
+    assert (await client.post(f"{HUMAN}/{body['admission_id']}/revoke", headers=actor)).status_code == 403
