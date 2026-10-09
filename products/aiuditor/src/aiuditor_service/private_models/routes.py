@@ -19,7 +19,7 @@ from aiuditor_service.tenant import bearer_secret, require_tenant_id
 from controlplane_identity.security.tenant_session_jwt import (
     try_decode_tenant_session_jwt,
 )
-from controlplane_tenancy.db_session import get_session_maker
+from controlplane_tenancy.db_session import get_db_session, get_session_maker
 from controlplane_tenancy.tenant_guc import set_current_tenant_id_guc
 from controlplane_tenancy.tenant_membership import get_active_tenant_role_member
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -70,6 +70,23 @@ def human(request):
 @asynccontextmanager
 async def transaction(tenant, response):
     response.headers["Cache-Control"] = "no-store"
+    try:
+        request_session = get_db_session()
+    except RuntimeError:
+        request_session = None
+    if request_session is not None:
+        try:
+            await set_current_tenant_id_guc(request_session, tenant)
+            yield request_session
+            await request_session.commit()
+            await set_current_tenant_id_guc(request_session, tenant)
+        except SQLAlchemyError:
+            await request_session.rollback()
+            raise HTTPException(503, "Private admission state unavailable") from None
+        except BaseException:
+            await request_session.rollback()
+            raise
+        return
     async with get_session_maker()() as session:
         try:
             await set_current_tenant_id_guc(session, tenant)
@@ -78,7 +95,7 @@ async def transaction(tenant, response):
         except SQLAlchemyError:
             await session.rollback()
             raise HTTPException(503, "Private admission state unavailable") from None
-        except Exception:
+        except BaseException:
             await session.rollback()
             raise
 
