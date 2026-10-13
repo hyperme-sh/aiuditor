@@ -389,11 +389,11 @@ def _sql_models():
 def _sql_hydrate_tenant_gucs(session) -> list[str]:
     from sqlalchemy import select
 
-    from controlplane_db.models import Tenant
+    from controlplane_tenancy.tenant_registry import tenant_ids_sync
 
     gucs = [""]
     try:
-        for tenant_id in session.execute(select(Tenant.id)).scalars().all():
+        for tenant_id in tenant_ids_sync(session):
             value = str(tenant_id)
             if value not in gucs:
                 gucs.append(value)
