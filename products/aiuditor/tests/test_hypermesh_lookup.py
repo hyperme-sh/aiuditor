@@ -338,9 +338,11 @@ async def test_http_plane_offers_lease_without_keeping_ticket(monkeypatch):
         device_id=DEVICE,
         reserved_hours=2,
         contract_id=contract_id,
+        contract_meters=["token_digest_count"],
         class_id="agx-large",
         headers={"Authorization": "Bearer session"},
     )
+    assert captured["json"]["contract_meters"] == ["token_digest_count"]
     assert offered.lease_id == lease_id
     assert offered.purpose == "renter"
     assert offered.billing_record_id == billing_id
@@ -443,3 +445,23 @@ async def test_lab_soak_and_promote_omit_token_when_unset(monkeypatch):
         admission_id=uuid.uuid4(),
     )
     assert "X-Internal-Token" not in promote_captured["headers"]
+
+
+@pytest.mark.asyncio
+async def test_checkout_renter_comes_from_owner_not_service_subject(monkeypatch):
+    import httpx
+    renter = uuid.uuid4()
+    calls = []
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def get(self, url, headers):
+            calls.append((url, headers))
+            return httpx.Response(200, request=httpx.Request('GET',url), json={'tenant_id':str(TENANT),'renter_user_id':str(renter)})
+    monkeypatch.setattr(httpx, 'AsyncClient', Client)
+    resolved = await HttpPlaneHop('http://hm.example').checkout_renter(TENANT, subject='apikey:opaque', headers={'Authorization':'Bearer verified'})
+    assert resolved == renter
+    assert calls[0][0].endswith('/checkout-principal')
+    assert calls[0][1]['Authorization'] == 'Bearer verified'
+    assert calls[0][1]['X-Tenant-ID'] == str(TENANT)

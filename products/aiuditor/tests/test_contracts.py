@@ -482,3 +482,25 @@ async def test_http_fulfillment_reply_can_be_retried_without_duplicate_binding(h
     assert retry.json() == first.json()
     changed = await http_client.post('/api/v1/aiuditor/contracts/fulfill', headers=internal_headers, json={**body, 'host_subject':'attacker'})
     assert changed.status_code == 409
+
+
+def test_public_draft_cannot_claim_a_lease_identifier():
+    from aiuditor_service.domain.models import ContractCreate
+    store = ContractStore()
+    with pytest.raises(HTTPException) as refused:
+        put_contract(store, uuid.uuid4(), _draft(lease_id=uuid.uuid4()))
+    assert refused.value.status_code == 400
+    assert store.contracts == {}
+
+
+def test_named_contract_cannot_authorize_a_longer_reserved_window():
+    from datetime import timedelta
+    store = ContractStore()
+    tenant = uuid.uuid4()
+    now = datetime.now(UTC)
+    row = sign_contract(store, tenant, put_contract(store, tenant, _draft(until=now+timedelta(hours=1))).id, signed_by='human')
+    with pytest.raises(HTTPException) as refused:
+        fulfill_checkout_contract(store, tenant, ContractFulfill(lease_id=uuid.uuid4(), contract_id=row.id,
+            renter_subject='renter@example.com', host_subject='agx-host', reserved_hours=720))
+    assert refused.value.status_code == 409
+    assert store.get(tenant, row.id).lease_id is None

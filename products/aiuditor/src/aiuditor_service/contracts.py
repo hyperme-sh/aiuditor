@@ -85,7 +85,13 @@ def _meters(raw: list[str]) -> list[str]:
     return cleaned
 
 
-def put_contract(
+def put_contract(store, tenant_id, body, *, now=None) -> Contract:
+    if body.lease_id is not None:
+        raise HTTPException(400, "Drafts cannot claim lease IDs; use signed owner binding")
+    return _put_contract(store, tenant_id, body, now=now)
+
+
+def _put_contract(
     store: ContractStore,
     tenant_id: uuid.UUID,
     body: ContractCreate,
@@ -182,6 +188,10 @@ def _checkout_matches(row: Contract, body: ContractFulfill, clock: datetime) -> 
         raise HTTPException(409, CONTRACT_NOT_SIGNED)
     if row.until <= clock:
         raise HTTPException(409, CONTRACT_UNTIL_PAST)
+    # Allow bounded checkout/clock skew; ticket expiry still uses the exact
+    # signed deadline, so this tolerance grants no extra access time.
+    if row.until < clock + timedelta(hours=body.reserved_hours) - timedelta(minutes=5):
+        raise HTTPException(409, "Signed authority does not cover the reserved lease window")
 
 
 def fulfill_checkout_contract(
@@ -228,7 +238,7 @@ def _fulfill_checkout_contract(
         )
     hours = max(1, min(int(body.reserved_hours), 24 * 30))
     until = clock + timedelta(hours=hours)
-    row = put_contract(
+    row = _put_contract(
         store,
         tenant_id,
         ContractCreate(
