@@ -146,6 +146,13 @@ def sign_contract(
 
 
 def bind_contract(
+    store: ContractStore, tenant_id: uuid.UUID, contract_id: uuid.UUID, body: ContractBind
+) -> Contract:
+    with store.persist.checkout_contract_scope(tenant_id, body.lease_id, contract_id):
+        return _bind_contract(store, tenant_id, contract_id, body)
+
+
+def _bind_contract(
     store: ContractStore,
     tenant_id: uuid.UUID,
     contract_id: uuid.UUID,
@@ -166,7 +173,28 @@ def bind_contract(
     return updated
 
 
+def _checkout_matches(row: Contract, body: ContractFulfill, clock: datetime) -> None:
+    wanted = {("renter", body.renter_subject), ("host", body.host_subject)}
+    actual = {(party.role, party.subject) for party in row.parties if party.role in {"renter", "host"}}
+    if wanted != actual or set(row.meters) != set(_meters(body.meters)) or row.rail != SPINE_RAIL:
+        raise HTTPException(409, "Checkout contract does not match lease authority")
+    if row.status is not ContractStatus.SIGNED:
+        raise HTTPException(409, CONTRACT_NOT_SIGNED)
+    if row.until <= clock:
+        raise HTTPException(409, CONTRACT_UNTIL_PAST)
+
+
 def fulfill_checkout_contract(
+    store: ContractStore, tenant_id: uuid.UUID, body: ContractFulfill,
+    *, now: datetime | None = None,
+) -> Contract:
+    # The owner commits before the HTTP route acknowledges. A lost reply can
+    # replay by tenant/lease without duplicate grants or cross-tenant SQL.
+    with store.persist.checkout_contract_scope(tenant_id, body.lease_id, body.contract_id):
+        return _fulfill_checkout_contract(store, tenant_id, body, now=now)
+
+
+def _fulfill_checkout_contract(
     store: ContractStore,
     tenant_id: uuid.UUID,
     body: ContractFulfill,
@@ -180,8 +208,22 @@ def fulfill_checkout_contract(
     """
 
     clock = _now(now)
+    existing = store.lease_for(tenant_id, body.lease_id)
+    if existing is not None:
+        if body.contract_id is not None and body.contract_id != existing.id:
+            raise HTTPException(409, LEASE_ALREADY_BOUND)
+        _checkout_matches(existing, body, clock)
+        if existing.signed_by == CHECKOUT_SIGNER and existing.until - existing.created_at != timedelta(hours=body.reserved_hours):
+            raise HTTPException(409, "Checkout replay changes reserved duration")
+        if existing.signed_by == CHECKOUT_SIGNER and (existing.connection_id != body.connection_id or existing.dispute_tip != _safe_text(body.dispute_tip)):
+            raise HTTPException(409, "Checkout replay changes contract terms")
+        return existing
     if body.contract_id is not None:
-        return bind_contract(
+        named = store.get(tenant_id, body.contract_id)
+        if named is None:
+            raise HTTPException(404, CONTRACT_NOT_FOUND)
+        _checkout_matches(named, body, clock)
+        return _bind_contract(
             store, tenant_id, body.contract_id, ContractBind(lease_id=body.lease_id)
         )
     hours = max(1, min(int(body.reserved_hours), 24 * 30))

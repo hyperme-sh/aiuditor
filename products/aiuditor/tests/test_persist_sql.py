@@ -258,3 +258,65 @@ def test_connection_plane_survives_reload(migrated_postgres):
     writer.connection_store.put(row)
     reader = new_stores(SqlPersistSession.from_url(migrated_postgres))
     assert reader.connection_store.get(tenant, row.id).control_plane_id == "plane-a"
+
+
+def test_checkout_owner_concurrent_replay_and_restart(migrated_postgres):
+    from concurrent.futures import ThreadPoolExecutor
+    from aiuditor_service.contracts import fulfill_checkout_contract
+    from aiuditor_service.domain.models import ContractFulfill
+    from aiuditor_service.store import ContractStore
+    tenant = uuid.uuid4()
+    _plant_tenant(migrated_postgres, tenant)
+    body = ContractFulfill(lease_id=uuid.uuid4(), renter_subject='renter', host_subject='host')
+    def run(_):
+        store = ContractStore(persist=SqlPersistSession.from_url(migrated_postgres))
+        return fulfill_checkout_contract(store, tenant, body).id
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        ids = list(pool.map(run, range(6)))
+    assert len(set(ids)) == 1
+    assert run(None) == ids[0]
+    store = ContractStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    assert len(store.list_for(tenant)) == 1
+
+
+def test_checkout_owner_sign_failure_rolls_back_draft(migrated_postgres, monkeypatch):
+    from aiuditor_service import contracts
+    from aiuditor_service.domain.models import ContractFulfill
+    from aiuditor_service.store import ContractStore
+    tenant = uuid.uuid4()
+    _plant_tenant(migrated_postgres, tenant)
+    body = ContractFulfill(lease_id=uuid.uuid4(), renter_subject='renter', host_subject='host')
+    def fail(*args, **kwargs):
+        raise RuntimeError('sign failed')
+    store = ContractStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    monkeypatch.setattr(contracts, 'sign_contract', fail)
+    with pytest.raises(RuntimeError):
+        contracts.fulfill_checkout_contract(store, tenant, body)
+    assert store.list_for(tenant) == []
+
+
+def test_named_owner_contract_can_only_bind_one_concurrent_lease(migrated_postgres):
+    from concurrent.futures import ThreadPoolExecutor
+    from fastapi import HTTPException
+    from aiuditor_service.contracts import fulfill_checkout_contract
+    from aiuditor_service.domain.models import ContractFulfill
+    from aiuditor_service.store import ContractStore
+    tenant = uuid.uuid4()
+    _plant_tenant(migrated_postgres, tenant)
+    seed = ContractStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    signed = _signed_contract(tenant)
+    seed.put(signed)
+    def run(_):
+        store = ContractStore(persist=SqlPersistSession.from_url(migrated_postgres))
+        body = ContractFulfill(lease_id=uuid.uuid4(), contract_id=signed.id,
+            renter_subject='renter@example.com', host_subject='agx-host')
+        try:
+            return fulfill_checkout_contract(store, tenant, body).lease_id
+        except HTTPException as exc:
+            assert exc.status_code == 409
+            return None
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(run, range(4)))
+    successful = [r for r in results if r is not None]
+    assert len(successful) == 1
+    assert seed.get(tenant, signed.id).lease_id == successful[0]

@@ -438,3 +438,47 @@ def test_llm_cannot_sign():
     with pytest.raises(HTTPException) as exc:
         require_contract_signer(Request(scope))
     assert exc.value.detail == LLM_NEVER_RESOLVES
+
+
+def test_checkout_replay_reuses_owner_contract_and_refuses_changed_authority():
+    store = ContractStore()
+    tenant = uuid.uuid4()
+    body = ContractFulfill(lease_id=uuid.uuid4(), renter_subject='renter', host_subject='host')
+    first = fulfill_checkout_contract(store, tenant, body)
+    assert fulfill_checkout_contract(store, tenant, body).id == first.id
+    for change in ({'renter_subject':'other'}, {'host_subject':'other'}, {'reserved_hours':2},
+                   {'meters':['token_digest_count']}, {'dispute_tip':'changed'},
+                   {'connection_id':uuid.uuid4()}, {'contract_id':uuid.uuid4()}):
+        with pytest.raises(HTTPException) as refused:
+            fulfill_checkout_contract(store, tenant, body.model_copy(update=change))
+        assert refused.value.status_code == 409
+    assert len(store.list_for(tenant)) == 1
+    assert fulfill_checkout_contract(store, uuid.uuid4(), body).id != first.id
+
+
+def test_named_checkout_contract_requires_matching_parties_and_live_signature():
+    store = ContractStore()
+    tenant = uuid.uuid4()
+    row = sign_contract(store, tenant, put_contract(store, tenant, _draft()).id, signed_by='human')
+    body = ContractFulfill(lease_id=uuid.uuid4(), contract_id=row.id, renter_subject='attacker', host_subject='agx-host')
+    with pytest.raises(HTTPException):
+        fulfill_checkout_contract(store, tenant, body)
+    assert store.get(tenant, row.id).lease_id is None
+    good = body.model_copy(update={'renter_subject':'renter@example.com'})
+    assert fulfill_checkout_contract(store, tenant, good).id == row.id
+    assert fulfill_checkout_contract(store, tenant, good).id == row.id
+    with pytest.raises(HTTPException):
+        fulfill_checkout_contract(store, tenant, good, now=datetime(2027, 1, 1, tzinfo=UTC))
+
+
+@pytest.mark.asyncio
+async def test_http_fulfillment_reply_can_be_retried_without_duplicate_binding(http_client, tenant_a, internal_token):
+    internal_headers = {"X-Tenant-ID": str(tenant_a), "X-Internal-Token": internal_token}
+    body = {'lease_id': str(uuid.uuid4()), 'renter_subject': 'renter', 'host_subject': 'host'}
+    first = await http_client.post('/api/v1/aiuditor/contracts/fulfill', headers=internal_headers, json=body)
+    assert first.status_code == 201, first.text
+    retry = await http_client.post('/api/v1/aiuditor/contracts/fulfill', headers=internal_headers, json=body)
+    assert retry.status_code == 201, retry.text
+    assert retry.json() == first.json()
+    changed = await http_client.post('/api/v1/aiuditor/contracts/fulfill', headers=internal_headers, json={**body, 'host_subject':'attacker'})
+    assert changed.status_code == 409
