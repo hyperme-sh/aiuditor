@@ -78,6 +78,7 @@ async def test_p1_allocate_picks_matching_host_and_returns_usdc_payment(
     assert uuid.UUID(body["billing_record_id"])
     assert body["payment_amount_atoms"] == plane_hop.offer_amount_atoms
     assert body["payment_test_credit_available"] is False
+    assert {p["subject"] for p in body["contract"]["parties"] if p["role"] == "renter"} == {"11111111-1111-1111-1111-111111111111"}
     assert body["contract"]["status"] == "signed"
     assert body["contract"]["lease_id"] == body["lease_id"]
     assert body["contract"]["connection_id"] == host["id"]
@@ -324,3 +325,18 @@ async def test_missing_service_allocate_is_404(http_client, tenant_headers):
         json={"renter": "acme-renter"},
     )
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_catalog_propagates_authenticated_renter_and_custom_meters(http_client, tenant_headers, host_lookup, plane_hop, tenant_a):
+    host_lookup.enroll(FYBER_AGX_DEVICE_ID, tenant_id=tenant_a, class_id='agx-large')
+    await _lease_host(http_client, tenant_headers, FYBER_AGX_DEVICE_ID)
+    created = await http_client.post('/api/v1/aiuditor/catalog', headers=tenant_headers,
+        json={'title':'Custom metering', 'backend':'hypermesh_class', 'class_id':'agx-large', 'meters':['token_digest_count']})
+    assert created.status_code == 201
+    response = await http_client.post(f"/api/v1/aiuditor/catalog/{created.json()['id']}/allocate",
+        headers=tenant_headers, json={'renter':'untrusted-display-name'})
+    assert response.status_code == 201, response.text
+    contract = response.json()['contract']
+    assert {p['subject'] for p in contract['parties'] if p['role']=='renter'} == {'11111111-1111-1111-1111-111111111111'}
+    assert plane_hop.offers[0]['contract_meters'] == contract['meters'] == ['token_digest_count']

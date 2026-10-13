@@ -274,6 +274,8 @@ class PersistSession(Protocol):
 
     def program_bootstrap_scope(self, tenant_id: uuid.UUID): ...
 
+    def checkout_contract_scope(self, tenant_id: uuid.UUID, lease_id: uuid.UUID, contract_id: uuid.UUID | None): ...
+
     def delete(self, table: str, tenant_id: uuid.UUID, key: object) -> None: ...
 
     def snapshot(self) -> dict[str, Any]: ...
@@ -315,6 +317,17 @@ class MemoryPersistSession:
         """In-memory writes have no SQL transaction. The crawl still isolates errors."""
 
         yield
+
+    @contextmanager
+    def checkout_contract_scope(self, tenant_id, lease_id, contract_id):
+        # Memory mode is the synchronous event-loop test stand-in.
+        import copy
+        previous = copy.deepcopy(self.rows.get("contracts", {}))
+        try:
+            yield
+        except Exception:
+            self.rows["contracts"] = previous
+            raise
 
     @contextmanager
     def program_bootstrap_scope(self, tenant_id: uuid.UUID):
@@ -501,6 +514,19 @@ class SqlPersistSession:
             )
             yield
 
+    @contextmanager
+    def checkout_contract_scope(self, tenant_id, lease_id, contract_id):
+        """Owner transaction serializes lease replay and named-contract binding."""
+        from sqlalchemy import text
+        keys = [f"aiuditor-checkout-lease:{tenant_id}:{lease_id}"]
+        if contract_id is not None:
+            keys.append(f"aiuditor-checkout-contract:{tenant_id}:{contract_id}")
+        with self.candidate_scope():
+            session = _SCOPE.get()
+            for key in sorted(keys):
+                session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key})
+            yield
+
     def _apply(
         self,
         session,
@@ -544,6 +570,13 @@ class SqlPersistSession:
 
         model = _sql_models()[table]
         memory = MemoryPersistSession()
+        scoped = _SCOPE.get()
+        if table == "contracts" and scoped is not None:
+            scoped.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(tenant_id)})
+            rows = scoped.execute(select(model).where(model.tenant_id == tenant_id)).scalars().all()
+            for row in rows:
+                memory.upsert(table, row.tenant_id, row.id, {c.key: getattr(row, c.key) for c in row.__table__.columns})
+            return memory.load_rows(table, tenant_id)
         with self._session_factory() as session:
             session.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, true)"),

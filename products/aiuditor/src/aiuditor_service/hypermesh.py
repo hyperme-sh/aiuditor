@@ -229,6 +229,8 @@ def _optional_int(raw: object) -> int | None:
 
 
 class PlaneHop(Protocol):
+    async def checkout_renter(self, tenant_id: uuid.UUID, *, subject: str, headers: dict[str, str] | None = None) -> uuid.UUID: ...
+
     async def get_lease(
         self,
         tenant_id: uuid.UUID,
@@ -264,6 +266,7 @@ class PlaneHop(Protocol):
         device_id: uuid.UUID,
         reserved_hours: int,
         contract_id: uuid.UUID,
+        contract_meters: list[str] | None = None,
         class_id: str | None = None,
         catalog_id: str | None = None,
         headers: dict[str, str] | None = None,
@@ -303,6 +306,9 @@ class PlaneHop(Protocol):
 
 
 class ClosedPlaneHop:
+    async def checkout_renter(self, tenant_id, *, subject, headers=None):
+        raise HostLookupUnavailable(PLANE_HOP_REQUIRED)
+
     async def get_lease(
         self,
         tenant_id: uuid.UUID,
@@ -341,6 +347,7 @@ class ClosedPlaneHop:
         device_id: uuid.UUID,
         reserved_hours: int,
         contract_id: uuid.UUID,
+        contract_meters: list[str] | None = None,
         class_id: str | None = None,
         catalog_id: str | None = None,
         headers: dict[str, str] | None = None,
@@ -395,6 +402,20 @@ class HttpPlaneHop:
         hop["X-Tenant-ID"] = str(tenant_id)
         hop.setdefault(ROLE_HEADER, self._role)
         return hop
+
+    async def checkout_renter(self, tenant_id, *, subject, headers=None):
+        # Hypermesh owns service-key-to-renter bindings. The authenticated
+        # forwarded credential, never this caller's subject/body, selects it.
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(f"{self._base}/api/v1/hypermesh/checkout-principal", headers=self._hop(tenant_id, headers))
+            response.raise_for_status()
+            body = response.json()
+            if uuid.UUID(body["tenant_id"]) != tenant_id:
+                raise ValueError("Owner tenant mismatch")
+            return uuid.UUID(body["renter_user_id"])
+        except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError):
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from None
 
     async def get_lease(
         self,
@@ -494,6 +515,7 @@ class HttpPlaneHop:
         device_id: uuid.UUID,
         reserved_hours: int,
         contract_id: uuid.UUID,
+        contract_meters: list[str] | None = None,
         class_id: str | None = None,
         catalog_id: str | None = None,
         headers: dict[str, str] | None = None,
@@ -503,6 +525,7 @@ class HttpPlaneHop:
             "device_id": str(device_id),
             "reserved_hours": reserved_hours,
             "contract_id": str(contract_id),
+            "contract_meters": contract_meters or ["wall_time", "capacity_block"],
             "purpose": "renter",
         }
         if class_id:
@@ -723,6 +746,9 @@ class FakePlaneHop:
         self.leases[lease_id] = view
         return view
 
+    async def checkout_renter(self, tenant_id, *, subject, headers=None):
+        return uuid.UUID(subject.removeprefix("apikey:"))
+
     async def get_lease(
         self,
         tenant_id: uuid.UUID,
@@ -804,6 +830,7 @@ class FakePlaneHop:
         device_id: uuid.UUID,
         reserved_hours: int,
         contract_id: uuid.UUID,
+        contract_meters: list[str] | None = None,
         class_id: str | None = None,
         catalog_id: str | None = None,
         headers: dict[str, str] | None = None,
@@ -840,6 +867,7 @@ class FakePlaneHop:
                 "device_id": device_id,
                 "reserved_hours": reserved_hours,
                 "contract_id": contract_id,
+                "contract_meters": list(contract_meters or ["wall_time", "capacity_block"]),
                 "class_id": class_id,
                 "catalog_id": catalog_id,
             }

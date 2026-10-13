@@ -223,6 +223,8 @@ async def allocate_service(
         raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND)
     _refuse_sibling(service.title, service.class_id, service.catalog_id)
     renter = _safe_text(body.renter)
+    if service.backend is not ServiceBackend.PROVIDER:
+        renter = str(await plane.checkout_renter(tenant_id, subject=signed_by, headers=headers))
     if renter is None:
         raise HTTPException(status_code=400, detail=RENTER_REQUIRED)
     row = await pick_live_connection(connections, service, lookup=lookup, headers=headers)
@@ -281,6 +283,7 @@ async def allocate_service(
             device_id=row.device_id,
             reserved_hours=hours,
             contract_id=signed.id,
+            contract_meters=list(signed.meters),
             class_id=service.class_id,
             catalog_id=service.catalog_id,
             headers=headers,
