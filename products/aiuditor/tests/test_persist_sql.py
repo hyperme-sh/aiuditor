@@ -68,6 +68,7 @@ def migrated_postgres() -> str:
         command.upgrade(Config(str(ini)), "head")
         import controlplane_db.migrations as migrations
         migrations.stamp_baselines(url)
+        migrations.prepare_event_source_index(url)
         migrations.upgrade(url)
         yield url
 
