@@ -44,9 +44,14 @@ def migrated_postgres(postgres_sync_url: str) -> str:
 
     with patch("logging.config.fileConfig"):
         run_alembic_upgrade(postgres_sync_url)
-    from controlplane_db.migrations import stamp_baselines, upgrade
+    from controlplane_db.migrations import (
+        prepare_event_source_index,
+        stamp_baselines,
+        upgrade,
+    )
 
     stamp_baselines(postgres_sync_url)
+    prepare_event_source_index(postgres_sync_url)
     upgrade(postgres_sync_url)
     return postgres_sync_url
 
