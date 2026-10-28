@@ -323,3 +323,17 @@ class AiuditorPrivateModelAdmission(Base):
     evidence: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     audit: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AiuditorCrawlState(Base):
+    """Tenant crawl cadence; no artifact data, tokens or exception text."""
+
+    __tablename__ = "aiuditor_crawl_state"
+    __table_args__ = (CheckConstraint("error_count >= 0", name="ck_aiuditor_crawl_errors"),)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True,
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

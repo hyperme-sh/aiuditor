@@ -127,3 +127,28 @@ Private-model human decisions require a signed tenant session with a verified Id
 membership. Configure the IdP to emit authentication-method evidence; missing AMR,
 service credentials, and smoke sessions fail closed. Subject names never establish
 human authority.
+
+
+### Durable metadata crawl cadence (#204)
+
+Global/operator writers persist `started_at`, `finished_at` and `error_count` in
+AIuditor's tenant-scoped `aiuditor_crawl_state` table. The next crawl waits for
+`AIUDITOR_CRAWL_EVERY` after the last finish; an interrupted run uses its last
+start instead. Restarting a writer waits only the remaining interval. Ordinary
+report errors are counted; an intake exception records one error. Cancellation
+leaves the run unfinished and releases its writer claim. Error text, credentials
+and artifact bodies are not stored in the cadence row.
+
+A PostgreSQL session advisory lock serializes crawls for the same tenant across
+writers, including a run lasting beyond its interval. The crawler pins one
+connection during metadata intake, but holds no database transaction across
+network calls. A process/connection loss releases the lock; committed timestamps
+remain. Run IDs fence completion updates. SQL-disabled tests use a memory
+schedule; witnesses do not acquire a claim or crawl.
+
+Apply the AIuditor owner migration `aiuditor_0056_crawl_state` before rolling out
+the updated writer. Schema failure refuses the crawl and retries after the
+configured interval; it does not silently switch to memory. For rollback,
+disable the crawl or roll back the writer while retaining the cadence table.
+The model/lab ownership boundary and planned AIuditor repository split remain
+unchanged. No live crawl or deployment acceptance is claimed by local tests.

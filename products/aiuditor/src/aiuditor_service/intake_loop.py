@@ -53,9 +53,36 @@ async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> No
     tenant_id = resolve_crawl_tenant()
     if role is AiuditorRole.WITNESS or tenant_id is None:
         return
+    from aiuditor_service.crawl_schedule import resolve_crawl_schedule
+
+    schedule = getattr(app.state, "crawl_schedule", None)
+    if schedule is None:
+        schedule = resolve_crawl_schedule(getattr(app.state, "aiuditor_persist", None))
+        app.state.crawl_schedule = schedule
     every = resolve_crawl_every_s()
     while not stop.is_set():
+        lease = None
         try:
+            acquiring = asyncio.create_task(asyncio.to_thread(schedule.claim_due, tenant_id, every))
+            try:
+                decision = await asyncio.shield(acquiring)
+            except asyncio.CancelledError:
+                # Thread cancellation cannot cancel SQL acquisition. Release any
+                # claim it obtained so shutdown cannot strand a pooled lock.
+                try:
+                    decision = await acquiring
+                    if decision.lease is not None:
+                        await asyncio.shield(asyncio.to_thread(decision.lease.close))
+                except Exception:
+                    logger.warning("aiuditor crawl acquisition cleanup failed")
+                raise
+            if decision.lease is None:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=decision.wait_s)
+                except TimeoutError:
+                    pass
+                continue
+            lease = decision.lease
             plane = getattr(app.state, "plane_hop", None)
             lab_hop = None if isinstance(plane, ClosedPlaneHop) else plane
             source_name = (os.environ.get("AIUDITOR_CRAWL_SOURCE") or "hf").strip().lower()
@@ -78,9 +105,18 @@ async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> No
                 report.dropped_no_fit,
                 report.skipped_fresh,
             )
+            await asyncio.to_thread(lease.finish, len(report.errors))
             _log_crawl_errors(report.errors)
         except Exception as exc:  # noqa: BLE001
             logger.warning("aiuditor crawl failed: %s", exc)
+            if lease is not None:
+                try:
+                    await asyncio.to_thread(lease.finish, 1)
+                except Exception:
+                    logger.warning("aiuditor crawl completion could not be recorded")
+        finally:
+            if lease is not None:
+                await asyncio.shield(asyncio.to_thread(lease.close))
         try:
             await asyncio.wait_for(stop.wait(), timeout=every)
             break
