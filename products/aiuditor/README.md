@@ -152,3 +152,7 @@ configured interval; it does not silently switch to memory. For rollback,
 disable the crawl or roll back the writer while retaining the cadence table.
 The model/lab ownership boundary and planned AIuditor repository split remain
 unchanged. No live crawl or deployment acceptance is claimed by local tests.
+
+Shutdown waits for an in-flight completion worker before closing its connection.
+If advisory unlock or claim acquisition fails, discard the PostgreSQL session
+instead of returning uncertain session-lock ownership to the connection pool.

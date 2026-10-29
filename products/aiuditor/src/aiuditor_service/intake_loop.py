@@ -42,6 +42,25 @@ def _repos_from_env() -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+async def _finish_lease(lease, error_count):
+    """A canceled await must not close a connection still used by its worker."""
+    worker = asyncio.create_task(asyncio.to_thread(lease.finish, error_count))
+    cancelled = None
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+        except Exception:
+            break
+    if cancelled is not None:
+        # Retrieve a worker failure, but preserve shutdown cancellation.
+        if not worker.cancelled() and worker.exception() is not None:
+            logger.warning("aiuditor crawl completion failed during shutdown")
+        raise cancelled
+    worker.result()
+
+
 async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> None:
     """Re-crawl daily on the global or operator writer. Witness returns immediately.
 
@@ -105,13 +124,13 @@ async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> No
                 report.dropped_no_fit,
                 report.skipped_fresh,
             )
-            await asyncio.to_thread(lease.finish, len(report.errors))
+            await _finish_lease(lease, len(report.errors))
             _log_crawl_errors(report.errors)
         except Exception as exc:  # noqa: BLE001
             logger.warning("aiuditor crawl failed: %s", exc)
             if lease is not None:
                 try:
-                    await asyncio.to_thread(lease.finish, 1)
+                    await _finish_lease(lease, 1)
                 except Exception:
                     logger.warning("aiuditor crawl completion could not be recorded")
         finally:

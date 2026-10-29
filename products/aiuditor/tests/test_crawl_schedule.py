@@ -131,3 +131,76 @@ async def test_cancellation_during_claim_acquisition_releases_writer_lock(monkey
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=5)
     assert MARKETPLACE_TENANT_ID not in schedule.active
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intake_error", [False, True])
+async def test_cancellation_joins_completion_before_close(monkeypatch, intake_error):
+    import threading
+    from aiuditor_service.crawl_schedule import CrawlDecision
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    closed = []
+    class Lease:
+        def finish(self, _errors):
+            started.set()
+            assert release.wait(5)
+            finished.set()
+        def close(self):
+            assert finished.is_set(), "connection closed during active completion"
+            closed.append(True)
+    lease = Lease()
+    state = SimpleNamespace(aiuditor_role=AiuditorRole.GLOBAL,
+                            crawl_schedule=SimpleNamespace(claim_due=lambda *_: CrawlDecision(lease)),
+                            plane_hop=None, candidate_store=None, envelope_store=None)
+    async def intake(**_):
+        if intake_error:
+            raise RuntimeError("intake failed")
+        return IntakeReport(0, 0, 0, 0, 0)
+    monkeypatch.setattr("aiuditor_service.intake_loop.run_intake", intake)
+    monkeypatch.delenv("AIUDITOR_CRAWL_TENANT_ID", raising=False)
+    task = asyncio.create_task(run_crawl_loop(SimpleNamespace(state=state), stop=asyncio.Event()))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()  # Repeated shutdown cancellation must also retain the worker.
+        await asyncio.sleep(0)
+        assert not task.done() and closed == []
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("failure", ["unlock", "acquisition"])
+def test_uncertain_lock_connection_is_discarded(migrated_postgres, failure):
+    from sqlalchemy import event
+    tenant = uuid.uuid4()
+    _plant_tenant(migrated_postgres, tenant)
+    engine = create_engine(migrated_postgres, pool_size=1, max_overflow=0)
+    schedule = SqlCrawlSchedule(engine)
+    lease = schedule.claim_due(tenant, 0).lease if failure == "unlock" else None
+    def fail_statement(_conn, _cursor, statement, _params, _context, _many):
+        if ((failure == "unlock" and "pg_advisory_unlock" in statement)
+                or (failure == "acquisition" and "INSERT INTO aiuditor_crawl_state" in statement)):
+            raise RuntimeError("statement canceled without disconnect")
+    event.listen(engine, "before_cursor_execute", fail_statement)
+    try:
+        with pytest.raises(RuntimeError, match="statement canceled"):
+            if lease is not None:
+                lease.close()
+            else:
+                schedule.claim_due(tenant, 0)
+    finally:
+        event.remove(engine, "before_cursor_execute", fail_statement)
+    # If the old backend returned to the pool, the lock is still held/reentrant.
+    # An independent engine proves no abandoned session retains the tenant lock.
+    independent = create_engine(migrated_postgres)
+    try:
+        recovered = SqlCrawlSchedule(independent).claim_due(tenant, 0)
+        assert recovered.lease is not None
+        recovered.lease.close()
+    finally:
+        independent.dispose()
+        engine.dispose()

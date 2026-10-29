@@ -93,10 +93,11 @@ class SqlCrawlSchedule:
                 return CrawlDecision(None, wait)
             return CrawlDecision(lease)
         except BaseException:
+            # A failed acquisition/commit can leave lock ownership uncertain.
+            # Discard the physical session; rollback alone cannot unlock it.
             try:
-                if locked:
-                    with connection.begin():
-                        connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+                if not connection.closed:
+                    connection.invalidate()
             finally:
                 connection.close()
             raise
@@ -122,6 +123,11 @@ class _SqlLease:
         try:
             with self.connection.begin():
                 self.connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": self.key})
+        except BaseException:
+            # A canceled statement can leave a healthy backend holding the
+            # session lock. Never return that backend to the shared pool.
+            self.connection.invalidate()
+            raise
         finally:
             self.connection.close()
 
