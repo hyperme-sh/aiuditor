@@ -42,9 +42,8 @@ def _repos_from_env() -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
-async def _finish_lease(lease, error_count):
-    """A canceled await must not close a connection still used by its worker."""
-    worker = asyncio.create_task(asyncio.to_thread(lease.finish, error_count))
+async def _join_worker(worker):
+    """Join a thread task through repeated cancellation; report cancellation later."""
     cancelled = None
     while not worker.done():
         try:
@@ -53,12 +52,17 @@ async def _finish_lease(lease, error_count):
             cancelled = exc
         except Exception:
             break
+    return cancelled
+
+
+async def _run_worker(function, *args):
+    worker = asyncio.create_task(asyncio.to_thread(function, *args))
+    cancelled = await _join_worker(worker)
     if cancelled is not None:
-        # Retrieve a worker failure, but preserve shutdown cancellation.
         if not worker.cancelled() and worker.exception() is not None:
-            logger.warning("aiuditor crawl completion failed during shutdown")
+            logger.warning("aiuditor crawl worker failed during shutdown")
         raise cancelled
-    worker.result()
+    return worker.result()
 
 
 async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> None:
@@ -83,18 +87,24 @@ async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> No
         lease = None
         try:
             acquiring = asyncio.create_task(asyncio.to_thread(schedule.claim_due, tenant_id, every))
+            cancelled = await _join_worker(acquiring)
             try:
-                decision = await asyncio.shield(acquiring)
-            except asyncio.CancelledError:
-                # Thread cancellation cannot cancel SQL acquisition. Release any
-                # claim it obtained so shutdown cannot strand a pooled lock.
-                try:
-                    decision = await acquiring
-                    if decision.lease is not None:
-                        await asyncio.shield(asyncio.to_thread(decision.lease.close))
-                except Exception:
-                    logger.warning("aiuditor crawl acquisition cleanup failed")
+                decision = acquiring.result()
+            except Exception:
+                if cancelled is not None:
+                    raise cancelled
                 raise
+            if cancelled is not None:
+                # A thread cannot be canceled. Join it and release any claim
+                # before propagating shutdown, including repeated cancellation.
+                if decision.lease is not None:
+                    try:
+                        await _run_worker(decision.lease.close)
+                    except asyncio.CancelledError:
+                        pass  # The close worker has finished; preserve the first cancellation.
+                    except Exception:
+                        logger.warning("aiuditor crawl acquisition cleanup failed")
+                raise cancelled
             if decision.lease is None:
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=decision.wait_s)
@@ -124,18 +134,23 @@ async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> No
                 report.dropped_no_fit,
                 report.skipped_fresh,
             )
-            await _finish_lease(lease, len(report.errors))
+            await _run_worker(lease.finish, len(report.errors))
             _log_crawl_errors(report.errors)
         except Exception as exc:  # noqa: BLE001
             logger.warning("aiuditor crawl failed: %s", exc)
             if lease is not None:
                 try:
-                    await _finish_lease(lease, 1)
+                    await _run_worker(lease.finish, 1)
                 except Exception:
                     logger.warning("aiuditor crawl completion could not be recorded")
         finally:
             if lease is not None:
-                await asyncio.shield(asyncio.to_thread(lease.close))
+                try:
+                    await _run_worker(lease.close)
+                except Exception:
+                    # close() already invalidates uncertain SQL sessions. Keep
+                    # the scheduler alive to retry after a transient failure.
+                    logger.warning("aiuditor crawl cleanup failed; retrying after interval")
         try:
             await asyncio.wait_for(stop.wait(), timeout=every)
             break

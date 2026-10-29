@@ -127,6 +127,10 @@ async def test_cancellation_during_claim_acquisition_releases_writer_lock(monkey
     task = asyncio.create_task(run_crawl_loop(SimpleNamespace(state=state), stop=asyncio.Event()))
     assert await asyncio.to_thread(started.wait, 2)
     task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=5)
@@ -204,3 +208,55 @@ def test_uncertain_lock_connection_is_discarded(migrated_postgres, failure):
     finally:
         independent.dispose()
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_retries_instead_of_killing_crawl_loop(monkeypatch):
+    from aiuditor_service.crawl_schedule import CrawlDecision
+    stop = asyncio.Event()
+    calls = []
+    class Lease:
+        def finish(self, _errors):
+            pass
+        def close(self):
+            raise OSError("transient unlock failure")
+    class Schedule:
+        def claim_due(self, *_):
+            calls.append(True)
+            if len(calls) > 1:
+                stop_loop.call_soon_threadsafe(stop.set)
+            return CrawlDecision(Lease())
+    stop_loop = asyncio.get_running_loop()
+    state = SimpleNamespace(aiuditor_role=AiuditorRole.GLOBAL, crawl_schedule=Schedule(),
+                            plane_hop=None, candidate_store=None, envelope_store=None)
+    async def intake(**_):
+        return IntakeReport(0, 0, 0, 0, 0)
+    monkeypatch.delenv("AIUDITOR_CRAWL_TENANT_ID", raising=False)
+    monkeypatch.setattr("aiuditor_service.intake_loop.run_intake", intake)
+    monkeypatch.setattr("aiuditor_service.intake_loop.resolve_crawl_every_s", lambda: 0.001)
+    await asyncio.wait_for(run_crawl_loop(SimpleNamespace(state=state), stop=stop), timeout=5)
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_survives_cleanup_failure(monkeypatch):
+    from aiuditor_service.crawl_schedule import CrawlDecision
+    running = asyncio.Event()
+    class Lease:
+        def finish(self, _errors):
+            pytest.fail("canceled intake must not be finished")
+        def close(self):
+            raise OSError("unlock failed")
+    state = SimpleNamespace(aiuditor_role=AiuditorRole.GLOBAL,
+                            crawl_schedule=SimpleNamespace(claim_due=lambda *_: CrawlDecision(Lease())),
+                            plane_hop=None, candidate_store=None, envelope_store=None)
+    async def intake(**_):
+        running.set()
+        await asyncio.Event().wait()
+    monkeypatch.delenv("AIUDITOR_CRAWL_TENANT_ID", raising=False)
+    monkeypatch.setattr("aiuditor_service.intake_loop.run_intake", intake)
+    task = asyncio.create_task(run_crawl_loop(SimpleNamespace(state=state), stop=asyncio.Event()))
+    await asyncio.wait_for(running.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)

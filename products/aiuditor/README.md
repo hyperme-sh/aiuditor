@@ -156,3 +156,7 @@ unchanged. No live crawl or deployment acceptance is claimed by local tests.
 Shutdown waits for an in-flight completion worker before closing its connection.
 If advisory unlock or claim acquisition fails, discard the PostgreSQL session
 instead of returning uncertain session-lock ownership to the connection pool.
+
+Claim acquisition and connection cleanup are also joined through repeated
+shutdown cancellation. Transient cleanup failures are logged and leave the
+scheduler alive for the next interval; they do not override shutdown cancellation.
