@@ -7,7 +7,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.postgres import PostgresContainer
 
-from panopticon_tests.fixtures.postgres import (
+from spanopticon_tests.fixtures.postgres import (
     async_db_url,
     normalize_sync_sqlalchemy_url,
     run_alembic_upgrade,
