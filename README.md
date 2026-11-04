@@ -75,3 +75,23 @@ organization policy may shorten it). Expired evidence fails closed: validate a
 new main revision. The publisher verifies the run, source, workflow and artifact
 digest independently of release metadata. Repository immutable releases must be
 enabled. See the [shared release contract](https://github.com/hyperme-sh/.github/blob/7749591fccd30d46ba9b0adabe82114001c9d0de/actions/release-channel/README.md).
+
+## Standalone runtime image
+
+Build the installed production dependency graph from this repository's lock:
+
+```sh
+docker build --secret id=dependency_read_token,env=DEPENDENCY_READ_TOKEN \
+  --build-arg SOURCE_SHA="$(git rev-parse HEAD)" \
+  --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" -t aiuditor:local .
+```
+
+The runtime runs as UID/GID 65532, contains installed distributions rather than
+source checkouts, and receives no dependency credential. The startup command
+applies the installed owner schema and marketplace tenancy provisioning before
+starting the service. Supply runtime database and service configuration separately.
+The build imports the application with networking disabled; same-repository PRs
+and main run the package/PostgreSQL suite and build/import the runtime image.
+Fork PRs receive no dependency credential. This image build is not registry
+publication or live acceptance. Existing-database adoption must independently
+qualify schema compatibility; startup's newer-revision skip is insufficient.

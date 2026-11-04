@@ -1,5 +1,6 @@
 name: Standalone package
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -7,7 +8,7 @@ permissions:
   contents: read
 jobs:
   package:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on:
       group: shared-local
       labels: [self-hosted, linux, x64]
@@ -62,6 +63,16 @@ jobs:
           unset DEPENDENCY_READ_TOKEN
           bash scripts/check-package.sh
           bash scripts/check-postgres.sh
+      - name: Build standalone runtime image
+        env:
+          DEPENDENCY_READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN }}
+        run: |
+          docker build --secret id=dependency_read_token,env=DEPENDENCY_READ_TOKEN \
+            --build-arg SOURCE_SHA="$GITHUB_SHA" \
+            --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t aiuditor:ci .
+          docker run --rm --network none --entrypoint /app/.venv/bin/python aiuditor:ci \
+            -c 'from aiuditor_service.app import app; import controlplane_db; assert app.openapi()["paths"]'
       - name: Retain validated package bytes
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
