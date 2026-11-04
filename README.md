@@ -6,7 +6,8 @@ entry point `python -m aiuditor_service.main`. Runtime routes are described in
 `edge-routes.json`; model-admission guidance is in `docs/private-model-admission.md`.
 
 Tenant operations require bound JWT credentials; X-Tenant-ID is a cross-check.
-Approvals require named human authority. Global/operator/witness roles retain
+Approval resolution, contract signing and admission verdicts require a verified
+interactive human session and current auditor/admin tenant membership. Global/operator/witness roles retain
 their existing write boundaries; witness hydration does not grant write authority.
 ORM models are owned by `aiuditor_service.models`. Hypermesh integration uses
 owner HTTP contracts and opaque IDs, not cross-product SQL/FKs.
@@ -35,3 +36,10 @@ remain separate acceptance gates. No image or deployment is published here.
 The main-only hosted workflow uses pinned actions, read-only contents and exact
 repository credential headers. Actions remains disabled pending scoped
 `DEPENDENCY_READ_TOKEN` access and hosted-worker policy.
+
+Legacy upload-admission sandbox reporting returns 503 until authenticated lab
+job/device/artifact binding is implemented (#7). Tenant sessions and generic
+service/internal credentials cannot supply measurement authority. This disables
+that upload promotion path; it does not qualify the separate private-admission
+contract. One-use approvals are consumed with a tenant-scoped conditional
+database update; PostgreSQL/RLS acceptance remains in #3.

@@ -115,7 +115,6 @@ from aiuditor_service.program import (
     SUITE_MEMBER_NOT_FOUND,
     put_envelope,
     put_suite_member,
-    record_sandbox_result,
     resolve_admission,
     resolve_admission_async,
     seed_core_suite,
@@ -722,7 +721,7 @@ async def get_approval(request: Request, approval_id: uuid.UUID) -> Approval:
 async def resolve_approval_route(
     request: Request, approval_id: uuid.UUID, body: ApprovalResolve
 ) -> Approval:
-    resolved_by = resolver_subject(request)
+    resolved_by = await resolver_subject(request)
     tenant_id = require_auditor_actor(request)
     row = resolve_approval(
         _approvals(request),
@@ -858,7 +857,7 @@ async def get_contract_grant(request: Request, contract_id: uuid.UUID) -> Contra
 )
 async def sign_contract_route(request: Request, contract_id: uuid.UUID) -> Contract:
     require_grant_write(role_from_request(request))
-    signed_by = require_contract_signer(request)
+    signed_by = await require_contract_signer(request)
     tenant_id = require_auditor_actor(request)
     row = sign_contract(
         _contracts(request), tenant_id, contract_id, signed_by=signed_by
@@ -955,7 +954,7 @@ async def allocate_catalog_service(
     require_grant_write(role)
     require_market_mint(role)
     tenant_id = require_auditor_actor(request)
-    signed_by = require_contract_signer(request)
+    signed_by = await require_contract_signer(request)
     lookup = getattr(request.app.state, "host_lookup", None)
     plane = getattr(request.app.state, "plane_hop", None)
     if lookup is None or plane is None:
@@ -1148,25 +1147,19 @@ async def get_admission(request: Request, admission_id: uuid.UUID) -> Admission:
     response_model=Admission,
     summary="Record lab soak + egress observation for an upload admission",
     description=(
-        "Hypermesh hops here after a path_b quarantine soak whose catalog "
-        "carries admission_id. soak_passed and egress_ok=True are required "
-        "before a human allow can promote. Omitted egress_ok fails closed. "
-        "Does not certify the catalog row."
+        "Unavailable (503) until authenticated lab job/device/artifact binding "
+        "is implemented. Tenant and generic service credentials cannot supply "
+        "measurement authority. Does not certify or promote a catalog row."
     ),
 )
 async def report_admission_sandbox(
     request: Request, admission_id: uuid.UUID, body: AdmissionSandboxReport
 ) -> Admission:
     require_grant_write(role_from_request(request))
-    tenant_id = require_auditor_actor(request)
-    return record_sandbox_result(
-        _admissions(request),
-        tenant_id,
-        admission_id,
-        body,
-        approvals=_approvals(request),
-        hold_for_human=True,
-    )
+    # This legacy admission has no persisted lab job/device assignment. A token
+    # alone cannot bind submitted measurements to a queued run. Refuse until
+    # the owner evidence contract provides authenticated assignment validation.
+    raise HTTPException(503, "Trusted lab assignment validation is unavailable")
 
 
 @router.post(
@@ -1185,7 +1178,7 @@ async def verdict_admission(
         tenant_id,
         admission_id,
         body,
-        resolved_by=resolver_subject(request) or str(tenant_id),
+        resolved_by=await resolver_subject(request),
         plane=plane,
     )
     await get_tenant_event_publisher().publish(

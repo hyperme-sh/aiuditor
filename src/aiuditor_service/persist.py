@@ -264,6 +264,8 @@ def sql_row(table: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class PersistSession(Protocol):
+    def consume_approval(self, tenant_id: uuid.UUID, approval_id: uuid.UUID, now: datetime) -> bool: ...
+
     def hydrate(self, stores: Any) -> None: ...
 
     def upsert(self, table: str, tenant_id: uuid.UUID, key: object, payload: dict[str, Any]) -> None: ...
@@ -287,7 +289,24 @@ class MemoryPersistSession:
     """In-process row store. A new store on the same session reloads rows."""
 
     def __init__(self, rows: dict[str, dict[str, dict[str, Any]]] | None = None) -> None:
+        from threading import Lock
+        self._approval_lock = Lock()
         self.rows: dict[str, dict[str, dict[str, Any]]] = rows or {table: {} for table in TABLES}
+
+    def consume_approval(self, tenant_id, approval_id, now):
+        from datetime import UTC
+        with self._approval_lock:
+            row = self.rows.get("approvals", {}).get(str(tenant_id), {}).get(str(approval_id))
+            if row is None:
+                return False
+            approval = row_from_payload("approvals", row)
+            expiry = approval.expires_at.replace(tzinfo=UTC) if approval.expires_at.tzinfo is None else approval.expires_at
+            if (approval.status != "allowed" or approval.decision != "allow_once"
+                    or approval.consumed_at is not None or expiry <= now):
+                return False
+            self.upsert("approvals", tenant_id, approval_id,
+                        dump_for_persist(approval.model_copy(update={"consumed_at": now})))
+            return True
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -550,6 +569,25 @@ class SqlPersistSession:
                 {"tid": str(tenant_id)},
             )
             session.merge(model(**row_data))
+
+    def consume_approval(self, tenant_id, approval_id, now):
+        """One conditional database write grants at most one caller authority."""
+        from sqlalchemy import update, text
+        from sqlalchemy.exc import SQLAlchemyError
+        model = _sql_models()["approvals"]
+        try:
+            with self._session_factory() as session:
+                session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(tenant_id)})
+                result = session.execute(update(model).where(
+                    model.tenant_id == tenant_id, model.id == approval_id,
+                    model.status == "allowed", model.decision == "allow_once",
+                    model.consumed_at.is_(None), model.expires_at > now,
+                ).values(consumed_at=now))
+                claimed = result.rowcount == 1
+                session.commit()
+                return claimed
+        except SQLAlchemyError as exc:
+            raise PersistUnavailable("Approval consumption unavailable") from exc
 
     def upsert(self, table: str, tenant_id: uuid.UUID, key: object, payload: dict[str, Any]) -> None:
         model = _sql_models()[table]

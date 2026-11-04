@@ -200,7 +200,7 @@ async def test_missing_approval_is_404(http_client, tenant_headers):
     assert missing.status_code == 404
 
 
-def test_llm_subject_is_refused_on_resolve():
+async def test_llm_subject_is_refused_on_resolve():
     from fastapi import Request
     from starlette.datastructures import Headers
 
@@ -215,6 +215,8 @@ def test_llm_subject_is_refused_on_resolve():
             "realm_access": {"roles": ["ir"]},
             "groups": ["ir"],
             "scope": "openid",
+            "account_type": "human",
+            "amr": ["pwd"],
         },
         tenant_id=tenant,
         extra_roles=["ir"],
@@ -233,7 +235,7 @@ def test_llm_subject_is_refused_on_resolve():
         "app": type("A", (), {"state": type("S", (), {})()})(),
     }
     with pytest.raises(HTTPException) as exc:
-        resolver_subject(Request(scope))
+        await resolver_subject(Request(scope))
     assert exc.value.detail == LLM_NEVER_RESOLVES
 
 

@@ -275,7 +275,7 @@ def require_signed_grant(
     return row
 
 
-def require_contract_signer(request) -> str:
+async def require_contract_signer(request) -> str:
     """Named human. Never internal. Never an LLM name."""
 
-    return resolver_subject(request)
+    return await resolver_subject(request)

@@ -65,6 +65,18 @@ def app(event_sink, host_lookup, plane_hop, provider_hop, monkeypatch):
     )
     monkeypatch.setattr(api_config.settings, "service_name", "aiuditor-service-test")
 
+    from aiuditor_service.private_models import routes as private_routes
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def membership_transaction(tenant, response):
+        yield object()
+
+    async def active_member(session, tenant, *, keycloak_sub, role):
+        return object() if role == "auditor" else None
+
+    monkeypatch.setattr(private_routes, "transaction", membership_transaction)
+    monkeypatch.setattr(private_routes, "get_active_tenant_role_member", active_member)
     from aiuditor_service.app import create_app
 
     return create_app(
@@ -114,6 +126,8 @@ def tenant_session_headers(
         "realm_access": {"roles": ["ir"]},
         "groups": ["ir"],
         "scope": "openid",
+        "account_type": "human",
+        "amr": ["pwd"],
     }
     if permissions:
         claims["permissions"] = permissions

@@ -22,10 +22,8 @@ from aiuditor_service.domain.models import (
 )
 from aiuditor_service.store import ApprovalStore
 from aiuditor_service.tenant import (
-    AUDITOR_ACTOR_REQUIRED,
     HEADER_REQUIRED,
     INVALID_HEADER,
-    bearer_secret,
     require_auditor_actor,
 )
 
@@ -88,49 +86,21 @@ def require_internal_actor(request: Request) -> uuid.UUID:
     )
 
 
-def resolver_subject(request: Request) -> str:
-    """Human or IR/service exchange sub. Never internal. Never an LLM name."""
+async def resolver_subject(request: Request) -> str:
+    """Verified interactive human with current tenant approval authority."""
+    from fastapi import Response
+    from aiuditor_service.private_models.routes import human, approver, transaction
 
     if request_has_internal_token(request, _internal_token()):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=NAMED_HUMAN_REQUIRED,
-        )
-    require_auditor_actor(request)
-    secret = bearer_secret(request)
-    if secret is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=AUDITOR_ACTOR_REQUIRED,
-        )
-    claims = _actor_claims(secret)
-    sub = str((claims or {}).get("sub") or "").strip()
-    if not sub or sub.lower() in _LLM_SUBJECTS:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=LLM_NEVER_RESOLVES,
-        )
-    return sub[:256]
-
-
-def _actor_claims(secret: str) -> dict[str, object] | None:
-    try:
-        from controlplane_identity.security.tenant_session_jwt import (
-            try_decode_tenant_session_jwt,
-        )
-    except Exception:
-        try_decode_tenant_session_jwt = None
-    if try_decode_tenant_session_jwt is not None:
-        session = try_decode_tenant_session_jwt(secret)
-        if session is not None:
-            return session
-    try:
-        from controlplane_identity.security.api_key_exchange_jwt import (
-            try_decode_api_key_session_jwt,
-        )
-    except Exception:
-        return None
-    return try_decode_api_key_session_jwt(secret)
+        raise HTTPException(401, NAMED_HUMAN_REQUIRED)
+    tenant, subject = human(request)
+    if subject.lower() in _LLM_SUBJECTS:
+        raise HTTPException(403, LLM_NEVER_RESOLVES)
+    if len(subject) > 256:
+        raise HTTPException(403, NAMED_HUMAN_REQUIRED)
+    async with transaction(tenant, Response()) as session:
+        await approver(session, tenant, subject)
+    return subject
 
 
 def expire_due(
@@ -325,5 +295,6 @@ def consume_allow_once(
     if clock.tzinfo is None:
         clock = clock.replace(tzinfo=UTC)
     updated = row.model_copy(update={"consumed_at": clock})
-    store.put(updated)
+    if not store.persist.consume_approval(tenant_id, approval_id, clock):
+        raise HTTPException(409, APPROVAL_NOT_ALLOW_ONCE)
     return updated

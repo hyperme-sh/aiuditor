@@ -402,7 +402,7 @@ async def test_site_inbox_is_not_on_contract_paths(http_client):
     assert "/api/v1/grants/v0/grants" not in paths
 
 
-def test_llm_cannot_sign():
+async def test_llm_cannot_sign():
     from fastapi import Request
     from starlette.datastructures import Headers
 
@@ -418,6 +418,8 @@ def test_llm_cannot_sign():
             "realm_access": {"roles": ["ir"]},
             "groups": ["ir"],
             "scope": "openid",
+            "account_type": "human",
+            "amr": ["pwd"],
         },
         tenant_id=tenant,
         extra_roles=["ir"],
@@ -436,7 +438,7 @@ def test_llm_cannot_sign():
         "app": type("A", (), {"state": type("S", (), {})()})(),
     }
     with pytest.raises(HTTPException) as exc:
-        require_contract_signer(Request(scope))
+        await require_contract_signer(Request(scope))
     assert exc.value.detail == LLM_NEVER_RESOLVES
 
 
