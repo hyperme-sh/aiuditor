@@ -1,0 +1,111 @@
+"""Daily crawl uses the marketplace tenant. Witness does not crawl."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from types import SimpleNamespace
+
+import pytest
+
+from aiuditor_service.hypermesh import ClosedPlaneHop
+from aiuditor_service.intake import MARKETPLACE_TENANT_ID, IntakeReport, resolve_crawl_tenant
+from aiuditor_service.intake_loop import run_crawl_loop
+from aiuditor_service.role import AiuditorRole
+
+
+def test_unset_tenant_uses_the_documented_marketplace_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AIUDITOR_CRAWL_TENANT_ID", raising=False)
+    assert resolve_crawl_tenant() == MARKETPLACE_TENANT_ID
+    assert MARKETPLACE_TENANT_ID == uuid.UUID("8f8e8d8c-7b6a-4a59-8c3d-2e1f0a9b8c7d")
+
+
+def test_invalid_tenant_does_not_guess(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AIUDITOR_CRAWL_TENANT_ID", "not-a-uuid")
+    assert resolve_crawl_tenant() is None
+
+
+def _app(role: AiuditorRole) -> SimpleNamespace:
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            aiuditor_role=role,
+            plane_hop=ClosedPlaneHop(),
+            candidate_store=None,
+            envelope_store=None,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_writer_crawls_the_marketplace_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, uuid.UUID] = {}
+
+    stop = asyncio.Event()
+
+    async def fake_intake(**kwargs):
+        seen["tenant"] = kwargs["tenant_id"]
+        stop.set()
+        return IntakeReport(0, 0, 0, 0, 0)
+
+    monkeypatch.setattr("aiuditor_service.intake_loop.run_intake", fake_intake)
+    monkeypatch.delenv("AIUDITOR_CRAWL_TENANT_ID", raising=False)
+    await run_crawl_loop(_app(AiuditorRole.GLOBAL), stop=stop)
+    assert seen["tenant"] == MARKETPLACE_TENANT_ID
+    seen.clear()
+    stop.clear()
+    await run_crawl_loop(_app(AiuditorRole.OPERATOR), stop=stop)
+    assert seen["tenant"] == MARKETPLACE_TENANT_ID
+
+
+@pytest.mark.asyncio
+async def test_witness_does_not_crawl(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[int] = []
+
+    async def fake_intake(**kwargs):
+        called.append(1)
+        return IntakeReport(0, 0, 0, 0, 0)
+
+    monkeypatch.setattr("aiuditor_service.intake_loop.run_intake", fake_intake)
+    monkeypatch.setenv("AIUDITOR_CRAWL_TENANT_ID", str(MARKETPLACE_TENANT_ID))
+    stop = asyncio.Event()
+    await run_crawl_loop(_app(AiuditorRole.WITNESS), stop=stop)
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_intake_loop_logs_bounded_crawl_errors(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    stop = asyncio.Event()
+    errors = tuple(
+        [f"artifact-{i}: HTTP 409: no ready lab host for class" for i in range(10)]
+        + [
+            "hidden: Bearer super-secret-token",
+            "hidden: Authorization token=abc",
+        ]
+    )
+
+    async def fake_intake(**kwargs):
+        del kwargs
+        stop.set()
+        return IntakeReport(12, 0, 0, 0, 0, errors=errors)
+
+    monkeypatch.setattr("aiuditor_service.intake_loop.run_intake", fake_intake)
+    monkeypatch.delenv("AIUDITOR_CRAWL_TENANT_ID", raising=False)
+    with caplog.at_level(logging.WARNING, logger="aiuditor_service.intake_loop"):
+        await run_crawl_loop(_app(AiuditorRole.GLOBAL), stop=stop)
+    matched = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("aiuditor crawl errors")
+    ]
+    assert len(matched) == 1
+    text = matched[0]
+    assert "count=12" in text
+    assert "rest=2" in text
+    assert "HTTP 409: no ready lab host for class" in text
+    assert "artifact-0" in text
+    assert "artifact-9" in text
+    assert "Bearer" not in text
+    assert "super-secret-token" not in text
