@@ -124,3 +124,14 @@ async def test_invalid_authentication_and_measurements(http_client, tenant_a, fa
     if fault == 'malformed-signature': req['headers']['X-Lab-Signature'] = 'invalid-signature'
     result = await http_client.post('/api/v1/aiuditor/envelopes', **req)
     assert result.status_code == (422 if fault in ('naive-time', 'zero-rate') else 401)
+
+async def test_path_b_cannot_erase_qualified_context(http_client, tenant_a):
+    first = report(tenant_a, origin='qualification')
+    first['envelope']['context'] = 4096
+    accepted = await http_client.post('/api/v1/aiuditor/envelopes', **signed(first))
+    assert accepted.status_code == 201
+    value = report(tenant_a, mode='replace', expected_revision=accepted.json()['revision'],
+        measured_at=(datetime.now(UTC)+timedelta(seconds=1)).isoformat())
+    req = signed(value); req['headers']['If-Match'] = '"'+accepted.json()['revision']+'"'
+    refused = await http_client.post('/api/v1/aiuditor/envelopes', **req)
+    assert refused.status_code == 409

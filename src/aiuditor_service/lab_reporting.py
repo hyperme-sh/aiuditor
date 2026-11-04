@@ -99,6 +99,8 @@ def _new_row(report, existing, now):
         raise HTTPException(412, "Envelope revision changed")
     if existing is not None and existing.measurement_verified and report.measured_at <= existing.measured_at:
         raise HTTPException(409, "A newer lab measurement is required")
+    if existing is not None and existing.context is not None and report.origin == "path_b":
+        raise HTTPException(409, "A context-qualified baseline requires a complete qualification run")
     return ClassEnvelope(
         id=existing.id if existing else uuid.uuid4(), tenant_id=report.tenant_id,
         **report.envelope.model_dump(), created_at=existing.created_at if existing else now,
