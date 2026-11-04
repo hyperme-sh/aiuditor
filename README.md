@@ -92,6 +92,10 @@ applies the installed owner schema and marketplace tenancy provisioning before
 starting the service. Supply runtime database and service configuration separately.
 The build imports the application with networking disabled; same-repository PRs
 and main run the package/PostgreSQL suite and build/import the runtime image.
-Fork PRs receive no dependency credential. This image build is not registry
-publication or live acceptance. Existing-database adoption must independently
+Fork PRs receive no dependency credential. Successful main pushes retain the tested image and publish it without rebuilding
+as `ghcr.io/hyperme-sh/aiuditor/runtime:test-<commit>`. The isolated hosted
+publisher never checks out or executes application code and receives no private
+dependency or deployment credential. Deployments must select the resulting
+registry digest. Existing test tags cannot be overwritten by reruns. This test
+channel is not stable promotion or live acceptance. Existing-database adoption must independently
 qualify schema compatibility; startup's newer-revision skip is insufficient.
