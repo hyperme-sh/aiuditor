@@ -12,7 +12,8 @@ filing also retries that same decision. No background scheduler is introduced;
 operators or existing evaluators must repeat either authenticated API call. Writer,
 tenant and actor checks still run before retry. Witness replicas cannot enforce.
 
-A nonblocking per-operation PostgreSQL advisory lock prevents two AIuditor workers
+A bounded lock-connection pool, separate from the progress writer pool, refuses
+excess work immediately. A nonblocking per-operation PostgreSQL advisory lock prevents two AIuditor workers
 from dispatching the same operation concurrently. A busy worker returns 503 for a
 later retry. Progress commits independently of the lock connection: a process exit
 releases exclusion but leaves an unfinished operation available to the next worker.

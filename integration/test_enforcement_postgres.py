@@ -28,7 +28,10 @@ def test_concurrent_decision_restart_and_upstream_recovery(migrated_postgres):
         c.execute(text('INSERT INTO tenants(id,name,is_active) VALUES(:tid,:name,true)'), {'tid':tenant,'name':str(tenant)})
     persist = SqlPersistSession.from_url(migrated_postgres)
     contracts = ContractStore(persist=persist)
-    contract = _signed(contracts, tenant, lease_id=lease)
+    from aiuditor_service.contracts import fulfill_checkout_contract
+    from aiuditor_service.domain.models import ContractFulfill
+    contract = fulfill_checkout_contract(contracts, tenant, ContractFulfill(
+        lease_id=lease, renter_subject='renter', host_subject='host'))
     def file(_):
         p = SqlPersistSession.from_url(migrated_postgres)
         return put_violation(ViolationStore(persist=p), ContractStore(persist=p), tenant,
@@ -57,3 +60,28 @@ def test_concurrent_decision_restart_and_upstream_recovery(migrated_postgres):
     assert final.enforcement_attempts == 2
     assert len(plane.violations) == 1
     engine.dispose()
+
+
+def test_lock_capacity_keeps_progress_pool_available(migrated_postgres):
+    from contextlib import ExitStack
+    from sqlalchemy.orm import sessionmaker
+    from aiuditor_service.enforcement import enforcement_lock
+    engine = create_engine(migrated_postgres, pool_size=1, max_overflow=0, pool_timeout=0)
+    persist = SqlPersistSession(sessionmaker(engine))
+    tenant = uuid.uuid4()
+    try:
+        with ExitStack() as stack:
+            for _ in range(4):
+                stack.enter_context(enforcement_lock(persist, tenant, uuid.uuid4()))
+            with pytest.raises(HTTPException) as busy:
+                with enforcement_lock(persist, tenant, uuid.uuid4()):
+                    pytest.fail('capacity was not bounded')
+            assert busy.value.status_code == 503
+            with engine.connect() as progress:
+                assert progress.scalar(text('SELECT 1')) == 1
+        with enforcement_lock(persist, tenant, uuid.uuid4()):
+            with engine.connect() as progress:
+                assert progress.scalar(text('SELECT 1')) == 1
+    finally:
+        engine.dispose()
+        persist._enforcement_lock_engine.dispose()
