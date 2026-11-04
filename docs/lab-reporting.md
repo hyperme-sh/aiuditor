@@ -15,8 +15,8 @@ the ordinary tenant credential boundary.
 
 Configure a unique secret of at least 32 characters in both service processes.
 Reusing a generic internal or admission credential is refused. An unset key keeps
-reporting closed. Compose exposes it only to AIuditor and Hypermesh. Install both
-owner migrations before enabling the publisher. Deploy the consumer and publisher
+reporting closed. Supply it only to the independently deployed AIuditor and Hypermesh workloads. Install both
+service-owned migration tails from the pinned database package before enabling the publisher. Deploy the consumer and publisher
 together; legacy callers receive 401 or 422. No historical envelope is backfilled
 with invented provenance: unverified rows require a new soak. To replace one, use
 a fresh authorized measurement and its current revision.

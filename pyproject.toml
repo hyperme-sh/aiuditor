@@ -14,7 +14,7 @@ dependencies = [
     "controlplane-tenancy @ git+https://github.com/hyperme-sh/controlplane-tenancy.git@09f26d3fa677b6cd8e43be3424b8e2fa793c6ba1",
     "controlplane-identity @ git+https://github.com/hyperme-sh/controlplane-identity.git@5675e7b617db705a7b0caf25f2d65d8a492f32b1",
     "controlplane-core @ git+https://github.com/hyperme-sh/controlplane-core.git@8f66f5681b28e60a619344779252a5a048d39486",
-    "controlplane-db @ git+https://github.com/hyperme-sh/controlplane-db.git@9cfad090c48e28bc33d1a96369e7e856c203a2bf",
+    "controlplane-db @ git+https://github.com/hyperme-sh/controlplane-db.git@92110d645e9aee5c7fd442249a1f525147ca2135",
     "controlplane-events @ git+https://github.com/hyperme-sh/controlplane-events.git@d8bc887460c08f30c6a1dcb951bac042bad326a7",
 ]
 
@@ -42,3 +42,8 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 markers = ["integration: requires owner migrations and PostgreSQL"]
+
+[tool.uv]
+override-dependencies = [
+    "controlplane-db @ git+https://github.com/hyperme-sh/controlplane-db.git@92110d645e9aee5c7fd442249a1f525147ca2135",
+]
