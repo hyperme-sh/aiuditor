@@ -356,3 +356,31 @@ async def test_violation_http_hop_regenerates_framing(
     )
     assert response.status_code == 201, response.text
     assert len(seen) == 1
+
+async def test_pending_violation_retries_after_failure_and_restart(app, http_client, tenant_headers, tenant_a, plane_hop, monkeypatch):
+    monkeypatch.setenv('AIUDITOR_INTERNAL_TOKEN', 'test-aiuditor-internal-token')
+    lease_id = uuid.uuid4()
+    plane_hop.add_lease(lease_id, device_id=FYBER_AGX_DEVICE_ID, tenant_id=tenant_a)
+    contract = await http_client.post('/api/v1/aiuditor/contracts/fulfill',
+        headers={'X-Tenant-ID': str(tenant_a), 'X-Internal-Token': 'test-aiuditor-internal-token'},
+        json={'lease_id': str(lease_id), 'renter_subject': 'renter', 'host_subject': 'host'})
+    cid = uuid.UUID(contract.json()['id'])
+    plane_hop.violate_error = 'temporarily unavailable'
+    url = f'/api/v1/aiuditor/contracts/{cid}/violations'
+    first = await http_client.post(url, headers=tenant_headers, json={'kind': 'abuse'})
+    assert first.status_code == 503
+    pending = app.state.violation_store.list_for(tenant_a)[0]
+    assert pending.enforcement_completed_at is None
+    assert pending.enforcement_attempts == 1
+    assert app.state.contract_store.get(tenant_a, cid).status == ContractStatus.SUSPENDED
+    # Restart the owner store, retaining only persisted rows.
+    app.state.violation_store = ViolationStore(persist=app.state.violation_store.persist)
+    plane_hop.violate_error = None
+    recovered = await http_client.post(f'/api/v1/aiuditor/contracts/{cid}/evaluate', headers=tenant_headers)
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()[0]['id'] == str(pending.id)
+    assert recovered.json()[0]['enforcement_completed_at'] is not None
+    for _ in range(3):
+        assert (await http_client.post(url, headers=tenant_headers, json={'kind': 'abuse'})).status_code == 201
+    assert len(plane_hop.violations) == 1
+    assert len(app.state.violation_store.list_for(tenant_a)) == 1

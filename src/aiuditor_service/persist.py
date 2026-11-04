@@ -125,6 +125,7 @@ _ALLOWED = {
         "signed_at",
     },
     "violations": {
+        "enforcement_completed_at", "enforcement_attempts",
         "id",
         "tenant_id",
         "contract_id",
@@ -621,7 +622,7 @@ class SqlPersistSession:
         model = _sql_models()[table]
         memory = MemoryPersistSession()
         scoped = _SCOPE.get()
-        if table == "contracts" and scoped is not None:
+        if table in {"contracts", "violations"} and scoped is not None:
             scoped.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(tenant_id)})
             rows = scoped.execute(select(model).where(model.tenant_id == tenant_id)).scalars().all()
             for row in rows:

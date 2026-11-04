@@ -126,6 +126,9 @@ class AiuditorContract(Base):
 
 
 class AiuditorViolation(Base):
+    enforcement_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enforcement_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
     """Violation on a signed Contract. Dispute reads cert + audit."""
 
     __tablename__ = "aiuditor_violations"

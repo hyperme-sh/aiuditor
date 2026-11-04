@@ -288,6 +288,9 @@ class ContractViolationCreate(BaseModel):
 
 
 class ContractViolation(BaseModel):
+    enforcement_completed_at: datetime | None = None
+    enforcement_attempts: int = 0
+
     """Attached to a signed Contract. Not a handoff package."""
 
     id: uuid.UUID

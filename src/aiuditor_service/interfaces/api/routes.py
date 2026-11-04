@@ -1291,21 +1291,29 @@ async def list_violations(
 async def _apply_filed_violation(
     request: Request, tenant_id: uuid.UUID, filed: ContractViolation
 ) -> None:
-    if filed.lease_id is None:
-        return
-    plane = getattr(request.app.state, "plane_hop", None)
-    if plane is None:
-        raise HTTPException(status_code=503, detail=PLANE_HOP_FAILED)
-    try:
-        await plane.apply_violation(
-            tenant_id,
-            filed.lease_id,
-            action=filed.action.value,
-            reason=filed.reason,
-            headers=_forward_headers(request),
-        )
-    except HostLookupUnavailable as exc:
-        raise _plane_error(exc) from exc
+    from aiuditor_service.enforcement import enforcement_lock
+    from datetime import UTC, datetime
+    store = _violations(request)
+    with enforcement_lock(store.persist, tenant_id, filed.id):
+        current = store.for_tenant(tenant_id).get(filed.id)
+        if current is None:
+            raise HTTPException(404, "Violation not found")
+        if current.enforcement_completed_at is not None:
+            return
+        current = store.put(current.model_copy(update={"enforcement_attempts": current.enforcement_attempts + 1}))
+        if current.lease_id is not None:
+            plane = getattr(request.app.state, "plane_hop", None)
+            if plane is None:
+                raise HTTPException(status_code=503, detail=PLANE_HOP_FAILED)
+            try:
+                await plane.apply_violation(
+                    tenant_id, current.lease_id, operation_id=current.id,
+                    action=current.action.value, reason=current.reason,
+                    headers=_forward_headers(request),
+                )
+            except HostLookupUnavailable as exc:
+                raise _plane_error(exc) from exc
+        store.put(current.model_copy(update={"enforcement_completed_at": datetime.now(UTC)}))
 
 
 @router.post(
@@ -1328,7 +1336,7 @@ async def file_violation_route(
         event_type=CONTRACT_VIOLATED_V1,
         payload=filed.to_event_payload(),
     )
-    return filed
+    return _violations(request).for_tenant(tenant_id)[filed.id]
 
 
 @router.post(
@@ -1348,7 +1356,9 @@ async def evaluate_contract_route(
     if row.status is ContractStatus.DRAFT:
         raise HTTPException(status_code=409, detail="only a signed contract can be evaluated")
     if row.status is ContractStatus.SUSPENDED:
-        return existing
+        for pending in existing:
+            await _apply_filed_violation(request, tenant_id, pending)
+        return _violations(request).list_for(tenant_id, contract_id=contract_id)
     lease = None
     host = None
     if row.lease_id is not None:
@@ -1387,4 +1397,4 @@ async def evaluate_contract_route(
         event_type=CONTRACT_VIOLATED_V1,
         payload=filed.to_event_payload(),
     )
-    return [filed]
+    return _violations(request).list_for(tenant_id, contract_id=contract_id)

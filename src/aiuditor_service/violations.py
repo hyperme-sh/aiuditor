@@ -104,6 +104,11 @@ def put_violation(
     *,
     now: datetime | None = None,
 ) -> tuple[ContractViolation, Contract]:
+    with store.persist.checkout_contract_scope(tenant_id, contract_id, contract_id):
+        return _put_violation(store, contracts, tenant_id, contract_id, body, now=now)
+
+
+def _put_violation(store, contracts, tenant_id, contract_id, body, *, now=None):
     clock = _now(now)
     row = contracts.get(tenant_id, contract_id)
     if row is None:
@@ -114,8 +119,16 @@ def put_violation(
     if action not in ViolationAction:
         raise HTTPException(status_code=400, detail=VIOLATION_ACTION)
     reason = _safe_text(body.reason)
+    # One contract decision with the same kind/action/reason has one stable ID.
+    import json
+    operation = uuid.uuid5(contract_id, json.dumps([str(tenant_id), body.kind.value, action.value, reason]))
+    previous = store.for_tenant(tenant_id).get(operation)
+    if previous is not None:
+        updated = row.model_copy(update={"status": ContractStatus.SUSPENDED})
+        contracts.put(updated)
+        return previous, updated
     filed = ContractViolation(
-        id=uuid.uuid4(),
+        id=operation,
         tenant_id=tenant_id,
         contract_id=contract_id,
         lease_id=row.lease_id,
