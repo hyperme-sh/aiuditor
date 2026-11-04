@@ -7,10 +7,12 @@ Site inbox stays /api/v1/auditor. The door stays products/hypermesh-gateway.
 
 from __future__ import annotations
 
+from aiuditor_service.lab_reporting import LabEnvelopeReport
+
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from api.infrastructure.messaging.tenant_event_publisher import get_tenant_event_publisher
 
@@ -989,21 +991,21 @@ async def allocate_catalog_service(
     status_code=status.HTTP_201_CREATED,
     summary="Record a lab class envelope. Not a Hypermesh scorecard stamp.",
 )
-async def record_envelope(
-    request: Request, body: ClassEnvelopeCreate
-) -> ClassEnvelope:
+async def record_envelope(request: Request, body: "LabEnvelopeReport", response: Response) -> ClassEnvelope:
     require_grant_write(role_from_request(request))
-    # Plane hop (Hypermesh lab soak) uses X-Internal-Token; operators use bound JWT.
-    tenant_id = require_hold_actor(request)
-    condition = request.headers.get("If-None-Match")
-    if condition not in (None, "*"):
-        raise HTTPException(400, "Use If-None-Match: * for conditional creation")
-    row = put_envelope(_envelopes(request), tenant_id, body, if_absent=condition == "*" or request.url.path.endswith("/envelopes/initial"))
-    await get_tenant_event_publisher().publish(
-        tenant_id=tenant_id,
-        event_type=ENVELOPE_RECORDED_V1,
-        payload=row.to_event_payload(),
-    )
+    from aiuditor_service.lab_reporting import authenticate
+    from sqlalchemy.exc import SQLAlchemyError
+    now = await authenticate(request, body)
+    try:
+        row, fresh = _envelopes(request).persist.accept_lab_report(body, now)
+    except SQLAlchemyError:
+        raise HTTPException(503, "Lab evidence persistence unavailable") from None
+    response.headers["ETag"] = f'"{row.revision}"'
+    response.headers["X-Lab-Report-Replay"] = "false" if fresh else "true"
+    if fresh:
+        await get_tenant_event_publisher().publish(
+            tenant_id=body.tenant_id, event_type=ENVELOPE_RECORDED_V1,
+            payload=row.to_event_payload())
     return row
 
 

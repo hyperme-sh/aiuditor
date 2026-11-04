@@ -159,6 +159,7 @@ _ALLOWED = {
         "thermal_c",
         "created_at",
         "updated_at",
+        "lab_job_id", "lab_device_id", "lab_origin", "binding_sha256", "report_sha256", "measured_at",
     },
     "suite_members": {
         "id",
@@ -264,6 +265,8 @@ def sql_row(table: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class PersistSession(Protocol):
+    def accept_lab_report(self, report, now): ...
+
     def consume_approval(self, tenant_id: uuid.UUID, approval_id: uuid.UUID, now: datetime) -> bool: ...
 
     def hydrate(self, stores: Any) -> None: ...
@@ -288,9 +291,14 @@ class PersistSession(Protocol):
 class MemoryPersistSession:
     """In-process row store. A new store on the same session reloads rows."""
 
+    def accept_lab_report(self, report, now):
+        from aiuditor_service.lab_reporting import persist_report
+        return persist_report(self, report, now)
+
     def __init__(self, rows: dict[str, dict[str, dict[str, Any]]] | None = None) -> None:
         from threading import Lock
         self._approval_lock = Lock()
+        self._lab_report_lock = Lock()
         self.rows: dict[str, dict[str, dict[str, Any]]] = rows or {table: {} for table in TABLES}
 
     def consume_approval(self, tenant_id, approval_id, now):
@@ -436,6 +444,10 @@ def _sql_hydrate_tenant_gucs(session) -> list[str]:
 
 class SqlPersistSession:
     """Write-through SQLAlchemy persist. Sets RLS GUC per tenant on each write."""
+
+    def accept_lab_report(self, report, now):
+        from aiuditor_service.lab_reporting import persist_report
+        return persist_report(self, report, now)
 
     def __init__(self, session_factory) -> None:
         self._session_factory = session_factory

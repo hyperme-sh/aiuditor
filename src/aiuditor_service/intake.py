@@ -83,7 +83,7 @@ def needs_resoaking(
 ) -> bool:
     """Identical hash/quant/runtime within retention → do not re-run."""
 
-    if envelope is None:
+    if envelope is None or not envelope.measurement_verified or not envelope.fit:
         return True
     if (file_hash or "").strip() and envelope.file_hash != (file_hash or "").strip():
         return True

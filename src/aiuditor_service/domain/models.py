@@ -13,7 +13,7 @@ from enum import StrEnum
 from typing import Self
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, computed_field
 
 
 class ConnectionKind(StrEnum):
@@ -456,6 +456,28 @@ class ClassEnvelope(BaseModel):
     thermal_c: float | None = None
     created_at: datetime
     updated_at: datetime
+
+    lab_job_id: uuid.UUID | None = None
+    lab_device_id: uuid.UUID | None = None
+    lab_origin: str | None = None
+    binding_sha256: str | None = None
+    report_sha256: str | None = None
+    measured_at: datetime | None = None
+
+    @computed_field
+    @property
+    def measurement_verified(self) -> bool:
+        return all((self.lab_job_id, self.lab_device_id, self.lab_origin,
+                    self.binding_sha256, self.report_sha256, self.measured_at))
+
+    @computed_field
+    @property
+    def revision(self) -> str:
+        if self.report_sha256:
+            return self.report_sha256
+        import hashlib, json
+        data = self.model_dump(mode="json", exclude={"revision", "measurement_verified"})
+        return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
     def to_event_payload(self) -> dict[str, object]:
         return {
