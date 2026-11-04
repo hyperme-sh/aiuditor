@@ -33,9 +33,9 @@ these scripts without source reconciliation and owner-chain qualification.
 Container, database RLS, witness deployment, hydration and consumer cutover
 remain separate acceptance gates. No image or deployment is published here.
 
-The main-only hosted workflow uses pinned actions, read-only contents and exact
+The main-only shared-runner workflow uses pinned actions, read-only contents and exact
 repository credential headers. Actions remains disabled pending scoped
-`DEPENDENCY_READ_TOKEN` access and hosted-worker policy.
+`DEPENDENCY_READ_TOKEN` access and shared-runner qualification.
 
 Legacy upload-admission sandbox reporting returns 503 until authenticated lab
 job/device/artifact binding is implemented (#7). Tenant sessions and generic
