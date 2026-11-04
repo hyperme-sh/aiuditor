@@ -11,18 +11,8 @@ from aiuditor_service.models import AiuditorCrawlState
 from aiuditor_service.intake import IntakeReport
 from aiuditor_service.intake_loop import run_crawl_loop
 from aiuditor_service.role import AiuditorRole
-from test_persist_sql import _plant_tenant, _skip_without_docker, _normalize_sync_url
-
-
-@pytest.fixture(scope="module")
-def migrated_postgres():
-    from testcontainers.postgres import PostgresContainer
-    from controlplane_db.migrations import upgrade
-    _skip_without_docker()
-    with PostgresContainer("postgres:16-alpine") as postgres:
-        url = _normalize_sync_url(postgres.get_connection_url())
-        upgrade(url)
-        yield url
+from test_persist_sql import _plant_tenant
+from machine_postgres import migrated_postgres
 
 
 def test_remaining_interval_and_unfinished_run():

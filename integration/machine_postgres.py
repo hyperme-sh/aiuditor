@@ -5,13 +5,15 @@ import os
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from testcontainers.postgres import PostgresContainer
+from sqlalchemy.engine import make_url
+from controlplane_db import migrations
 
-from spanopticon_tests.fixtures.postgres import (
-    async_db_url,
-    normalize_sync_sqlalchemy_url,
-    run_alembic_upgrade,
-)
+
+def _database_url(value: str, driver: str) -> str:
+    url = make_url(value)
+    if url.get_backend_name() not in {"postgresql", "postgres"}:
+        raise ValueError("Disposable PostgreSQL URL required")
+    return url.set(drivername=driver).render_as_string(hide_password=False)
 
 
 @pytest.fixture(scope="session")
@@ -28,37 +30,31 @@ def require_docker() -> None:
 
 @pytest.fixture(scope="session")
 def postgres_container(require_docker: None):
-    with PostgresContainer("postgres:16-alpine") as pg:
+    PostgresContainer = pytest.importorskip("testcontainers.postgres").PostgresContainer
+    with PostgresContainer("postgres:17-alpine") as pg:
         yield pg
 
 
 @pytest.fixture(scope="session")
-def postgres_sync_url(postgres_container: PostgresContainer) -> str:
-    return normalize_sync_sqlalchemy_url(postgres_container.get_connection_url())
+def postgres_sync_url(request) -> str:
+    external = os.environ.get("TEST_DATABASE_URL")
+    if external:
+        return _database_url(external, "postgresql+psycopg")
+    container = request.getfixturevalue("postgres_container")
+    return _database_url(container.get_connection_url(), "postgresql+psycopg")
 
 
 @pytest.fixture(scope="session")
 def migrated_postgres(postgres_sync_url: str) -> str:
-    # Alembic must not disable application loggers in subsequent tests.
-    from unittest.mock import patch
-
-    with patch("logging.config.fileConfig"):
-        run_alembic_upgrade(postgres_sync_url)
-    from controlplane_db.migrations import (
-        prepare_event_source_index,
-        stamp_baselines,
-        upgrade,
-    )
-
-    stamp_baselines(postgres_sync_url)
-    prepare_event_source_index(postgres_sync_url)
-    upgrade(postgres_sync_url)
+    # This integration fixture only uses the installed standalone owner runner.
+    # It never locates a sibling monorepo or implicitly stamps a legacy database.
+    migrations.upgrade(postgres_sync_url)
     return postgres_sync_url
 
 
 @pytest.fixture(scope="session")
 def db_async_url(migrated_postgres: str) -> str:
-    return async_db_url(migrated_postgres)
+    return _database_url(migrated_postgres, "postgresql+asyncpg")
 
 
 @pytest_asyncio.fixture

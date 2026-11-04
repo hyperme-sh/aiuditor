@@ -13,6 +13,9 @@ resolution-markers = [
     "python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[manifest]
+overrides = [{ name = "controlplane-db", git = "https://github.com/hyperme-sh/controlplane-db.git?rev=92110d645e9aee5c7fd442249a1f525147ca2135" }]
+
 [[package]]
 name = "agent-detector"
 version = "2.0.0"
@@ -68,7 +71,7 @@ dev = [
 requires-dist = [
     { name = "controlplane-api", git = "https://github.com/hyperme-sh/controlplane-api.git?rev=edac59b2cc55923c983a11a451c4bed9ce53edef" },
     { name = "controlplane-core", git = "https://github.com/hyperme-sh/controlplane-core.git?rev=8f66f5681b28e60a619344779252a5a048d39486" },
-    { name = "controlplane-db", git = "https://github.com/hyperme-sh/controlplane-db.git?rev=9cfad090c48e28bc33d1a96369e7e856c203a2bf" },
+    { name = "controlplane-db", git = "https://github.com/hyperme-sh/controlplane-db.git?rev=92110d645e9aee5c7fd442249a1f525147ca2135" },
     { name = "controlplane-events", git = "https://github.com/hyperme-sh/controlplane-events.git?rev=d8bc887460c08f30c6a1dcb951bac042bad326a7" },
     { name = "controlplane-identity", git = "https://github.com/hyperme-sh/controlplane-identity.git?rev=5675e7b617db705a7b0caf25f2d65d8a492f32b1" },
     { name = "controlplane-tenancy", git = "https://github.com/hyperme-sh/controlplane-tenancy.git?rev=09f26d3fa677b6cd8e43be3424b8e2fa793c6ba1" },
@@ -816,7 +819,7 @@ dependencies = [
 [[package]]
 name = "controlplane-db"
 version = "0.1.0"
-source = { git = "https://github.com/hyperme-sh/controlplane-db.git?rev=9cfad090c48e28bc33d1a96369e7e856c203a2bf#9cfad090c48e28bc33d1a96369e7e856c203a2bf" }
+source = { git = "https://github.com/hyperme-sh/controlplane-db.git?rev=92110d645e9aee5c7fd442249a1f525147ca2135#92110d645e9aee5c7fd442249a1f525147ca2135" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },

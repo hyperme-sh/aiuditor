@@ -26,51 +26,7 @@ from aiuditor_service.store import CandidateStore, new_stores
 pytestmark = pytest.mark.integration
 
 
-def _alembic_ini() -> Path:
-    return Path(__file__).resolve().parents[3] / "core/lib/controlplane-db/alembic.ini"
-
-
-def _normalize_sync_url(url: str) -> str:
-    u = url.strip()
-    if u.startswith("postgresql+psycopg2://"):
-        return "postgresql+psycopg://" + u.removeprefix("postgresql+psycopg2://")
-    if u.startswith("postgresql://"):
-        return "postgresql+psycopg://" + u.removeprefix("postgresql://")
-    if u.startswith("postgres://"):
-        return "postgresql+psycopg://" + u.removeprefix("postgres://")
-    return u
-
-
-def _skip_without_docker() -> None:
-    if os.environ.get("SKIP_TESTCONTAINERS", "").lower() in ("1", "true", "yes"):
-        pytest.skip("SKIP_TESTCONTAINERS is set")
-    try:
-        import docker
-
-        docker.from_env().ping()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"Docker not available for testcontainers: {exc}")
-
-
-@pytest.fixture(scope="module")
-def migrated_postgres() -> str:
-    _skip_without_docker()
-    pytest.importorskip("testcontainers")
-    from alembic import command
-    from alembic.config import Config
-    from testcontainers.postgres import PostgresContainer
-
-    ini = _alembic_ini()
-    assert ini.is_file()
-    with PostgresContainer("postgres:16-alpine") as pg:
-        url = _normalize_sync_url(pg.get_connection_url())
-        os.environ["DATABASE_URL"] = url
-        command.upgrade(Config(str(ini)), "head")
-        import controlplane_db.migrations as migrations
-        migrations.stamp_baselines(url)
-        migrations.prepare_event_source_index(url)
-        migrations.upgrade(url)
-        yield url
+from machine_postgres import migrated_postgres
 
 
 def _plant_tenant(url: str, tenant_id: uuid.UUID) -> None:

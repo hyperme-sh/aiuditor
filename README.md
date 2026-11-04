@@ -25,17 +25,19 @@ and a rebuilt source distribution. Wheel runtime bytes must match source.
 Upstreams are mocked and persistence is in-memory. The shared marketplace setting
 check uses installed dependencies instead of searching neighboring source trees.
 
-`integration/` retains PostgreSQL and migration-dependent tests plus their helper.
-They require the owner test harness and migrated database and are not part of
-the package result. `migrations/aiuditor` retains the extracted owner chain
-unchanged; it is not an independently configured migration runner. Do not apply
-these scripts without source reconciliation and owner-chain qualification.
-Container, database RLS, witness deployment, hydration and consumer cutover
-remain separate acceptance gates. No image or deployment is published here.
+`integration/` qualifies PostgreSQL using this service's installed, immutable
+`controlplane-db` dependency. Set `TEST_DATABASE_URL` to a disposable administrative
+PostgreSQL database and run `bash scripts/check-postgres.sh`. The fixture uses the
+standalone owner runner; it never searches or imports the retiring monorepo.
+The main workflow automatically qualifies package forms and PostgreSQL contracts
+with a scoped dependency-read credential. No human approval gate is introduced.
 
-The main-only shared-runner workflow uses pinned actions, read-only contents and exact
-repository credential headers. Actions remains disabled pending scoped
-`DEPENDENCY_READ_TOKEN` access and shared-runner qualification.
+The service-owned migration copies are in `migrations/aiuditor`; their matching
+reviewed resources ship in the pinned database package. Frozen mixed/baseline
+resources remain unchanged. Reconcile any existing monorepo database separately;
+never stamp an unknown revision to force adoption of the standalone chain.
+Container, deployed RLS/witness behavior, hydration and consumer cutover remain
+functional acceptance checks. No image or live deployment is published here.
 
 Legacy upload-admission sandbox reporting returns 503 until authenticated lab
 job/device/artifact binding is implemented (#7). Tenant sessions and generic
