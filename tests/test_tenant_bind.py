@@ -148,7 +148,7 @@ def _session_missing_tenant() -> str:
     import jwt
 
     from api.core.config import settings
-    from api.infrastructure.security.tenant_session_jwt import ALG, ISSUER, PANOPTICON_AUTH
+    from api.infrastructure.security.tenant_session_jwt import ALG, ISSUER, SPANOPTICON_AUTH
 
     now = int(time.time())
     return jwt.encode(
@@ -156,9 +156,9 @@ def _session_missing_tenant() -> str:
             "sub": DEFAULT_SUB,
             "iss": ISSUER,
             "exp": now + 900,
-            "panopticon_auth": PANOPTICON_AUTH,
+            "spanopticon_auth": SPANOPTICON_AUTH,
             "tenant_id": "",
-            "https://panopticon.dev/tenant_id": "",
+            "https://spanopticon.dev/tenant_id": "",
         },
         settings.usable_api_key_exchange_secret(),
         algorithm=ALG,
