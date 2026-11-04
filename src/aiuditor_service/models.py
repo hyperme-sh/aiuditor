@@ -193,8 +193,26 @@ class AiuditorEnvelope(Base):
     fit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     decode_tok_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     thermal_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lab_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    lab_device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    lab_origin: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    binding_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    report_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AiuditorEnvelopeReport(Base):
+    """Immutable accepted evidence receipt; not a cross-owner job foreign key."""
+    __tablename__ = "aiuditor_envelope_reports"
+    __table_args__ = (CheckConstraint("origin IN ('path_b','qualification')", name="ck_lab_report_origin"),)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True)
+    origin: Mapped[str] = mapped_column(String(32), primary_key=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    accepted_envelope: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class AiuditorSuiteMember(Base):

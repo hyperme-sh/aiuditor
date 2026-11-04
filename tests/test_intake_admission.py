@@ -46,18 +46,10 @@ def test_fit_filter_drops_70b_on_nx_keeps_on_agx():
 def test_identical_hash_within_retention_skips_resoaking():
     store = EnvelopeStore()
     tenant = uuid.uuid4()
-    env = put_envelope(
-        store,
-        tenant,
-        ClassEnvelopeCreate(
-            class_id="agx-large",
-            catalog_id="hf-x",
-            file_hash="sha256:" + ("ab" * 32),
-            quant="Q4_K_M",
-            runtime="nvidia",
-        ),
-        now=datetime.now(UTC),
-    )
+    from test_lab_reporting import report
+    from aiuditor_service.lab_reporting import LabEnvelopeReport
+    body=report(tenant);body['envelope'].update(catalog_id='hf-x',file_hash='sha256:'+'ab'*32,quant='Q4_K_M')
+    env,_=store.persist.accept_lab_report(LabEnvelopeReport.model_validate(body),datetime.now(UTC))
     assert (
         needs_resoaking(
             env,

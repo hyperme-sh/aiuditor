@@ -23,6 +23,12 @@ class AiuditorServiceDbMiddleware(BaseHTTPMiddleware):
         # service credential cannot authenticate any other AIuditor endpoint.
         if request.url.path.startswith("/api/v1/aiuditor/internal/private-model-admissions"):
             return await call_next(request)
+        if request.method == "POST" and request.url.path in {
+            "/api/v1/aiuditor/envelopes", "/api/v1/aiuditor/envelopes/initial"
+        }:
+            # The signed lab purpose authenticates tenant binding; its writer
+            # owns a separate atomic transaction and sets that exact tenant GUC.
+            return await call_next(request)
         maker = get_session_maker()
         async with maker() as session:
             token = set_db_session(session)

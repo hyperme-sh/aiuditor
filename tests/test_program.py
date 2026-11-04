@@ -155,23 +155,13 @@ def test_admission_holds_for_named_verdict():
 
 @pytest.mark.asyncio
 async def test_program_http_and_hydrate(
-    http_client, tenant_headers, tenant_a, event_sink
+    http_client, tenant_headers, tenant_a, event_sink, monkeypatch
 ):
-    envelope = await http_client.post(
-        "/api/v1/aiuditor/envelopes",
-        headers=tenant_headers,
-        json={
-            "class_id": "agx-large",
-            "catalog_id": CATALOG_LLAMA_8B,
-            "file_hash": "sha256:lab",
-            "quant": "Q4",
-            "runtime": "nvidia",
-            "context": 8192,
-            "fit": True,
-            "decode_tok_s": 12.5,
-            "thermal_c": 50.0,
-        },
-    )
+    from test_lab_reporting import report, signed, KEY
+    monkeypatch.setenv("AIUDITOR_LAB_REPORT_KEY", KEY)
+    body = report(tenant_a)
+    body['envelope'].update(catalog_id=CATALOG_LLAMA_8B, decode_tok_s=12.5, context=8192)
+    envelope = await http_client.post("/api/v1/aiuditor/envelopes", **signed(body))
     assert envelope.status_code == 201, envelope.text
     seeded = await http_client.post(
         "/api/v1/aiuditor/suite/seed", headers=tenant_headers
@@ -262,16 +252,8 @@ async def test_witness_cannot_write_program(
     async with LifespanManager(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            denied = await client.post(
-                "/api/v1/aiuditor/envelopes",
-                headers=tenant_headers,
-                json={
-                    "class_id": "agx-large",
-                    "catalog_id": CATALOG_LLAMA_8B,
-                    "file_hash": "sha256:x",
-                    "runtime": "nvidia",
-                },
-            )
+            from test_lab_reporting import report
+            denied = await client.post("/api/v1/aiuditor/envelopes",json=report(tenant_a),headers=tenant_headers)
             suite = await client.post(
                 "/api/v1/aiuditor/suite/seed", headers=tenant_headers
             )
@@ -341,12 +323,16 @@ def test_conditional_creation_retains_first_reference():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path",["/api/v1/aiuditor/envelopes", "/api/v1/aiuditor/envelopes/initial"])
-async def test_http_conditional_envelope_rejects_existing_reference(http_client,tenant_headers,path):
-    body={"class_id":"agx-large","catalog_id":"first-reference","file_hash":"sha256:"+"a"*64,"runtime":"nvidia","decode_tok_s":12}
-    headers={**tenant_headers,"If-None-Match":"*"}
-    first=await http_client.post(path,headers=headers,json=body)
+async def test_http_conditional_envelope_rejects_existing_reference(http_client,tenant_headers,path,tenant_a,monkeypatch):
+    from test_lab_reporting import report, signed, KEY
+    monkeypatch.setenv("AIUDITOR_LAB_REPORT_KEY",KEY)
+    body=report(tenant_a);body['envelope'].update(catalog_id='first-reference',decode_tok_s=12)
+    req=signed(body);req['headers']['If-None-Match']='*'
+    first=await http_client.post(path,**req)
     assert first.status_code==201,first.text
-    second=await http_client.post(path,headers=headers,json={**body,"decode_tok_s":99})
+    changed={**body,'job_id':str(uuid.uuid4()),'envelope':{**body['envelope'],'decode_tok_s':99}}
+    req=signed(changed);req['headers']['If-None-Match']='*'
+    second=await http_client.post(path,**req)
     assert second.status_code==409
     rows=(await http_client.get("/api/v1/aiuditor/envelopes",headers=tenant_headers)).json()
     assert next(row for row in rows if row["id"]==first.json()["id"])["decode_tok_s"]==12

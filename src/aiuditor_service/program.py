@@ -110,6 +110,8 @@ def put_envelope(
     if existing is not None:
         row = existing.model_copy(
             update={
+                "lab_job_id": None, "lab_device_id": None, "lab_origin": None,
+                "binding_sha256": None, "report_sha256": None, "measured_at": None,
                 "file_hash": file_hash[:256],
                 "quant": _safe_text(body.quant),
                 "runtime": runtime,
