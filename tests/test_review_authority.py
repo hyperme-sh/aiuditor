@@ -21,7 +21,8 @@ def request(headers):
 
 
 @pytest.mark.parametrize("purpose", ["ir", "service"])
-async def test_exchange_never_resolves_even_with_named_subject(purpose, tenant_a):
+async def test_exchange_never_resolves_even_with_named_subject(purpose, tenant_a, monkeypatch):
+    monkeypatch.setenv("AIUDITOR_TEST_ALLOW_UNCLASSIFIED_APPROVERS", "true")
     from controlplane_identity.security.api_key_exchange_jwt import mint_api_key_session_jwt
     token = mint_api_key_session_jwt(key_record_id=uuid.uuid4(), tenant_id=tenant_a,
                                     scopes=[], purpose=purpose)
@@ -120,3 +121,74 @@ def test_sql_conditional_consume_competing_sessions(tmp_path):
         conn.execute(text("UPDATE aiuditor_approvals SET consumed_at=NULL, expires_at=:expiry"), {"expiry": now - timedelta(seconds=1)})
     assert not persist.consume_approval(tenant, approval, now)
     engine.dispose()
+
+
+@pytest.mark.parametrize("setting,account_type,amr,allowed", [
+    (None, None, ["pwd"], False),
+    ("false", None, ["pwd"], False),
+    ("TRUE", None, ["pwd"], False),
+    ("true", None, ["pwd"], True),
+    ("true", "human", ["pwd"], True),
+    ("true", "service", ["pwd"], False),
+    ("true", "machine", ["pwd"], False),
+    ("true", "unknown", ["pwd"], False),
+    ("true", None, None, False),
+    ("true", None, ["client_credentials"], False),
+])
+async def test_test_plane_unclassified_approver_policy(
+    app, monkeypatch, tenant_a, setting, account_type, amr, allowed
+):
+    from controlplane_identity.security.tenant_session_jwt import mint_tenant_session_jwt
+    if setting is None:
+        monkeypatch.delenv("AIUDITOR_TEST_ALLOW_UNCLASSIFIED_APPROVERS", raising=False)
+    else:
+        monkeypatch.setenv("AIUDITOR_TEST_ALLOW_UNCLASSIFIED_APPROVERS", setting)
+    claims = {"sub": "test-operator", "amr": amr}
+    if account_type is not None:
+        claims["account_type"] = account_type
+    # The session issuer only carries recognized account types; classify
+    # invalid values using the already-verified claims seam below instead.
+    token = mint_tenant_session_jwt(claims=claims, tenant_id=tenant_a)
+    if account_type in {"machine", "unknown"}:
+        from aiuditor_service.private_models import routes
+        from controlplane_identity.security.tenant_session_jwt import try_decode_tenant_session_jwt
+        decoded = try_decode_tenant_session_jwt(token)
+        decoded["account_type"] = account_type
+        monkeypatch.setattr(routes, "try_decode_tenant_session_jwt", lambda _: decoded)
+    req = request({"Authorization": f"Bearer {token}", "X-Tenant-ID": str(tenant_a)})
+    if allowed:
+        assert await resolver_subject(req) == "test-operator"
+    else:
+        with pytest.raises(HTTPException) as error:
+            await resolver_subject(req)
+        assert error.value.status_code == 403
+
+
+async def test_unclassified_test_approver_still_requires_live_membership(app, monkeypatch, tenant_a):
+    from aiuditor_service.private_models import routes
+    from controlplane_identity.security.tenant_session_jwt import mint_tenant_session_jwt
+    monkeypatch.setenv("AIUDITOR_TEST_ALLOW_UNCLASSIFIED_APPROVERS", "true")
+    async def no_member(*args, **kwargs):
+        return None
+    monkeypatch.setattr(routes, "get_active_tenant_role_member", no_member)
+    token = mint_tenant_session_jwt(claims={"sub": "test-operator", "amr": ["pwd"]}, tenant_id=tenant_a)
+    with pytest.raises(HTTPException) as error:
+        await resolver_subject(request({"Authorization": f"Bearer {token}", "X-Tenant-ID": str(tenant_a)}))
+    assert error.value.status_code == 403
+
+
+@pytest.mark.parametrize("smoke", [False, True])
+async def test_test_policy_preserves_witness_and_smoke_refusal(app, monkeypatch, tenant_a, smoke):
+    from controlplane_identity.security.tenant_session_jwt import mint_tenant_session_jwt
+    from aiuditor_service.private_models.routes import human
+    from aiuditor_service.role import AiuditorRole
+    monkeypatch.setenv("AIUDITOR_TEST_ALLOW_UNCLASSIFIED_APPROVERS", "true")
+    claims = {"sub": "test-operator", "amr": ["pwd"]}
+    if smoke:
+        claims["smoke_session"] = True
+    token = mint_tenant_session_jwt(claims=claims, tenant_id=tenant_a)
+    req = request({"Authorization": f"Bearer {token}", "X-Tenant-ID": str(tenant_a)})
+    req.app.state.aiuditor_role = AiuditorRole.GLOBAL if smoke else AiuditorRole.WITNESS
+    with pytest.raises(HTTPException) as error:
+        human(req)
+    assert error.value.status_code == (401 if smoke else 403)

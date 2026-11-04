@@ -43,3 +43,18 @@ service/internal credentials cannot supply measurement authority. This disables
 that upload promotion path; it does not qualify the separate private-admission
 contract. One-use approvals are consumed with a tenant-scoped conditional
 database update; PostgreSQL/RLS acceptance remains in #3.
+
+
+## Single-operator test-plane approval policy
+
+The default requires administrator-verified `account_type=human`, interactive
+AMR, a frontend tenant session and current tenant auditor/admin membership.
+The test-plane owner may explicitly set
+`AIUDITOR_TEST_ALLOW_UNCLASSIFIED_APPROVERS=true` to accept an interactive
+approver whose signed session has no account classification. This is the
+single-operator test-system policy, not evidence of verified human identity.
+Explicit service classifications, exchange/internal/smoke credentials, missing
+interactive AMR, revoked membership and witness writes remain refused. This
+setting creates no tenant membership or account classification and remains
+false unless explicitly configured. Remove the setting and recreate AIuditor
+to restore classified-human approval requirements. Do not enable it in production.

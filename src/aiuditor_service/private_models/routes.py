@@ -55,7 +55,13 @@ def human(request):
         raise HTTPException(401, "Named human tenant session required")
     # AMR is copied from verified IdP claims into the signed tenant session.
     # Missing or machine-only authentication evidence cannot grant human authority.
-    if claims.get("account_type") != "human":
+    # Single-operator test planes may authorize unclassified interactive users.
+    # Explicit service/machine classifications never acquire approval authority.
+    unclassified_test_approver = (
+        os.environ.get("AIUDITOR_TEST_ALLOW_UNCLASSIFIED_APPROVERS") == "true"
+        and claims.get("account_type") is None
+    )
+    if claims.get("account_type") != "human" and not unclassified_test_approver:
         raise HTTPException(403, "Verified human account binding is required")
     methods = claims.get("amr")
     if not isinstance(methods, list) or not any(
