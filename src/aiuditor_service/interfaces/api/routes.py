@@ -1300,7 +1300,7 @@ async def _apply_filed_violation(
             filed.lease_id,
             action=filed.action.value,
             reason=filed.reason,
-            headers=dict(request.headers),
+            headers=_forward_headers(request),
         )
     except HostLookupUnavailable as exc:
         raise _plane_error(exc) from exc
@@ -1315,6 +1315,7 @@ async def _apply_filed_violation(
 async def file_violation_route(
     request: Request, contract_id: uuid.UUID, body: ContractViolationCreate
 ) -> ContractViolation:
+    require_grant_write(role_from_request(request))
     tenant_id = require_auditor_actor(request)
     filed, _updated = put_violation(
         _violations(request), _contracts(request), tenant_id, contract_id, body
@@ -1336,6 +1337,7 @@ async def file_violation_route(
 async def evaluate_contract_route(
     request: Request, contract_id: uuid.UUID
 ) -> list[ContractViolation]:
+    require_grant_write(role_from_request(request))
     tenant_id = require_hold_actor(request)
     row = _contracts(request).get(tenant_id, contract_id)
     if row is None:
@@ -1354,11 +1356,11 @@ async def evaluate_contract_route(
             raise HTTPException(status_code=503, detail=PLANE_HOP_FAILED)
         try:
             lease = await plane.get_lease(
-                tenant_id, row.lease_id, headers=dict(request.headers)
+                tenant_id, row.lease_id, headers=_forward_headers(request)
             )
             if lease is not None and lease.device_id is not None and lookup is not None:
                 host = await lookup.get(
-                    tenant_id, lease.device_id, headers=dict(request.headers)
+                    tenant_id, lease.device_id, headers=_forward_headers(request)
                 )
         except HostLookupUnavailable as exc:
             raise _plane_error(exc) from exc

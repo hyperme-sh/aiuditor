@@ -302,3 +302,57 @@ async def test_site_inbox_is_not_on_violation_paths(http_client):
     assert "/api/v1/aiuditor/contracts/{contract_id}/violations" in paths
     assert "/api/v1/aiuditor/contracts/{contract_id}/evaluate" in paths
     assert "/api/v1/auditor/v0/tickets" not in paths
+
+
+@pytest.mark.parametrize("path", ["violations", "evaluate"])
+@pytest.mark.parametrize("bound", [False, True])
+async def test_witness_cannot_mutate_hydrated_contract(
+    app, http_client, tenant_a, tenant_headers, plane_hop, event_sink, path, bound
+):
+    from aiuditor_service.role import AiuditorRole
+    row = _signed(app.state.contract_store, tenant_a).model_copy(update={
+        "lease_id": uuid.uuid4() if bound else None,
+        "until": datetime(2020, 1, 1, tzinfo=UTC),
+    })
+    app.state.contract_store.put(row)
+    app.state.aiuditor_role = AiuditorRole.WITNESS
+    before_events = list(event_sink)
+    response = await http_client.post(
+        f"/api/v1/aiuditor/contracts/{row.id}/{path}", headers=tenant_headers,
+        **({"json": {"kind": "abuse"}} if path == "violations" else {}),
+    )
+    assert response.status_code == 403
+    assert app.state.contract_store.get(tenant_a, row.id) == row
+    assert app.state.violation_store.list_for(tenant_a) == []
+    assert not plane_hop.violations
+    assert event_sink == before_events
+
+
+async def test_violation_http_hop_regenerates_framing(
+    app, http_client, tenant_a, tenant_headers, monkeypatch
+):
+    import httpx
+    from aiuditor_service.hypermesh import HttpPlaneHop
+    row = _signed(app.state.contract_store, tenant_a).model_copy(update={"lease_id": uuid.uuid4()})
+    app.state.contract_store.put(row)
+    seen = []
+    real_client = httpx.AsyncClient
+    async def upstream(request):
+        seen.append(request)
+        assert request.headers["host"] == "plane.example"
+        assert int(request.headers["content-length"]) == len(request.content)
+        assert request.headers["authorization"] == tenant_headers["Authorization"]
+        assert request.headers["x-tenant-id"] == str(tenant_a)
+        assert "cookie" not in request.headers
+        assert "x-untrusted" not in request.headers
+        return httpx.Response(200, json={})
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(
+        transport=httpx.MockTransport(upstream), **kw))
+    app.state.plane_hop = HttpPlaneHop("https://plane.example")
+    response = await http_client.post(
+        f"/api/v1/aiuditor/contracts/{row.id}/violations",
+        headers={**tenant_headers, "Host": "inbound.example", "Cookie": "private=secret", "X-Untrusted": "no"},
+        json={"kind": "abuse"},
+    )
+    assert response.status_code == 201, response.text
+    assert len(seen) == 1
