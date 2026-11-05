@@ -117,3 +117,18 @@ tables absent. The former all-owner entrypoint refuses that schema; the scoped
 entrypoint upgrades this owner's earlier adopted revision, preserves every
 foreign head and leaves the retired table absent. Empty-database refusal is also
 exercised. This does not qualify financial-owner migration or live callers.
+
+## Witness owner qualification
+
+The PostgreSQL integration lane includes the source #716 witness refusal and
+loopback HTTP framing cases. See [the security note](docs/witness-violation-security.md)
+for tested boundaries and the remaining deployed acceptance. These cases run in
+`integration/`, separately from the in-memory package suite.
+
+The source #715 PostgreSQL authority cases additionally qualify one successful
+consumer among four concurrent attempts, consumed state after reconnect,
+foreign-tenant invisibility under a non-superuser/non-BYPASSRLS role, refusal of
+expired/denied/session/already-consumed approvals, and current auditor/admin
+membership checks after role removal or user deactivation. These are owner-fixture
+checks with locally signed tenant sessions; they do not qualify a live identity
+provider or production policy settings.
