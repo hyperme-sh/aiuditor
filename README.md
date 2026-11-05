@@ -179,3 +179,18 @@ publisher independently verifies a real immutable stable baseline and refuses
 qualification snapshots, even if a caller job reports success. Existing valid
 stable records are retained; no release, version change, deployment or human
 approval prerequisite is introduced by this correction.
+
+### Replacing a class's qualification model
+
+Catalog entries are class-scoped. The default NX suite uses
+`llama-3.1-8b-q4-nx`, while AGX retains `llama-3.1-8b-q4`; their artifact pins can
+match without relabeling either hardware class. Existing suites are preserved
+at startup. A program operator can move an existing suite member with
+`PUT /api/v1/aiuditor/suite/{member_id}` using `class_id`, `catalog_id`, `pack_id`,
+`expected_catalog_id`, and `expected_pack_id`. The member ID and class remain
+unchanged; stale expected configuration or another member for the target model
+returns 409. The operation serializes with other program edits and bootstrap.
+
+This changes program configuration only. Legacy envelopes remain recorded under
+their original model IDs; no measurements, host certification or activation are
+granted. Fresh assigned native qualification must establish the new reference.

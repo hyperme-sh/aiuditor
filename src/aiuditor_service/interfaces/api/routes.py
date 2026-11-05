@@ -85,6 +85,7 @@ from aiuditor_service.domain.models import (
     ServiceCreate,
     SuiteMember,
     SuiteMemberCreate,
+    SuiteMemberReplace,
 )
 from aiuditor_service.export import build_grant_export
 from aiuditor_service.persist import MemoryPersistSession
@@ -120,6 +121,7 @@ from aiuditor_service.program import (
     resolve_admission,
     resolve_admission_async,
     seed_core_suite,
+    replace_suite_member,
     submit_admission,
     submit_admission_async,
 )
@@ -1052,11 +1054,26 @@ async def record_suite_member(
     return row
 
 
+@router.put("/suite/{member_id}", response_model=SuiteMember,
+            summary="Replace a reviewed class-suite model with compare-and-set")
+async def replace_class_suite_member(request: Request, member_id: uuid.UUID,
+                                     body: SuiteMemberReplace) -> SuiteMember:
+    require_grant_write(role_from_request(request))
+    _require_operator_program(request)
+    tenant_id = require_auditor_actor(request)
+    row = replace_suite_member(_suite(request), tenant_id, member_id, body)
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant_id, event_type=SUITE_MEMBER_RECORDED_V1,
+        payload=row.to_event_payload(),
+    )
+    return row
+
+
 @router.post(
     "/suite/seed",
     response_model=list[SuiteMember],
     status_code=status.HTTP_201_CREATED,
-    summary="Seed pack-v1 / llama-3.1-8b-q4 for agx-large and nx-volume.",
+    summary="Seed pack-v1 with the reviewed class-scoped 8B catalog entries.",
 )
 async def seed_suite(request: Request) -> list[SuiteMember]:
     require_grant_write(role_from_request(request))
