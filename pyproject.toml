@@ -8,15 +8,15 @@ version = "0.1.0"
 requires-python = ">=3.13"
 description = "AIuditor policy, approval and model admission service"
 dependencies = [
-    "controlplane-legacy-auth-bridge @ git+https://github.com/hyperme-sh/controlplane-identity.git@73d20cd1cb1cc35067da8fd205ac34c3937de272#subdirectory=compatibility",
+    "controlplane-legacy-auth-bridge @ git+https://github.com/hyperme-sh/controlplane-identity.git@8b137e958c0084abe56c1c71c145b6e6bc22783c#subdirectory=compatibility",
     "httpx>=0.28.0",
     "cryptography>=46.0.0",
-    "controlplane-api @ git+https://github.com/hyperme-sh/controlplane-api.git@edac59b2cc55923c983a11a451c4bed9ce53edef",
-    "controlplane-tenancy @ git+https://github.com/hyperme-sh/controlplane-tenancy.git@09f26d3fa677b6cd8e43be3424b8e2fa793c6ba1",
-    "controlplane-identity @ git+https://github.com/hyperme-sh/controlplane-identity.git@5675e7b617db705a7b0caf25f2d65d8a492f32b1",
-    "controlplane-core @ git+https://github.com/hyperme-sh/controlplane-core.git@8f66f5681b28e60a619344779252a5a048d39486",
-    "controlplane-db @ git+https://github.com/hyperme-sh/controlplane-db.git@92110d645e9aee5c7fd442249a1f525147ca2135",
-    "controlplane-events @ git+https://github.com/hyperme-sh/controlplane-events.git@d8bc887460c08f30c6a1dcb951bac042bad326a7",
+    "controlplane-api @ git+https://github.com/hyperme-sh/controlplane-api.git@82fc8c2ca21531f1a3f7a695257b3465c4a347da",
+    "controlplane-tenancy @ git+https://github.com/hyperme-sh/controlplane-tenancy.git@f252909af772b2c820555af36de456d46f17cfcb",
+    "controlplane-identity @ git+https://github.com/hyperme-sh/controlplane-identity.git@127d15fce7c3af8d8f8e239fb306ce88de76f02a",
+    "controlplane-core @ git+https://github.com/hyperme-sh/controlplane-core.git@c46bf282a8f1a605cfb8acb9beafb474c0b1b0c8",
+    "controlplane-db @ git+https://github.com/hyperme-sh/controlplane-db.git@95ef61433374274f4a4fc287e15982be6357e1cc",
+    "controlplane-events @ git+https://github.com/hyperme-sh/controlplane-events.git@2a49f9af5f6c4dc9d6c4ddebc83c41d6331e2c87",
 ]
 
 [dependency-groups]
@@ -46,5 +46,5 @@ markers = ["integration: requires owner migrations and PostgreSQL"]
 
 [tool.uv]
 override-dependencies = [
-    "controlplane-db @ git+https://github.com/hyperme-sh/controlplane-db.git@92110d645e9aee5c7fd442249a1f525147ca2135",
+    "controlplane-db @ git+https://github.com/hyperme-sh/controlplane-db.git@95ef61433374274f4a4fc287e15982be6357e1cc",
 ]

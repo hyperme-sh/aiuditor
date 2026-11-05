@@ -78,6 +78,23 @@ def test_tampered_transitive_pin_rejected_even_with_updated_fixture_digest(root)
 
 
 def test_missing_explicit_database_override_rejects_conflicting_transitive_pin(root):
+    import hashlib
+    import zipfile
+    manifest_path = root/'tests_artifacts/dependencies/manifest.json'
+    manifest = json.loads(manifest_path.read_text())
+    core = next(r for r in manifest['dependencies'] if r['distribution'] == 'controlplane-core')
+    database = next(r for r in manifest['dependencies'] if r['distribution'] == 'controlplane-db')
+    wheel = manifest_path.parent/core['wheel']
+    with zipfile.ZipFile(wheel) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    metadata, = [name for name in files if name.endswith('.dist-info/METADATA')]
+    assert database['dependency_revision'].encode() in files[metadata]
+    files[metadata] = files[metadata].replace(database['dependency_revision'].encode(), b'a'*40)
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        for name, contents in files.items():
+            archive.writestr(name, contents)
+    core['sha256'] = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
     p = root/'pyproject.toml'
     s = p.read_text()
     s = s[:s.index('[tool.uv]')]

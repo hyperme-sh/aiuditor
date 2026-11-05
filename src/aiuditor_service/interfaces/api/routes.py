@@ -7,6 +7,8 @@ Site inbox stays /api/v1/auditor. The door stays products/hypermesh-gateway.
 
 from __future__ import annotations
 
+import asyncio
+
 from aiuditor_service.lab_reporting import LabEnvelopeReport
 
 import uuid
@@ -261,7 +263,7 @@ def _require_operator_program(request: Request, *, allow_service_seed: bool = Fa
     purpose=service automation may still seed. Support and purpose=ir cannot.
     """
 
-    from aiuditor_service.tenant import bearer_secret
+    from aiuditor_service.tenant import bearer_secret, verified_credential_claims
     from api.domain.operator.claims import permissions_from_claims, program_may_edit_suite
     from controlplane_legacy_auth_bridge import (
         try_decode_api_key_session_jwt,
@@ -273,12 +275,12 @@ def _require_operator_program(request: Request, *, allow_service_seed: bool = Fa
     secret = bearer_secret(request)
     if not secret:
         raise HTTPException(status_code=403, detail="operator:program required")
-    session = try_decode_tenant_session_jwt(secret)
+    session = verified_credential_claims(request, "tenant-session", try_decode_tenant_session_jwt)
     if session is not None:
         if not program_may_edit_suite(permissions_from_claims(session)):
             raise HTTPException(status_code=403, detail="operator:program required")
         return
-    exchange = try_decode_api_key_session_jwt(secret)
+    exchange = verified_credential_claims(request, "api-key", try_decode_api_key_session_jwt)
     purpose = str((exchange or {}).get("purpose") or "").strip().lower()
     if allow_service_seed and purpose == "service":
         return
@@ -347,7 +349,7 @@ async def get_meta(request: Request) -> AiuditorMeta:
     summary="Tenant snapshot a witness may pull. No prompt bodies or tickets.",
 )
 async def get_hydrate(request: Request) -> HydrateSnapshot:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return build_hydrate(
         tenant_id=tenant_id,
         role=role_from_request(request),
@@ -362,7 +364,7 @@ async def get_hydrate(request: Request) -> HydrateSnapshot:
 )
 async def pull_hydrate(request: Request) -> HydrateSnapshot:
     require_witness(role_from_request(request))
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     hop = getattr(request.app.state, "parent_hop", None)
     if hop is None or isinstance(hop, ClosedParentHop):
         raise HTTPException(status_code=503, detail=PARENT_REQUIRED)
@@ -375,7 +377,7 @@ async def pull_hydrate(request: Request) -> HydrateSnapshot:
 
 @router.get("/connections", response_model=list[Connection])
 async def list_connections(request: Request) -> list[Connection]:
-    tenant_id = require_tenant_id(request)
+    tenant_id = await asyncio.to_thread(require_tenant_id, request)
     return _store(request).list_for(tenant_id)
 
 
@@ -390,7 +392,7 @@ async def list_connections(request: Request) -> list[Connection]:
     ),
 )
 async def list_allowed(request: Request) -> AllowedSet:
-    tenant_id = require_tenant_id(request)
+    tenant_id = await asyncio.to_thread(require_tenant_id, request)
     hosts: list[AllowedHost] = []
     for row in allowed_host_set(_store(request).list_for(tenant_id)):
         if row.device_id is None:
@@ -435,7 +437,7 @@ async def _require_enrolled_host(request: Request, tenant_id: uuid.UUID, device_
 
 @router.post("/connections", response_model=Connection, status_code=status.HTTP_201_CREATED)
 async def create_connection(request: Request, body: ConnectionCreate) -> Connection:
-    tenant_id = require_tenant_id(request)
+    tenant_id = await asyncio.to_thread(require_tenant_id, request)
     plane = "local"
     if request.headers.get("X-Control-Plane-ID"):
         from aiuditor_service.machine_identity import actor
@@ -480,7 +482,7 @@ async def create_connection(request: Request, body: ConnectionCreate) -> Connect
 
 @router.get("/connections/{connection_id}", response_model=Connection)
 async def get_connection(request: Request, connection_id: uuid.UUID) -> Connection:
-    tenant_id = require_tenant_id(request)
+    tenant_id = await asyncio.to_thread(require_tenant_id, request)
     row = _store(request).get(tenant_id, connection_id)
     if row is None:
         raise HTTPException(status_code=404, detail=CONNECTION_NOT_FOUND)
@@ -535,7 +537,7 @@ async def assign_connection(
     request: Request, connection_id: uuid.UUID, body: ConnectionAssign
 ) -> Connection:
     require_market_mint(role_from_request(request))
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = _connection_or_404(request, tenant_id, connection_id)
     if row.kind is not ConnectionKind.HOST or row.purpose is not ConnectionPurpose.LEASE:
         raise HTTPException(status_code=409, detail=LEASE_ASSIGN_ONLY)
@@ -573,7 +575,7 @@ async def mint_connection_ticket(
     request: Request, connection_id: uuid.UUID, body: ConnectionTicket
 ) -> AuditorGrant:
     require_market_mint(role_from_request(request))
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = _connection_or_404(request, tenant_id, connection_id)
     if row.kind is not ConnectionKind.HOST or row.purpose is not ConnectionPurpose.AUDITOR:
         raise HTTPException(status_code=409, detail=HOST_TICKET_ONLY)
@@ -620,7 +622,7 @@ async def mint_connection_ticket(
 async def classify_connection(
     request: Request, connection_id: uuid.UUID, body: ConnectionClassify
 ) -> dict[str, int]:
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = _connection_or_404(request, tenant_id, connection_id)
     if (
         row.kind is not ConnectionKind.PROVIDER
@@ -660,7 +662,7 @@ async def classify_connection(
     ),
 )
 async def create_approval(request: Request, body: ApprovalCreate) -> Approval:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = hold_approval(_approvals(request), tenant_id, body)
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
@@ -677,7 +679,7 @@ async def list_approvals(
     lease_id: uuid.UUID | None = Query(default=None),
     who: str | None = Query(default=None),
 ) -> list[Approval]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     store = _approvals(request)
     expire_due(store, tenant_id)
     return store.list_for(
@@ -696,7 +698,7 @@ async def latest_approval(
     who: str,
     prompt_class: str | None = Query(default=None),
 ) -> Approval:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     store = _approvals(request)
     row = latest_for(
         store, tenant_id, lease_id=lease_id, who=who, prompt_class=prompt_class
@@ -708,7 +710,7 @@ async def latest_approval(
 
 @router.get("/approvals/{approval_id}", response_model=Approval)
 async def get_approval(request: Request, approval_id: uuid.UUID) -> Approval:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     store = _approvals(request)
     expire_due(store, tenant_id)
     row = store.get(tenant_id, approval_id)
@@ -726,7 +728,7 @@ async def resolve_approval_route(
     request: Request, approval_id: uuid.UUID, body: ApprovalResolve
 ) -> Approval:
     resolved_by = await resolver_subject(request)
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = resolve_approval(
         _approvals(request),
         tenant_id,
@@ -761,7 +763,7 @@ async def consume_approval(
     summary="Org allow/hold/deny. Default renter chat is unclassified.",
 )
 async def create_policy(request: Request, body: ApprovalPolicyCreate) -> ApprovalPolicy:
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = put_policy(_policies(request), tenant_id, body)
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
@@ -776,13 +778,13 @@ async def list_policies(
     request: Request,
     purpose: str | None = Query(default=None),
 ) -> list[ApprovalPolicy]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return _policies(request).list_for(tenant_id, purpose=purpose)
 
 
 @router.delete("/policies/{policy_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_policy(request: Request, policy_id: uuid.UUID) -> None:
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = _policies(request).delete(tenant_id, policy_id)
     if row is None:
         raise HTTPException(status_code=404, detail=POLICY_NOT_FOUND)
@@ -801,7 +803,7 @@ async def delete_policy(request: Request, policy_id: uuid.UUID) -> None:
 )
 async def create_contract(request: Request, body: ContractCreate) -> Contract:
     require_grant_write(role_from_request(request))
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = put_contract(_contracts(request), tenant_id, body)
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
@@ -817,7 +819,7 @@ async def create_contract(request: Request, body: ContractCreate) -> Contract:
     summary="Operator grant export. No prompt bodies. Not the grant SoT.",
 )
 async def export_grants(request: Request) -> GrantExport:
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     return build_grant_export(
         tenant_id=tenant_id,
         contracts=_contracts(request),
@@ -828,13 +830,13 @@ async def export_grants(request: Request) -> GrantExport:
 
 @router.get("/contracts", response_model=list[Contract], summary="Tenant contracts")
 async def list_contracts(request: Request) -> list[Contract]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return _contracts(request).list_for(tenant_id)
 
 
 @router.get("/contracts/{contract_id}", response_model=Contract)
 async def get_contract(request: Request, contract_id: uuid.UUID) -> Contract:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _contracts(request).get(tenant_id, contract_id)
     if row is None:
         raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
@@ -847,7 +849,7 @@ async def get_contract(request: Request, contract_id: uuid.UUID) -> Contract:
     summary="Signed spine §D grant a sibling product may cite. Not a catalog row.",
 )
 async def get_contract_grant(request: Request, contract_id: uuid.UUID) -> ContractGrant:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return ContractGrant.from_contract(
         require_signed_grant(_contracts(request), tenant_id, contract_id),
         writer=writer_for(role_from_request(request)),
@@ -862,7 +864,7 @@ async def get_contract_grant(request: Request, contract_id: uuid.UUID) -> Contra
 async def sign_contract_route(request: Request, contract_id: uuid.UUID) -> Contract:
     require_grant_write(role_from_request(request))
     signed_by = await require_contract_signer(request)
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = sign_contract(
         _contracts(request), tenant_id, contract_id, signed_by=signed_by
     )
@@ -883,7 +885,7 @@ async def bind_contract_route(
     request: Request, contract_id: uuid.UUID, body: ContractBind
 ) -> Contract:
     require_grant_write(role_from_request(request))
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = bind_contract(_contracts(request), tenant_id, contract_id, body)
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
@@ -920,7 +922,7 @@ async def fulfill_contract_route(
     summary="Name a leasable backend. Not a Hypermesh class or catalog row.",
 )
 async def create_catalog_service(request: Request, body: ServiceCreate) -> CatalogService:
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = put_service(_catalog(request), _store(request), tenant_id, body)
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
@@ -932,13 +934,13 @@ async def create_catalog_service(request: Request, body: ServiceCreate) -> Catal
 
 @router.get("/catalog", response_model=list[CatalogService], summary="Tenant service catalog")
 async def list_catalog_services(request: Request) -> list[CatalogService]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return _catalog(request).list_for(tenant_id)
 
 
 @router.get("/catalog/{service_id}", response_model=CatalogService)
 async def get_catalog_service(request: Request, service_id: uuid.UUID) -> CatalogService:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _catalog(request).get(tenant_id, service_id)
     if row is None:
         raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND)
@@ -957,7 +959,7 @@ async def allocate_catalog_service(
     role = role_from_request(request)
     require_grant_write(role)
     require_market_mint(role)
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     signed_by = await require_contract_signer(request)
     lookup = getattr(request.app.state, "host_lookup", None)
     plane = getattr(request.app.state, "plane_hop", None)
@@ -1020,13 +1022,13 @@ async def list_envelopes(
     request: Request,
     class_id: str | None = Query(default=None),
 ) -> list[ClassEnvelope]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return _envelopes(request).list_for(tenant_id, class_id=class_id)
 
 
 @router.get("/envelopes/{envelope_id}", response_model=ClassEnvelope)
 async def get_envelope(request: Request, envelope_id: uuid.UUID) -> ClassEnvelope:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _envelopes(request).get(tenant_id, envelope_id)
     if row is None:
         raise HTTPException(status_code=404, detail=ENVELOPE_NOT_FOUND)
@@ -1043,8 +1045,8 @@ async def record_suite_member(
     request: Request, body: SuiteMemberCreate
 ) -> SuiteMember:
     require_grant_write(role_from_request(request))
-    _require_operator_program(request, allow_service_seed=False)
-    tenant_id = require_auditor_actor(request)
+    await asyncio.to_thread(_require_operator_program, request, allow_service_seed=False)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = put_suite_member(_suite(request), tenant_id, body)
     await get_tenant_event_publisher().publish(
         tenant_id=tenant_id,
@@ -1077,8 +1079,8 @@ async def replace_class_suite_member(request: Request, member_id: uuid.UUID,
 )
 async def seed_suite(request: Request) -> list[SuiteMember]:
     require_grant_write(role_from_request(request))
-    _require_operator_program(request, allow_service_seed=True)
-    tenant_id = require_auditor_actor(request)
+    await asyncio.to_thread(_require_operator_program, request, allow_service_seed=True)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     rows = seed_core_suite(_suite(request), tenant_id)
     for row in rows:
         await get_tenant_event_publisher().publish(
@@ -1098,13 +1100,13 @@ async def list_suite_members(
     request: Request,
     class_id: str | None = Query(default=None),
 ) -> list[SuiteMember]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return _suite(request).list_for(tenant_id, class_id=class_id)
 
 
 @router.get("/suite/{member_id}", response_model=SuiteMember)
 async def get_suite_member(request: Request, member_id: uuid.UUID) -> SuiteMember:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _suite(request).get(tenant_id, member_id)
     if row is None:
         raise HTTPException(status_code=404, detail=SUITE_MEMBER_NOT_FOUND)
@@ -1119,7 +1121,7 @@ async def get_suite_member(request: Request, member_id: uuid.UUID) -> SuiteMembe
 )
 async def create_admission(request: Request, body: AdmissionCreate) -> Admission:
     require_grant_write(role_from_request(request))
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     plane = getattr(request.app.state, "plane_hop", None)
     row = await submit_admission_async(
         _admissions(request),
@@ -1146,7 +1148,7 @@ async def list_admissions(
     status_filter: str | None = Query(default=None, alias="status"),
     intended_class: str | None = Query(default=None),
 ) -> list[Admission]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return _admissions(request).list_for(
         tenant_id, status=status_filter, intended_class=intended_class
     )
@@ -1154,7 +1156,7 @@ async def list_admissions(
 
 @router.get("/admissions/{admission_id}", response_model=Admission)
 async def get_admission(request: Request, admission_id: uuid.UUID) -> Admission:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _admissions(request).get(tenant_id, admission_id)
     if row is None:
         raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
@@ -1190,7 +1192,7 @@ async def verdict_admission(
     request: Request, admission_id: uuid.UUID, body: AdmissionResolve
 ) -> Admission:
     require_grant_write(role_from_request(request))
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     plane = getattr(request.app.state, "plane_hop", None)
     row = await resolve_admission_async(
         _admissions(request),
@@ -1221,7 +1223,7 @@ async def verdict_admission(
 )
 async def run_crawl(request: Request) -> CrawlRunResult:
     require_grant_write(role_from_request(request))
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     from aiuditor_service.crawl import StaticMetadataSource
     from aiuditor_service.intake import run_intake
 
@@ -1269,7 +1271,7 @@ async def list_crawl_candidates(
     class_id: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
 ) -> list[CrawlCandidate]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return _candidates(request).list_for(
         tenant_id, class_id=class_id, status=status_filter
     )
@@ -1284,7 +1286,7 @@ async def list_tenant_violations(
     request: Request,
     contract_id: uuid.UUID | None = Query(default=None),
 ) -> list[ContractViolation]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     if contract_id is not None and _contracts(request).get(tenant_id, contract_id) is None:
         raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
     return _violations(request).list_for(tenant_id, contract_id=contract_id)
@@ -1298,7 +1300,7 @@ async def list_tenant_violations(
 async def list_violations(
     request: Request, contract_id: uuid.UUID
 ) -> list[ContractViolation]:
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _contracts(request).get(tenant_id, contract_id)
     if row is None:
         raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
@@ -1343,7 +1345,7 @@ async def file_violation_route(
     request: Request, contract_id: uuid.UUID, body: ContractViolationCreate
 ) -> ContractViolation:
     require_grant_write(role_from_request(request))
-    tenant_id = require_auditor_actor(request)
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     filed, _updated = put_violation(
         _violations(request), _contracts(request), tenant_id, contract_id, body
     )
@@ -1365,7 +1367,7 @@ async def evaluate_contract_route(
     request: Request, contract_id: uuid.UUID
 ) -> list[ContractViolation]:
     require_grant_write(role_from_request(request))
-    tenant_id = require_hold_actor(request)
+    tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _contracts(request).get(tenant_id, contract_id)
     if row is None:
         raise HTTPException(status_code=404, detail=CONTRACT_NOT_FOUND)
