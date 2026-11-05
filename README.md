@@ -132,3 +132,22 @@ expired/denied/session/already-consumed approvals, and current auditor/admin
 membership checks after role removal or user deactivation. These are owner-fixture
 checks with locally signed tenant sessions; they do not qualify a live identity
 provider or production policy settings.
+
+### Package preparation
+
+`bash scripts/check-package.sh --fixtures` runs the existing source, fresh-wheel
+and rebuilt-source-archive consumers without private Git credentials. Fixtures
+are built from the exact clean Git revisions already pinned by this package;
+the manifest records their digests and source provenance. The verifier checks
+root metadata, the complete active lock graph and transitive wheel metadata,
+including the explicitly declared uv database override. This is qualification of
+the effective uv graph; it does not establish portable installer resolution of
+conflicting transitive database pins without that override.
+Explicit private extras and unrecognized conditional pins fail closed.
+
+The read-only pull-request workflow retains tested wheels, source archives and
+an artifact-derived runtime inventory as Actions artifacts. It does not publish
+releases. These are preparation evidence, not an accepted synchronized dependency
+baseline: package version alignment, dependency adoption and comparison against
+a qualified prior baseline remain separate work. Existing owner test boundaries
+and live/provider qualification requirements continue to apply.
