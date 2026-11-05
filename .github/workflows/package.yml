@@ -63,6 +63,8 @@ jobs:
           unset DEPENDENCY_READ_TOKEN
           bash scripts/check-package.sh
           bash scripts/check-postgres.sh
+      - name: Check registry publication failure handling
+        run: python3 scripts/test-image-publication.py
       - name: Build standalone runtime image
         env:
           DEPENDENCY_READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN }}
@@ -144,7 +146,7 @@ jobs:
           if docker manifest inspect "$image" > /dev/null 2>manifest.err; then
             echo 'Test image already exists; refusing to replace its content' >&2
             exit 1
-          elif ! grep -Fxq "no such manifest: $image" manifest.err; then
+          elif [[ "$(cat manifest.err)" != "no such manifest: $image" && "$(cat manifest.err)" != "manifest unknown" ]]; then
             cat manifest.err >&2
             echo 'Registry lookup did not establish an absent manifest; refusing publication' >&2
             exit 1
