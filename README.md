@@ -99,3 +99,21 @@ dependency or deployment credential. Deployments must select the resulting
 registry digest. Existing test tags cannot be overwritten by reruns. This test
 channel is not stable promotion or live acceptance. Existing-database adoption must independently
 qualify schema compatibility; startup's newer-revision skip is insufficient.
+
+### Owner-scoped schema startup
+
+The image entrypoint runs `aiuditor_service.schema_startup` before serving
+requests. It upgrades only the installed `aiuditor` chain under the shared
+migration lock, then provisions marketplace tenancy through the tenancy owner.
+An absent or ambiguous owner revision stops startup; first-time platform/schema
+provisioning remains an explicit deployment operation. It never stamps a mixed
+history, bootstraps an empty database, or validates/upgrades another service's
+schema. The exact locked database package supplies the migration resources and
+its guarded handling of an unknown newer owner revision. That guard permits
+startup only; existing-data compatibility still requires clone qualification.
+
+PostgreSQL regressions reproduce a native payment revision with retired legacy
+tables absent. The former all-owner entrypoint refuses that schema; the scoped
+entrypoint upgrades this owner's earlier adopted revision, preserves every
+foreign head and leaves the retired table absent. Empty-database refusal is also
+exercised. This does not qualify financial-owner migration or live callers.
