@@ -74,17 +74,17 @@
     {
       "distribution": "controlplane-legacy-auth-bridge",
       "version": "0.1.0",
-      "dependency_revision": "8a04f6ff7accfd153b7094a9d010ac2254679577",
-      "artifact_revision": "8a04f6ff7accfd153b7094a9d010ac2254679577",
+      "dependency_revision": "8b137e958c0084abe56c1c71c145b6e6bc22783c",
+      "artifact_revision": "8b137e958c0084abe56c1c71c145b6e6bc22783c",
       "wheel": "controlplane_legacy_auth_bridge-0.1.0-py3-none-any.whl",
-      "sha256": "eb3180f64cc5efbe55b3cacab277d1547056ec10a0ecc7c33ca979d7e1f8256c",
-      "source_url": "https://github.com/hyperme-sh/controlplane-identity/tree/8a04f6ff7accfd153b7094a9d010ac2254679577",
+      "sha256": "4f2a931f3d7d7f36a6f412c34892973a02557174e641cd2e91e6968d9f7455f8",
+      "source_url": "https://github.com/hyperme-sh/controlplane-identity/tree/8b137e958c0084abe56c1c71c145b6e6bc22783c",
       "delivery": "local_build_from_exact_clean_git_revision",
       "build_command": "uv build --wheel <exact clean pinned git archive>",
       "qualification": "Exact-source development fixture; no prior release required and no publication claimed",
       "source_subdirectory": "compatibility",
-      "source_archive_sha256": "aa79666a424065e77cc041aba39cb079eeebadc537e4e720b1be39949f8a10a3",
-      "source_tree": "88dca570e8280d83e1288d0b1aa63e5b6df3de95"
+      "source_archive_sha256": "c6aa68324b9000e5f0690d241319b060a30bc9c3f82c611c3470d51141081f13",
+      "source_tree": "5398abdd3aa51700a53852ba5a3f1259d7f5b5d4"
     },
     {
       "distribution": "controlplane-tenancy",

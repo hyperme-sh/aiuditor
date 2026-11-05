@@ -1,5 +1,7 @@
 """Adopted identity checks must run outside the request's event loop."""
 import threading
+import asyncio
+import jwt
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -15,8 +17,8 @@ from aiuditor_service.approvals import resolver_subject
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
 
 
-@pytest.fixture
-def lifecycle(monkeypatch, tenant_a):
+@pytest.fixture(params=["canonical", "legacy"])
+def lifecycle(monkeypatch, tenant_a, request):
     monkeypatch.setenv("ACCOUNT_CLOSURE_ENFORCEMENT_ENABLED", "true")
     monkeypatch.setenv("ACCOUNT_CLOSURE_GUARD_URL", "https://closure.invalid")
     monkeypatch.setenv("ACCOUNT_CLOSURE_GUARD_TOKEN", "g" * 40)
@@ -36,8 +38,15 @@ def lifecycle(monkeypatch, tenant_a):
     monkeypatch.setattr(account_lifecycle, "_post_json", post)
     token = mint_tenant_session_jwt(
         claims={"sub": "human-1", "account_type": "human", "amr": ["pwd"]},
-        tenant_id=tenant_a, extra_roles=["ir"],
+        tenant_id=tenant_a, extra_roles=["ir"], extra_permissions=["operator:program"],
     )
+    if request.param == "legacy":
+        monkeypatch.setenv("CONTROLPLANE_ACCEPT_LEGACY_AUTH", "1")
+        claims = jwt.decode(token, settings.usable_api_key_exchange_secret(), algorithms=["HS256"], options={"verify_aud": False})
+        claims["iss"] = "https://panopticon.internal/tenant-session"
+        claims["panopticon_auth"] = claims.pop("spanopticon_auth")
+        claims["https://panopticon.dev/tenant_id"] = claims.pop("https://spanopticon.dev/tenant_id")
+        token = jwt.encode(claims, settings.usable_api_key_exchange_secret(), algorithm="HS256")
     headers = {"Authorization": f"Bearer {token}", "X-Tenant-ID": str(tenant_a)}
     return headers, state, calls
 
@@ -88,3 +97,19 @@ async def test_middleware_binds_only_live_credential(monkeypatch, lifecycle, ten
     assert gucs == ([None, tenant_a] if blocked is False else [None])
     assert calls
 
+
+
+@pytest.mark.parametrize("blocked", [False, True, "unavailable"])
+async def test_operator_program_uses_current_account_authority(app, lifecycle, blocked):
+    from aiuditor_service.interfaces.api.routes import _require_operator_program
+    headers, state, calls = lifecycle
+    state["blocked"] = blocked
+    request = Request({"type": "http", "method": "POST", "path": "/suite", "app": app,
+                       "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()]})
+    if blocked is False:
+        await asyncio.to_thread(_require_operator_program, request, allow_service_seed=False)
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await asyncio.to_thread(_require_operator_program, request, allow_service_seed=False)
+        assert exc.value.status_code == 403
+    assert calls
