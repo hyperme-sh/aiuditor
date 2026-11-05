@@ -16,7 +16,7 @@ from aiuditor_service.private_models.contracts import (
 )
 from aiuditor_service.role import require_grant_write, role_from_request
 from aiuditor_service.tenant import bearer_secret, require_tenant_id
-from controlplane_identity.security.tenant_session_jwt import (
+from controlplane_legacy_auth_bridge import (
     is_smoke_session,
     try_decode_tenant_session_jwt,
 )
