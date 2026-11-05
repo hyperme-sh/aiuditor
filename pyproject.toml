@@ -8,6 +8,7 @@ version = "0.1.0"
 requires-python = ">=3.13"
 description = "AIuditor policy, approval and model admission service"
 dependencies = [
+    "controlplane-legacy-auth-bridge @ git+https://github.com/hyperme-sh/controlplane-identity.git@73d20cd1cb1cc35067da8fd205ac34c3937de272#subdirectory=compatibility",
     "httpx>=0.28.0",
     "cryptography>=46.0.0",
     "controlplane-api @ git+https://github.com/hyperme-sh/controlplane-api.git@edac59b2cc55923c983a11a451c4bed9ce53edef",

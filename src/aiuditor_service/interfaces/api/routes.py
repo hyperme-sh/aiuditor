@@ -261,10 +261,10 @@ def _require_operator_program(request: Request) -> None:
 
     from aiuditor_service.tenant import bearer_secret
     from api.domain.operator.claims import permissions_from_claims, program_may_edit_suite
-    from controlplane_identity.security.api_key_exchange_jwt import (
+    from controlplane_legacy_auth_bridge import (
         try_decode_api_key_session_jwt,
     )
-    from controlplane_identity.security.tenant_session_jwt import (
+    from controlplane_legacy_auth_bridge import (
         try_decode_tenant_session_jwt,
     )
 
