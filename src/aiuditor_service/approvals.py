@@ -6,6 +6,8 @@ Prompt bodies are not stored. Timeout is a deny.
 
 from __future__ import annotations
 
+import asyncio
+
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -93,7 +95,7 @@ async def resolver_subject(request: Request) -> str:
 
     if request_has_internal_token(request, _internal_token()):
         raise HTTPException(401, NAMED_HUMAN_REQUIRED)
-    tenant, subject = human(request)
+    tenant, subject = await asyncio.to_thread(human, request)
     if subject.lower() in _LLM_SUBJECTS:
         raise HTTPException(403, LLM_NEVER_RESOLVES)
     if len(subject) > 256:

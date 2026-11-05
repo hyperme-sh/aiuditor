@@ -252,7 +252,7 @@ async def sandbox(
 
 @router.get("/private-model-admissions")
 async def list_holds(request: Request, response: Response):
-    tenant, subject = human(request)
+    tenant, subject = await asyncio.to_thread(human, request)
     async with transaction(tenant, response) as session:
         await approver(session, tenant, subject)
         rows = await session.scalars(
@@ -268,7 +268,7 @@ async def list_holds(request: Request, response: Response):
 async def verdict(
     request: Request, response: Response, admission_id: uuid.UUID, body: Verdict
 ):
-    tenant, subject = human(request)
+    tenant, subject = await asyncio.to_thread(human, request)
     async with transaction(tenant, response) as session:
         await approver(session, tenant, subject)
         row = await admission(session, tenant, admission_id)
@@ -298,7 +298,7 @@ async def verdict(
 
 @router.post("/private-model-admissions/{admission_id}/revoke")
 async def revoke(request: Request, response: Response, admission_id: uuid.UUID):
-    tenant, subject = human(request)
+    tenant, subject = await asyncio.to_thread(human, request)
     async with transaction(tenant, response) as session:
         await approver(session, tenant, subject)
         row = await admission(session, tenant, admission_id)

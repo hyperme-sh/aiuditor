@@ -58,6 +58,8 @@ def provider_hop() -> FakeProviderHop:
 
 @pytest.fixture
 def app(event_sink, host_lookup, plane_hop, provider_hop, monkeypatch):
+    # HTTP unit tests must not race the background crawler for mocked clients.
+    monkeypatch.setenv("AIUDITOR_CRAWL_SOURCE", "static")
     monkeypatch.setattr(
         api_config.settings,
         "database_url",

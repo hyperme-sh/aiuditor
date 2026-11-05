@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -35,7 +37,7 @@ class AiuditorServiceDbMiddleware(BaseHTTPMiddleware):
             try:
                 await set_current_tenant_id_guc(session, None)
                 try:
-                    tid = rls_tenant_id(request)
+                    tid = await asyncio.to_thread(rls_tenant_id, request)
                 except HTTPException as exc:
                     from starlette.responses import JSONResponse
 
