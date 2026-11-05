@@ -1,0 +1,115 @@
+{
+  "events": {
+    "aiuditor.admission.resolved.v1": {
+      "method": "to_event_payload",
+      "model": "Admission",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.admission.submitted.v1": {
+      "method": "to_event_payload",
+      "model": "Admission",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.approval.held.v1": {
+      "method": "to_event_payload",
+      "model": "Approval",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.approval.resolved.v1": {
+      "method": "to_event_payload",
+      "model": "Approval",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.catalog.service.allocated.v1": {
+      "method": "to_event_payload",
+      "model": "ServiceAllocation",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.catalog.service.created.v1": {
+      "method": "to_event_payload",
+      "model": "CatalogService",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.connection.assigned.v1": {
+      "method": "to_event_payload",
+      "model": "Connection",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.connection.created.v1": {
+      "method": "to_event_payload",
+      "model": "Connection",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.contract.bound.v1": {
+      "method": "to_event_payload",
+      "model": "Contract",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.contract.created.v1": {
+      "method": "to_event_payload",
+      "model": "Contract",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.contract.fulfilled.v1": {
+      "method": "to_event_payload",
+      "model": "Contract",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.contract.signed.v1": {
+      "method": "to_event_payload",
+      "model": "Contract",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.contract.violated.v1": {
+      "method": "to_event_payload",
+      "model": "ContractViolation",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.envelope.recorded.v1": {
+      "method": "to_event_payload",
+      "model": "ClassEnvelope",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.policy.created.v1": {
+      "method": "to_event_payload",
+      "model": "ApprovalPolicy",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.policy.deleted.v1": {
+      "method": "to_event_payload",
+      "model": "ApprovalPolicy",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.suite.member.recorded.v1": {
+      "method": "to_event_payload",
+      "model": "SuiteMember",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    }
+  },
+  "provenance": {
+    "commit": "2cd00fd9a7ebb950999571a81be7cb0a24d9264e",
+    "files": {
+      "core/e2e-tests/tests/test_event_wire_sources.py": "325303805df55ae157268e42493aea2a81d8fbecfb05632f82f24dfa479f9714",
+      "scripts/event_contract_sources.json": "5988c3b2c470f6076d9fa4c7159408c11639739eceaef8e9a604daf95c2230bd",
+      "scripts/generate_event_contracts.py": "af636888ec9e5692eb1a08089184b2570aa2a4ca1a2389d40ea0eb1d5a6db5fd"
+    },
+    "repository": "FyberLabs/panopticon"
+  }
+}
