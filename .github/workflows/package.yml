@@ -1,5 +1,6 @@
 name: Standalone package
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -7,7 +8,7 @@ permissions:
   contents: read
 jobs:
   package:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on:
       group: shared-local
       labels: [self-hosted, linux, x64]
@@ -62,6 +63,33 @@ jobs:
           unset DEPENDENCY_READ_TOKEN
           bash scripts/check-package.sh
           bash scripts/check-postgres.sh
+      - name: Build standalone runtime image
+        env:
+          DEPENDENCY_READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN }}
+        run: |
+          docker build --secret id=dependency_read_token,env=DEPENDENCY_READ_TOKEN \
+            --build-arg SOURCE_SHA="$GITHUB_SHA" \
+            --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} .
+          docker run --rm --network none --entrypoint /app/.venv/bin/python aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} \
+            -c 'from aiuditor_service.app import app; import controlplane_db; assert app.openapi()["paths"]'
+      - name: Retain the tested main runtime image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          image_dir=$(mktemp -d "$RUNNER_TEMP/tested-image.XXXXXX")
+          echo "TESTED_IMAGE_DIR=$image_dir" >> "$GITHUB_ENV"
+          docker save aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} -o "$image_dir/image.tar"
+          docker image inspect aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} --format '{{.Id}}' > "$image_dir/image.id"
+          sha256sum "$image_dir/image.tar" | cut -d ' ' -f 1 > "$image_dir/image.sha256"
+      - name: Upload tested main runtime image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tested-runtime-image
+          path: ${{ env.TESTED_IMAGE_DIR }}/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
       - name: Retain validated package bytes
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -71,3 +99,57 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
+      - name: Remove job-owned image and temporary archive
+        if: always()
+        run: |
+          docker image rm aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} >/dev/null 2>&1 || true
+          if [[ -n "${TESTED_IMAGE_DIR:-}" ]]; then rm -rf -- "$TESTED_IMAGE_DIR"; fi
+  publish-test-image:
+    concurrency:
+      group: aiuditor-test-image-${{ github.sha }}
+      cancel-in-progress: false
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      # No checkout, application execution, or private dependency/deployment secret.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: tested-runtime-image
+          path: image
+      - name: Publish tested main image without rebuilding
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(cat image/image.sha256)
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          actual=$(sha256sum image/image.tar | cut -d ' ' -f 1)
+          test "$expected" = "$actual"
+          docker load -i image/image.tar
+          local_image=$(cat image/image.id)
+          [[ "$local_image" =~ ^sha256:[0-9a-f]{64}$ ]]
+          revision=$(docker image inspect "$local_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+          test "$revision" = "$GITHUB_SHA"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/runtime:test-${GITHUB_SHA}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null' EXIT
+          # Existing candidates cannot silently change on a rerun.
+          if docker manifest inspect "$image" > /dev/null 2>manifest.err; then
+            echo 'Test image already exists; refusing to replace its content' >&2
+            exit 1
+          elif ! grep -Fxq "no such manifest: $image" manifest.err; then
+            cat manifest.err >&2
+            echo 'Registry lookup did not establish an absent manifest; refusing publication' >&2
+            exit 1
+          fi
+          docker tag "$local_image" "$image"
+          docker push "$image"
+          digest=$(docker image inspect "$image" --format '{{index .RepoDigests 0}}')
+          printf 'Test image: `%s`\nSource: `%s`\nValidation run: `%s`\n' "$digest" "$GITHUB_SHA" "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
