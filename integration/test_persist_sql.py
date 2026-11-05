@@ -277,3 +277,56 @@ def test_named_owner_contract_can_only_bind_one_concurrent_lease(migrated_postgr
     successful = [r for r in results if r is not None]
     assert len(successful) == 1
     assert seed.get(tenant, signed.id).lease_id == successful[0]
+
+
+def test_suite_compare_and_set_serializes_replicas_and_recovers(migrated_postgres):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from fastapi import HTTPException
+    from aiuditor_service.domain.models import SuiteMemberCreate, SuiteMemberReplace
+    from aiuditor_service.program import put_suite_member, replace_suite_member
+    from aiuditor_service.store import SuiteStore
+    tenant = uuid.uuid4()
+    _plant_tenant(migrated_postgres, tenant)
+    current = put_suite_member(SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres)),tenant,
+        SuiteMemberCreate(class_id="nx-volume",catalog_id="legacy-model",pack_id="pack-v1"))
+    barrier = Barrier(2)
+    def replace(catalog):
+        store = SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres))
+        store.get(tenant,current.id)  # A long-lived reader must refresh after the lock.
+        barrier.wait(timeout=10)
+        try:
+            return replace_suite_member(store,tenant,current.id,SuiteMemberReplace(
+                class_id="nx-volume",catalog_id=catalog,pack_id="pack-v1",
+                expected_catalog_id="legacy-model",expected_pack_id="pack-v1")).catalog_id
+        except HTTPException as error:
+            assert error.status_code == 409
+            return None
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(replace,["nx-model-a","nx-model-b"]))
+    assert sum(row is not None for row in results) == 1
+    store = SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    rows = store.list_for(tenant,class_id="nx-volume")
+    assert len(rows) == 1 and rows[0].id == current.id
+    assert rows[0].catalog_id in {"nx-model-a","nx-model-b"}
+    replay = SuiteMemberReplace(class_id="nx-volume",catalog_id=rows[0].catalog_id,pack_id="pack-v1",
+        expected_catalog_id="legacy-model",expected_pack_id="pack-v1")
+    assert replace_suite_member(store,tenant,current.id,replay) == rows[0]
+    with pytest.raises(HTTPException) as wrong_tenant:
+        replace_suite_member(store,uuid.uuid4(),current.id,replay)
+    assert wrong_tenant.value.status_code == 404
+
+
+def test_public_default_seed_preserves_reviewed_program(migrated_postgres):
+    from aiuditor_service.domain.models import SuiteMemberCreate
+    from aiuditor_service.program import put_suite_member, seed_core_suite
+    from aiuditor_service.store import SuiteStore
+    tenant=uuid.uuid4()
+    _plant_tenant(migrated_postgres,tenant)
+    store=SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    original=put_suite_member(store,tenant,SuiteMemberCreate(class_id="nx-volume",catalog_id="reviewed-nx",pack_id="thin-v1"))
+    assert len(seed_core_suite(store,tenant))==2
+    refreshed=SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    assert refreshed.list_for(tenant,class_id="nx-volume")==[original]
+    assert len(seed_core_suite(refreshed,tenant))==2
+    assert refreshed.list_for(tenant,class_id="nx-volume")==[original]

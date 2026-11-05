@@ -29,6 +29,7 @@ from aiuditor_service.domain.models import (
     ClassEnvelopeCreate,
     SuiteMember,
     SuiteMemberCreate,
+    SuiteMemberReplace,
 )
 from aiuditor_service.store import EnvelopeStore, SuiteStore
 
@@ -42,11 +43,12 @@ FORMAT_REQUIRED = "format is required"
 LICENSE_REQUIRED = "license is required"
 PACK_ID = "pack-v1"
 CATALOG_LLAMA_8B = "llama-3.1-8b-q4"
+CATALOG_LLAMA_8B_NX = "llama-3.1-8b-q4-nx"
 
 # Compact host cert seed: pack-v1 / llama-3.1-8b-q4 on public Orin classes.
 CORE_SUITE_SEED: tuple[tuple[str, str, str], ...] = (
     ("agx-large", CATALOG_LLAMA_8B, PACK_ID),
-    ("nx-volume", CATALOG_LLAMA_8B, PACK_ID),
+    ("nx-volume", CATALOG_LLAMA_8B_NX, PACK_ID),
 )
 
 __all__ = [
@@ -67,6 +69,7 @@ __all__ = [
     "advance_admission_async",
     "put_envelope",
     "put_suite_member",
+    "replace_suite_member",
     "record_sandbox_result",
     "resolve_admission",
     "resolve_admission_async",
@@ -146,7 +149,7 @@ def put_envelope(
     return row
 
 
-def put_suite_member(
+def _put_suite_member(
     store: SuiteStore,
     tenant_id: uuid.UUID,
     body: SuiteMemberCreate,
@@ -177,25 +180,51 @@ def put_suite_member(
     return row
 
 
+def put_suite_member(store: SuiteStore, tenant_id: uuid.UUID, body: SuiteMemberCreate,
+                     *, now: datetime | None = None) -> SuiteMember:
+    with store.persist.program_bootstrap_scope(tenant_id):
+        return _put_suite_member(store, tenant_id, body, now=now)
+
+
+def replace_suite_member(store: SuiteStore, tenant_id: uuid.UUID, member_id: uuid.UUID,
+                         body: SuiteMemberReplace) -> SuiteMember:
+    """Replace one class's model atomically without adding a second workload."""
+    with store.persist.program_bootstrap_scope(tenant_id):
+        current = store.get(tenant_id, member_id)
+        if current is None:
+            raise HTTPException(404, SUITE_MEMBER_NOT_FOUND)
+        if current.class_id != body.class_id:
+            raise HTTPException(409, "Suite replacement must keep its hardware class")
+        if current.catalog_id == body.catalog_id and current.pack_id == body.pack_id:
+            return current
+        if (current.catalog_id != body.expected_catalog_id
+                or current.pack_id != body.expected_pack_id):
+            raise HTTPException(409, "Suite changed; review its current configuration")
+        duplicate = store.for_class_catalog(tenant_id, body.class_id, body.catalog_id)
+        if duplicate is not None and duplicate.id != member_id:
+            raise HTTPException(409, "Catalog is already a member of this class suite")
+        return store.put(current.model_copy(update={"catalog_id":body.catalog_id,"pack_id":body.pack_id}))
+
+
 def seed_core_suite(
     store: SuiteStore,
     tenant_id: uuid.UUID,
     *,
     now: datetime | None = None,
 ) -> list[SuiteMember]:
-    """Ensure pack-v1 / llama-3.1-8b-q4 membership for agx-large and nx-volume."""
+    """Ensure pack-v1 membership for each class-specific 8B catalog entry."""
 
     clock = _now(now)
     rows: list[SuiteMember] = []
-    for class_id, catalog_id, pack_id in CORE_SUITE_SEED:
-        rows.append(
-            put_suite_member(
-                store,
-                tenant_id,
-                SuiteMemberCreate(
-                    class_id=class_id, catalog_id=catalog_id, pack_id=pack_id
-                ),
-                now=clock,
-            )
-        )
+    with store.persist.program_bootstrap_scope(tenant_id):
+        for class_id, catalog_id, pack_id in CORE_SUITE_SEED:
+            existing = store.list_for(tenant_id, class_id=class_id)
+            if existing:
+                # Generic seeding may initialize documented defaults, but must
+                # never modify or add workloads to an operator-managed class.
+                rows.extend(existing)
+                continue
+            rows.append(_put_suite_member(store, tenant_id, SuiteMemberCreate(
+                class_id=class_id, catalog_id=catalog_id, pack_id=pack_id,
+            ), now=clock))
     return rows

@@ -506,6 +506,13 @@ class SuiteMemberCreate(BaseModel):
     pack_id: str = Field(default="pack-v1", min_length=1, max_length=64)
 
 
+class SuiteMemberReplace(SuiteMemberCreate):
+    """Compare-and-set program configuration; never measurement authority."""
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+    expected_catalog_id: str = Field(..., min_length=1, max_length=64)
+    expected_pack_id: str = Field(..., min_length=1, max_length=64)
+
+
 class SuiteMember(BaseModel):
     """Core cert suite membership. Compact-cert jobs read this list."""
 
