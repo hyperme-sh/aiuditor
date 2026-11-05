@@ -79,7 +79,7 @@ jobs:
           image_dir=$(mktemp -d "$RUNNER_TEMP/tested-image.XXXXXX")
           echo "TESTED_IMAGE_DIR=$image_dir" >> "$GITHUB_ENV"
           docker save aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} -o "$image_dir/image.tar"
-          docker image inspect aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} --format '{{.Id}}' > "$image_dir/image.id"
+          printf '%s\n' 'aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }}' > "$image_dir/image.ref"
           sha256sum "$image_dir/image.tar" | cut -d ' ' -f 1 > "$image_dir/image.sha256"
       - name: Upload tested main runtime image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -133,8 +133,8 @@ jobs:
           actual=$(sha256sum image/image.tar | cut -d ' ' -f 1)
           test "$expected" = "$actual"
           docker load -i image/image.tar
-          local_image=$(cat image/image.id)
-          [[ "$local_image" =~ ^sha256:[0-9a-f]{64}$ ]]
+          local_image=$(cat image/image.ref)
+          [[ "$local_image" =~ ^aiuditor:ci-[0-9]+-[0-9]+$ ]]
           revision=$(docker image inspect "$local_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
           test "$revision" = "$GITHUB_SHA"
           image="ghcr.io/${GITHUB_REPOSITORY,,}/runtime:test-${GITHUB_SHA}"
