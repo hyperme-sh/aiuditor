@@ -8,7 +8,7 @@ import uuid
 
 from controlplane_tenancy.marketplace import MARKETPLACE_TENANT_ID
 from aiuditor_service.domain.models import SuiteMemberCreate
-from aiuditor_service.program import CORE_SUITE_SEED, put_suite_member
+from aiuditor_service.program import CORE_SUITE_SEED, _put_suite_member
 from aiuditor_service.role import AiuditorRole
 from aiuditor_service.store import SuiteStore
 
@@ -22,7 +22,8 @@ def bootstrap_core_suite(store: SuiteStore, tenant_id: uuid.UUID) -> int:
         for class_id, catalog_id, pack_id in CORE_SUITE_SEED:
             if store.list_for(tenant_id, class_id=class_id):
                 continue
-            put_suite_member(store, tenant_id, SuiteMemberCreate(
+            # The outer scope already owns this tenant lock/transaction.
+            _put_suite_member(store, tenant_id, SuiteMemberCreate(
                 class_id=class_id, catalog_id=catalog_id, pack_id=pack_id,
             ))
             count += 1

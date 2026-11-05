@@ -194,3 +194,9 @@ returns 409. The operation serializes with other program edits and bootstrap.
 This changes program configuration only. Legacy envelopes remain recorded under
 their original model IDs; no measurements, host certification or activation are
 granted. Fresh assigned native qualification must establish the new reference.
+
+Generic `purpose=service` keys cannot add or replace reviewed suite members,
+even when they carry self-requested operator scope strings. Their compatibility
+seed endpoint initializes only empty default classes and preserves any existing
+operator-managed workload and pack. Qualification program changes require the
+existing authenticated tenant-session `operator:program` authority.

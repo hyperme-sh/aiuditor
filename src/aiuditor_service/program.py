@@ -200,7 +200,8 @@ def replace_suite_member(store: SuiteStore, tenant_id: uuid.UUID, member_id: uui
         if (current.catalog_id != body.expected_catalog_id
                 or current.pack_id != body.expected_pack_id):
             raise HTTPException(409, "Suite changed; review its current configuration")
-        if store.for_class_catalog(tenant_id, body.class_id, body.catalog_id) is not None:
+        duplicate = store.for_class_catalog(tenant_id, body.class_id, body.catalog_id)
+        if duplicate is not None and duplicate.id != member_id:
             raise HTTPException(409, "Catalog is already a member of this class suite")
         return store.put(current.model_copy(update={"catalog_id":body.catalog_id,"pack_id":body.pack_id}))
 
@@ -215,15 +216,15 @@ def seed_core_suite(
 
     clock = _now(now)
     rows: list[SuiteMember] = []
-    for class_id, catalog_id, pack_id in CORE_SUITE_SEED:
-        rows.append(
-            put_suite_member(
-                store,
-                tenant_id,
-                SuiteMemberCreate(
-                    class_id=class_id, catalog_id=catalog_id, pack_id=pack_id
-                ),
-                now=clock,
-            )
-        )
+    with store.persist.program_bootstrap_scope(tenant_id):
+        for class_id, catalog_id, pack_id in CORE_SUITE_SEED:
+            existing = store.list_for(tenant_id, class_id=class_id)
+            if existing:
+                # Generic seeding may initialize documented defaults, but must
+                # never modify or add workloads to an operator-managed class.
+                rows.extend(existing)
+                continue
+            rows.append(_put_suite_member(store, tenant_id, SuiteMemberCreate(
+                class_id=class_id, catalog_id=catalog_id, pack_id=pack_id,
+            ), now=clock))
     return rows

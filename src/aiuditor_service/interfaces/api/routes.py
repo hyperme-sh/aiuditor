@@ -255,7 +255,7 @@ def _envelopes(request: Request) -> EnvelopeStore:
     return store
 
 
-def _require_operator_program(request: Request) -> None:
+def _require_operator_program(request: Request, *, allow_service_seed: bool = True) -> None:
     """Suite membership edits require operator:program on a human session.
 
     purpose=service automation may still seed. Support and purpose=ir cannot.
@@ -280,7 +280,7 @@ def _require_operator_program(request: Request) -> None:
         return
     exchange = try_decode_api_key_session_jwt(secret)
     purpose = str((exchange or {}).get("purpose") or "").strip().lower()
-    if purpose == "service":
+    if allow_service_seed and purpose == "service":
         return
     raise HTTPException(status_code=403, detail="operator:program required")
 
@@ -1043,7 +1043,7 @@ async def record_suite_member(
     request: Request, body: SuiteMemberCreate
 ) -> SuiteMember:
     require_grant_write(role_from_request(request))
-    _require_operator_program(request)
+    _require_operator_program(request, allow_service_seed=False)
     tenant_id = require_auditor_actor(request)
     row = put_suite_member(_suite(request), tenant_id, body)
     await get_tenant_event_publisher().publish(
@@ -1059,7 +1059,7 @@ async def record_suite_member(
 async def replace_class_suite_member(request: Request, member_id: uuid.UUID,
                                      body: SuiteMemberReplace) -> SuiteMember:
     require_grant_write(role_from_request(request))
-    _require_operator_program(request)
+    _require_operator_program(request, allow_service_seed=False)
     tenant_id = require_auditor_actor(request)
     row = replace_suite_member(_suite(request), tenant_id, member_id, body)
     await get_tenant_event_publisher().publish(

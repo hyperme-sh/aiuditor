@@ -315,3 +315,18 @@ def test_suite_compare_and_set_serializes_replicas_and_recovers(migrated_postgre
     with pytest.raises(HTTPException) as wrong_tenant:
         replace_suite_member(store,uuid.uuid4(),current.id,replay)
     assert wrong_tenant.value.status_code == 404
+
+
+def test_public_default_seed_preserves_reviewed_program(migrated_postgres):
+    from aiuditor_service.domain.models import SuiteMemberCreate
+    from aiuditor_service.program import put_suite_member, seed_core_suite
+    from aiuditor_service.store import SuiteStore
+    tenant=uuid.uuid4()
+    _plant_tenant(migrated_postgres,tenant)
+    store=SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    original=put_suite_member(store,tenant,SuiteMemberCreate(class_id="nx-volume",catalog_id="reviewed-nx",pack_id="thin-v1"))
+    assert len(seed_core_suite(store,tenant))==2
+    refreshed=SuiteStore(persist=SqlPersistSession.from_url(migrated_postgres))
+    assert refreshed.list_for(tenant,class_id="nx-volume")==[original]
+    assert len(seed_core_suite(refreshed,tenant))==2
+    assert refreshed.list_for(tenant,class_id="nx-volume")==[original]
