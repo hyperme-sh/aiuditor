@@ -11,7 +11,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on:
       group: shared-local
-      labels: [self-hosted, linux, x64]
+      labels: [self-hosted, linux, x64, debrunner]
     timeout-minutes: 20
     services:
       postgres:
@@ -129,7 +129,7 @@ jobs:
       cancel-in-progress: false
     needs: package
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, debrunner]
     timeout-minutes: 20
     permissions:
       contents: read
