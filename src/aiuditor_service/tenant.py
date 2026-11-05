@@ -8,6 +8,8 @@ Keycloak tokens cannot pick a tenant by header. Site inbox stays /api/v1/auditor
 from __future__ import annotations
 
 import uuid
+import hashlib
+from copy import deepcopy
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -36,6 +38,25 @@ def bearer_secret(request: Request) -> str | None:
     return token.strip()
 
 
+def verified_credential_claims(request: Request, kind: str, decoder) -> dict[str, Any] | None:
+    """Memoize verified results only for this request, including refusals.
+
+    Middleware authenticates before borrowing a database session; downstream
+    authorization reuses that result without another lifecycle network call.
+    """
+    secret = bearer_secret(request)
+    if not secret:
+        return None
+    cache = getattr(request.state, "_aiuditor_verified_credentials", None)
+    if cache is None:
+        cache = {}
+        request.state._aiuditor_verified_credentials = cache
+    key = (kind, hashlib.sha256(secret.encode()).hexdigest())
+    if key not in cache:
+        cache[key] = decoder(secret)
+    return deepcopy(cache[key])
+
+
 def _header_tenant(request: Request) -> uuid.UUID | None:
     raw = request.headers.get("X-Tenant-ID")
     if not raw:
@@ -60,7 +81,7 @@ def _claims_tenant(claims: dict[str, Any]) -> uuid.UUID | None:
         return None
 
 
-def _bound_jwt_claims(secret: str) -> dict[str, Any] | None:
+def _bound_jwt_claims(secret: str, request: Request) -> dict[str, Any] | None:
     try:
         from controlplane_legacy_auth_bridge import (
             try_decode_tenant_session_jwt,
@@ -68,7 +89,7 @@ def _bound_jwt_claims(secret: str) -> dict[str, Any] | None:
     except Exception:
         try_decode_tenant_session_jwt = None
     if try_decode_tenant_session_jwt is not None:
-        session = try_decode_tenant_session_jwt(secret)
+        session = verified_credential_claims(request, "tenant-session", try_decode_tenant_session_jwt)
         if session is not None:
             return session
     try:
@@ -77,17 +98,17 @@ def _bound_jwt_claims(secret: str) -> dict[str, Any] | None:
         )
     except Exception:
         return None
-    return try_decode_api_key_session_jwt(secret)
+    return verified_credential_claims(request, "api-key", try_decode_api_key_session_jwt)
 
 
-def _tenant_from_bound_jwt(secret: str) -> uuid.UUID | None:
+def _tenant_from_bound_jwt(secret: str, request: Request) -> uuid.UUID | None:
     """Return the tenant claim from a bound JWT, or None if this is not one.
 
     A bound JWT with no tenant claim is refused. A raw Keycloak (or other)
     bearer is not a bound JWT — callers must not fall back to the header.
     """
 
-    claims = _bound_jwt_claims(secret)
+    claims = _bound_jwt_claims(secret, request)
     if claims is None:
         return None
     claimed = _claims_tenant(claims)
@@ -104,7 +125,7 @@ def require_tenant_id(request: Request) -> uuid.UUID:
         raise HTTPException(status_code=401, detail=BOUND_JWT_REQUIRED)
 
     if secret is not None:
-        claimed = _tenant_from_bound_jwt(secret)
+        claimed = _tenant_from_bound_jwt(secret, request)
         if claimed is not None:
             if header is not None and header != claimed:
                 raise HTTPException(status_code=403, detail=TENANT_MISMATCH)
@@ -131,7 +152,7 @@ def require_auditor_actor(request: Request) -> uuid.UUID:
     except Exception:
         try_decode_tenant_session_jwt = None
     if try_decode_tenant_session_jwt is not None:
-        session = try_decode_tenant_session_jwt(secret)
+        session = verified_credential_claims(request, "tenant-session", try_decode_tenant_session_jwt)
         if session is not None:
             return tenant_id
     try:
@@ -140,7 +161,7 @@ def require_auditor_actor(request: Request) -> uuid.UUID:
         )
     except Exception:
         raise HTTPException(status_code=401, detail=AUDITOR_ACTOR_REQUIRED)
-    exchange = try_decode_api_key_session_jwt(secret)
+    exchange = verified_credential_claims(request, "api-key", try_decode_api_key_session_jwt)
     if exchange is None:
         raise HTTPException(status_code=401, detail=AUDITOR_ACTOR_REQUIRED)
     purpose = str(exchange.get("purpose") or "").strip().lower()
@@ -154,7 +175,7 @@ def rls_tenant_id(request: Request) -> uuid.UUID | None:
 
     secret = bearer_secret(request)
     if secret is not None and not _machine_bearer(secret):
-        claims = _bound_jwt_claims(secret)
+        claims = _bound_jwt_claims(secret, request)
         if claims is not None:
             claimed = _claims_tenant(claims)
             if claimed is None:

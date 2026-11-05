@@ -263,7 +263,7 @@ def _require_operator_program(request: Request, *, allow_service_seed: bool = Fa
     purpose=service automation may still seed. Support and purpose=ir cannot.
     """
 
-    from aiuditor_service.tenant import bearer_secret
+    from aiuditor_service.tenant import bearer_secret, verified_credential_claims
     from api.domain.operator.claims import permissions_from_claims, program_may_edit_suite
     from controlplane_legacy_auth_bridge import (
         try_decode_api_key_session_jwt,
@@ -275,12 +275,12 @@ def _require_operator_program(request: Request, *, allow_service_seed: bool = Fa
     secret = bearer_secret(request)
     if not secret:
         raise HTTPException(status_code=403, detail="operator:program required")
-    session = try_decode_tenant_session_jwt(secret)
+    session = verified_credential_claims(request, "tenant-session", try_decode_tenant_session_jwt)
     if session is not None:
         if not program_may_edit_suite(permissions_from_claims(session)):
             raise HTTPException(status_code=403, detail="operator:program required")
         return
-    exchange = try_decode_api_key_session_jwt(secret)
+    exchange = verified_credential_claims(request, "api-key", try_decode_api_key_session_jwt)
     purpose = str((exchange or {}).get("purpose") or "").strip().lower()
     if allow_service_seed and purpose == "service":
         return

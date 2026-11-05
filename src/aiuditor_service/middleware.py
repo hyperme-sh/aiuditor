@@ -31,23 +31,20 @@ class AiuditorServiceDbMiddleware(BaseHTTPMiddleware):
             # The signed lab purpose authenticates tenant binding; its writer
             # owns a separate atomic transaction and sets that exact tenant GUC.
             return await call_next(request)
+        try:
+            tid = await asyncio.to_thread(rls_tenant_id, request)
+        except HTTPException as exc:
+            from starlette.responses import JSONResponse
+
+            return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+        request.state.tenant_id = tid
         maker = get_session_maker()
         async with maker() as session:
             token = set_db_session(session)
             try:
                 await set_current_tenant_id_guc(session, None)
-                try:
-                    tid = await asyncio.to_thread(rls_tenant_id, request)
-                except HTTPException as exc:
-                    from starlette.responses import JSONResponse
-
-                    return JSONResponse(
-                        status_code=exc.status_code,
-                        content={"error": exc.detail},
-                    )
                 if tid is not None:
                     await set_current_tenant_id_guc(session, tid)
-                request.state.tenant_id = tid
 
                 response = await call_next(request)
                 await session.commit()

@@ -15,7 +15,7 @@ from aiuditor_service.private_models.contracts import (
     canonical_hash,
 )
 from aiuditor_service.role import require_grant_write, role_from_request
-from aiuditor_service.tenant import bearer_secret, require_tenant_id
+from aiuditor_service.tenant import bearer_secret, require_tenant_id, verified_credential_claims
 from controlplane_legacy_auth_bridge import (
     is_smoke_session,
     try_decode_tenant_session_jwt,
@@ -46,7 +46,7 @@ def internal_tenant(request):
 
 def human(request):
     require_grant_write(role_from_request(request))
-    claims = try_decode_tenant_session_jwt(bearer_secret(request))
+    claims = verified_credential_claims(request, "tenant-session", try_decode_tenant_session_jwt)
     if (
         not claims
         or claims.get("azp") != "controlplane-frontend"

@@ -29,6 +29,7 @@ def lifecycle(monkeypatch, tenant_a, request):
 
     async def post(url, **kwargs):
         assert threading.get_ident() != thread
+        assert not state.get("db_open", False), "Lifecycle RPC borrowed the request DB session"
         assert kwargs["body"]["tenant_id"] == str(tenant_a)
         calls.append(kwargs["body"])
         if state["blocked"] == "unavailable":
@@ -69,7 +70,7 @@ async def test_async_tenant_and_human_routes_enforce_lifecycle(http_client, app,
 
 
 @pytest.mark.parametrize("blocked", [False, True, "unavailable"])
-async def test_middleware_binds_only_live_credential(monkeypatch, lifecycle, tenant_a, blocked):
+async def test_middleware_binds_only_live_credential(monkeypatch, lifecycle, tenant_a, blocked, app):
     from aiuditor_service import middleware
     headers, state, calls = lifecycle
     state["blocked"] = blocked
@@ -81,21 +82,35 @@ async def test_middleware_binds_only_live_credential(monkeypatch, lifecycle, ten
 
     @asynccontextmanager
     async def maker():
-        yield Session()
+        state["db_open"] = True
+        try:
+            yield Session()
+        finally:
+            state["db_open"] = False
 
     async def set_guc(session, tenant): gucs.append(tenant)
     monkeypatch.setattr(middleware, "get_session_maker", lambda: maker)
     monkeypatch.setattr(middleware, "set_current_tenant_id_guc", set_guc)
-    request = Request({"type": "http", "method": "GET", "path": "/test",
+    request = Request({"type": "http", "method": "GET", "path": "/test", "app": app,
                        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()]})
 
     async def next_handler(request):
+        from aiuditor_service.tenant import require_auditor_actor
+        from aiuditor_service.interfaces.api.routes import _require_operator_program
+        from aiuditor_service.private_models.routes import human
         assert request.state.tenant_id == (tenant_a if blocked is False else None)
+        if blocked is False:
+            assert await asyncio.to_thread(require_auditor_actor, request) == tenant_a
+            await asyncio.to_thread(_require_operator_program, request)
+            assert (await asyncio.to_thread(human, request))[0] == tenant_a
+        else:
+            with pytest.raises(HTTPException):
+                await asyncio.to_thread(require_auditor_actor, request)
         return Response()
 
     await AiuditorServiceDbMiddleware(SimpleNamespace()).dispatch(request, next_handler)
     assert gucs == ([None, tenant_a] if blocked is False else [None])
-    assert calls
+    assert len(calls) == 1
 
 
 
@@ -113,3 +128,19 @@ async def test_operator_program_uses_current_account_authority(app, lifecycle, b
             await asyncio.to_thread(_require_operator_program, request, allow_service_seed=False)
         assert exc.value.status_code == 403
     assert calls
+
+
+async def test_verification_cache_is_request_scoped_and_returns_defensive_copies(lifecycle):
+    from aiuditor_service.tenant import verified_credential_claims
+    from controlplane_legacy_auth_bridge import try_decode_tenant_session_jwt
+    headers, state, calls = lifecycle
+    def request():
+        return Request({"type": "http", "method": "GET", "path": "/", "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()]})
+    first=request()
+    claims=await asyncio.to_thread(verified_credential_claims,first,"tenant-session",try_decode_tenant_session_jwt)
+    claims["permissions"].append("invented")
+    again=await asyncio.to_thread(verified_credential_claims,first,"tenant-session",try_decode_tenant_session_jwt)
+    assert "invented" not in again["permissions"] and len(calls)==1
+    state["blocked"]=True
+    assert await asyncio.to_thread(verified_credential_claims,request(),"tenant-session",try_decode_tenant_session_jwt) is None
+    assert len(calls)==2
