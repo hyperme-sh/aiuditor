@@ -132,3 +132,9 @@ expired/denied/session/already-consumed approvals, and current auditor/admin
 membership checks after role removal or user deactivation. These are owner-fixture
 checks with locally signed tenant sessions; they do not qualify a live identity
 provider or production policy settings.
+
+Pull requests run the complete package suite using verified dependency wheel
+fixtures on disposable hosted workers without private credentials. Main checks
+retain the shared runner and use a short-lived App token restricted to their
+dependency repositories. The App key is available only to main. Fixture checks
+preserve exact source provenance and do not constitute stable release acceptance.
