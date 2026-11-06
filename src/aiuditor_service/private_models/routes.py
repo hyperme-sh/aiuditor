@@ -1,5 +1,6 @@
 """Scoped private admissions: trusted lab evidence plus live named-human approval."""
 
+import asyncio
 import os
 import secrets
 import uuid

@@ -7,6 +7,18 @@ jobs:
   package:
     runs-on: [self-hosted, linux, x64, debrunner]
     timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17@sha256:3b0cda93be7c8dba2ed484d19393d93845dc3dafb88973e248ba8e6d99d784e1
+        env:
+          POSTGRES_PASSWORD: package-test-only
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -24,6 +36,10 @@ jobs:
           export PREPARATION_EVIDENCE_DIR="$output/evidence"
           echo "PREPARED_OUTPUT=$output" >> "$GITHUB_ENV"
           bash scripts/check-package.sh --fixtures
+      - name: Qualify owner PostgreSQL and HTTP contracts
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:package-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+        run: bash scripts/check-postgres.sh --fixtures
       - name: Retain tested preparation bytes
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
