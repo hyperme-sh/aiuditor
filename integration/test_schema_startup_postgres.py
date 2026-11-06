@@ -4,7 +4,7 @@ import pytest
 from alembic import command
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
-from controlplane_db import migrations, startup
+from controlplane_db import migrations
 from aiuditor_service import schema_startup
 pytest_plugins = ['machine_postgres']
 
@@ -35,9 +35,9 @@ def test_owner_startup_ignores_retired_foreign_tables(isolated_owner_db, monkeyp
             connection.execute(text("UPDATE alembic_version_payment_service SET version_num='payment_service_0080_fin_state'"))
             connection.execute(text('DROP TABLE IF EXISTS onramp_sessions CASCADE'))
         before = migrations.current_heads(url)
-        with pytest.raises(ValueError, match='payment_service.*missing tables.*onramp_sessions'):
-            startup._owners(url)
-        assert migrations.current_heads(url) == before
+        # The pinned DB owner already recognizes the retired table as optional.
+        # Qualify this service's scoped startup directly rather than asserting
+        # obsolete behavior in another owner's compatibility helper.
         monkeypatch.setenv('DATABASE_URL', url)
         assert schema_startup.main() == 0
         assert schema_startup.main() == 0

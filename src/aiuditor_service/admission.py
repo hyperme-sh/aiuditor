@@ -575,14 +575,32 @@ async def resolve_admission_async(
     for a green lab scorecard.
     """
 
-    updated = resolve_admission(
-        store,
-        tenant_id,
-        admission_id,
-        body,
-        resolved_by=resolved_by,
-        now=now,
-    )
+    # The recorded verdict is durable authority. An identical allow retry may
+    # redeliver promotion, but must never replace its original author/reason/time.
+    actor = (resolved_by or "").strip()
+    if not actor or actor.lower() == LLM_RESOLVER:
+        raise HTTPException(status_code=400, detail="resolved_by must be a named human")
+    existing = store.get(tenant_id, admission_id)
+    if existing is not None and existing.verdict is AdmissionVerdict.ALLOW:
+        if (existing.status is not AdmissionStatus.ALLOWED or not existing.resolved_by
+                or existing.resolved_by.lower() == LLM_RESOLVER or existing.resolved_at is None):
+            raise HTTPException(status_code=409, detail=ADMISSION_ALREADY_RESOLVED)
+        if body.verdict is not AdmissionVerdict.ALLOW:
+            raise HTTPException(status_code=409, detail=ADMISSION_ALREADY_RESOLVED)
+        if body.reason is not None and _safe_text(body.reason) != existing.reason:
+            raise HTTPException(status_code=409, detail=ADMISSION_ALREADY_RESOLVED)
+        if not sandbox_passed(existing):
+            raise HTTPException(status_code=409, detail=SOAK_REQUIRED)
+        updated = existing
+    else:
+        updated = resolve_admission(
+            store,
+            tenant_id,
+            admission_id,
+            body,
+            resolved_by=resolved_by,
+            now=now,
+        )
     if updated.verdict is not AdmissionVerdict.ALLOW:
         # Deny stays the Admission DENIED / policy-deny style record.
         return updated

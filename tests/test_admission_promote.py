@@ -226,3 +226,106 @@ def test_llm_still_cannot_resolve_admission():
             resolved_by="llm",
         )
     assert exc.value.status_code == 400
+
+
+class _IdempotentPromotionPlane(FakePlaneHop):
+    """Owner's tenant/catalog upsert contract; attempts are not unique effects."""
+    def __init__(self):
+        super().__init__()
+        self.attempts = []
+        self.catalog_rows = {}
+        self.fail_before = False
+        self.lose_response = False
+
+    async def promote_catalog(self, tenant_id, **body):
+        key = (tenant_id, body['catalog_id'])
+        self.attempts.append((tenant_id, body.copy()))
+        if self.fail_before:
+            from aiuditor_service.hypermesh import HostLookupUnavailable
+            raise HostLookupUnavailable('upstream unavailable')
+        existing = self.catalog_rows.get(key)
+        if existing is None:
+            existing = await super().promote_catalog(tenant_id, **body)
+            self.catalog_rows[key] = existing
+        else:
+            assert existing['admission_id'] == str(body['admission_id'])
+            assert existing['file_hash'] == body['file_hash']
+        if self.lose_response:
+            from aiuditor_service.hypermesh import HostLookupUnavailable
+            raise HostLookupUnavailable('response lost after upsert')
+        return existing
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('lost_response', [False, True])
+async def test_promotion_recovers_after_restart_without_changing_verdict(lost_response):
+    from aiuditor_service.persist import MemoryPersistSession
+    tenant = uuid.uuid4()
+    persist = MemoryPersistSession()
+    store = AdmissionStore(persist=persist)
+    row = _passed_row(store, tenant, 'sha256:' + '88' * 32)
+    plane = _IdempotentPromotionPlane()
+    plane.fail_before = not lost_response
+    plane.lose_response = lost_response
+    body = AdmissionResolve(verdict=AdmissionVerdict.ALLOW, reason='original lab verdict')
+    with pytest.raises(HTTPException) as exc:
+        await resolve_admission_async(store, tenant, row.id, body,
+            resolved_by='original-auditor', plane=plane)
+    assert exc.value.status_code == 502
+    original = store.get(tenant, row.id)
+    assert original.verdict is AdmissionVerdict.ALLOW
+    plane.fail_before = plane.lose_response = False
+    restarted = AdmissionStore(persist=persist)
+    for _ in range(2):
+        retried = await resolve_admission_async(restarted, tenant, row.id,
+            AdmissionResolve(verdict=AdmissionVerdict.ALLOW),
+            resolved_by='another-current-auditor', plane=plane)
+        assert retried == original
+    assert len(plane.catalog_rows) == len(plane.promotions) == 1
+    assert len(plane.attempts) == 3
+    assert {body['admission_id'] for _, body in plane.attempts} == {row.id}
+    assert len({body['catalog_id'] for _, body in plane.attempts}) == 1
+    assert {tid for tid, _ in plane.attempts} == {tenant}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['deny', 'reason', 'llm', 'tenant', 'soak'])
+async def test_promotion_retry_refuses_authority_changes(change):
+    store = AdmissionStore()
+    tenant = uuid.uuid4()
+    row = _passed_row(store, tenant, 'sha256:' + '99' * 32)
+    original = resolve_admission(store, tenant, row.id,
+        AdmissionResolve(verdict=AdmissionVerdict.ALLOW, reason='original'), resolved_by='original-auditor')
+    plane = _IdempotentPromotionPlane()
+    body = AdmissionResolve(verdict=AdmissionVerdict.DENY if change == 'deny' else AdmissionVerdict.ALLOW,
+                            reason='changed' if change == 'reason' else None)
+    if change == 'soak':
+        original = original.model_copy(update={'sandbox_egress_ok': False})
+        store.put(original)
+    with pytest.raises(HTTPException):
+        await resolve_admission_async(store, uuid.uuid4() if change == 'tenant' else tenant,
+            row.id, body, resolved_by='llm' if change == 'llm' else 'current-auditor', plane=plane)
+    assert store.get(tenant, row.id) == original
+    assert plane.attempts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('invalid_metadata', [
+    {'status': AdmissionStatus.DENIED}, {'resolved_by': None},
+    {'resolved_by': 'llm'}, {'resolved_at': None},
+])
+async def test_promotion_retry_refuses_incomplete_original_authority(invalid_metadata):
+    store = AdmissionStore()
+    tenant = uuid.uuid4()
+    row = _passed_row(store, tenant, 'sha256:' + 'aa' * 32)
+    row = resolve_admission(store, tenant, row.id, AdmissionResolve(verdict=AdmissionVerdict.ALLOW),
+                            resolved_by='original-auditor')
+    row = row.model_copy(update=invalid_metadata)
+    store.put(row)
+    plane = _IdempotentPromotionPlane()
+    with pytest.raises(HTTPException) as failure:
+        await resolve_admission_async(store, tenant, row.id,
+            AdmissionResolve(verdict=AdmissionVerdict.ALLOW), resolved_by='current-auditor', plane=plane)
+    assert failure.value.status_code == 409
+    assert plane.attempts == []
+    assert store.get(tenant, row.id) == row
