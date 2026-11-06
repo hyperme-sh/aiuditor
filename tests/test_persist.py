@@ -365,3 +365,70 @@ async def test_http_put_survives_on_injected_persist(
     assert restored is not None
     assert restored.purpose is ConnectionPurpose.AUDITOR
     assert "credential" not in persist.snapshot()["connections"][str(tenant_a)][connection_id]
+
+
+@pytest.mark.parametrize("scoped,failure_stage", [
+    (False, "connect"), (False, "tenant"), (False, "select"), (False, "fetch"),
+    (True, "tenant"), (True, "select"), (True, "fetch"),
+])
+def test_sql_read_failures_are_unavailable(failure_stage, scoped, monkeypatch):
+    from aiuditor_service import persist as module
+
+    class FailingSession(_FakeSession):
+        def execute(self, stmt, params=None):
+            is_tenant = params is not None and "tid" in params
+            if failure_stage == ("tenant" if is_tenant else "select"):
+                raise PermissionError("private database diagnostic")
+            if failure_stage == "fetch" and not is_tenant:
+                class FailedResult(_FakeResult):
+                    def all(self):
+                        raise TimeoutError("private database diagnostic")
+                return FailedResult()
+            return super().execute(stmt, params)
+
+    session = FailingSession()
+    def factory():
+        if failure_stage == "connect":
+            raise ConnectionError("private database diagnostic")
+        return session
+
+    if scoped:
+        monkeypatch.setattr(module, "_SCOPE", type(module._SCOPE)("test_scope", default=session))
+    with pytest.raises(PersistUnavailable, match=PERSIST_UNAVAILABLE) as error:
+        SqlPersistSession(factory).load_rows("contracts", uuid.uuid4())
+    assert "private database diagnostic" not in str(error.value)
+    assert error.value.__cause__ is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [PermissionError, TimeoutError])
+async def test_failed_sql_reads_return_503_preserve_cache_then_reconcile_empty(
+    app, http_client, tenant_headers, tenant_a, failure,
+):
+    row = _policy(tenant_a)
+    store = app.state.policy_store
+    store.put(row)
+    bucket = store.policies[tenant_a]
+
+    class RecoverableSession(_FakeSession):
+        available = False
+        def execute(self, stmt, params=None):
+            if params is None and not self.available:
+                raise failure("private database diagnostic")
+            return super().execute(stmt, params)
+
+    session = RecoverableSession()
+    store.persist = SqlPersistSession(lambda: session)
+    for method, path in (
+        ("GET", "/api/v1/aiuditor/policies"),
+        ("DELETE", f"/api/v1/aiuditor/policies/{row.id}"),
+    ):
+        response = await http_client.request(method, path, headers=tenant_headers)
+        assert response.status_code == 503, response.text
+        assert response.json() == {"error": PERSIST_UNAVAILABLE}
+        assert bucket == {row.id: row}
+    session.available = True
+    response = await http_client.get("/api/v1/aiuditor/policies", headers=tenant_headers)
+    assert response.status_code == 200
+    assert response.json() == []
+    assert bucket == {}
