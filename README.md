@@ -223,3 +223,11 @@ CI settings do not delete them. Preserve source revisions, artifact digests and
 validation results in the run/PR evidence. A release needing an expired package
 archive must requalify its exact source; it must not silently rebuild or accept
 a different artifact.
+
+### Allocating an existing host connection
+
+Catalog allocation excludes host connections whose existing lease is already
+bound to a contract in AIuditor or on the plane. It selects another eligible
+connection or returns 409 before creating signed authority. Existing unbound
+renter leases retain their reuse path; lease validation occurs before signing.
+This is a selection precondition, not a distributed allocation transaction.
