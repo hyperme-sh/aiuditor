@@ -21,6 +21,10 @@ class selectors. Invalid values, including blank strings and `*`, return 400
 without creating a policy. Omit the field or use JSON `null` to intentionally
 match every class. Supplied identifiers are neither trimmed nor truncated.
 
+Database read failures return HTTP 503 rather than an empty snapshot or a
+missing-record response. Cached tenant rows remain intact while a read is
+unavailable; a successful empty query still reconciles deleted rows.
+
 ## Development
 
 Use Python 3.13 and uv 0.11.26 with read access to the seven pinned private

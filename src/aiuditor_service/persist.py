@@ -617,34 +617,36 @@ class SqlPersistSession:
             session.commit()
 
     def load_rows(self, table: str, tenant_id: uuid.UUID) -> dict[str, dict[str, Any]]:
-        from sqlalchemy import select, text
+        try:
+            from sqlalchemy import select, text
 
-        model = _sql_models()[table]
-        memory = MemoryPersistSession()
-        scoped = _SCOPE.get()
-        if table in {"contracts", "violations"} and scoped is not None:
-            scoped.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(tenant_id)})
-            rows = scoped.execute(select(model).where(model.tenant_id == tenant_id)).scalars().all()
-            for row in rows:
-                memory.upsert(table, row.tenant_id, row.id, {c.key: getattr(row, c.key) for c in row.__table__.columns})
-            return memory.load_rows(table, tenant_id)
-        with self._session_factory() as session:
-            session.execute(
-                text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-                {"tid": str(tenant_id)},
-            )
-            try:
+            model = _sql_models()[table]
+            memory = MemoryPersistSession()
+            scoped = _SCOPE.get()
+            if table in {"contracts", "violations"} and scoped is not None:
+                scoped.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(tenant_id)})
+                rows = scoped.execute(select(model).where(model.tenant_id == tenant_id)).scalars().all()
+                for row in rows:
+                    memory.upsert(table, row.tenant_id, row.id, {c.key: getattr(row, c.key) for c in row.__table__.columns})
+                return memory.load_rows(table, tenant_id)
+            with self._session_factory() as session:
+                session.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tid, true)"),
+                    {"tid": str(tenant_id)},
+                )
                 rows = (
                     session.execute(select(model).where(model.tenant_id == tenant_id))
                     .scalars()
                     .all()
                 )
-            except Exception:
-                return {}
-            for row in rows:
-                payload = {c.key: getattr(row, c.key) for c in row.__table__.columns}
-                memory.upsert(table, row.tenant_id, row.id, payload)
-        return memory.load_rows(table, tenant_id)
+                for row in rows:
+                    payload = {c.key: getattr(row, c.key) for c in row.__table__.columns}
+                    memory.upsert(table, row.tenant_id, row.id, payload)
+            return memory.load_rows(table, tenant_id)
+        except PersistUnavailable:
+            raise
+        except Exception as exc:
+            raise PersistUnavailable(PERSIST_UNAVAILABLE) from exc
 
     def delete(self, table: str, tenant_id: uuid.UUID, key: object) -> None:
         from sqlalchemy import text
