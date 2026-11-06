@@ -12,6 +12,15 @@ their existing write boundaries; witness hydration does not grant write authorit
 ORM models are owned by `aiuditor_service.models`. Hypermesh integration uses
 owner HTTP contracts and opaque IDs, not cross-product SQL/FKs.
 
+## Policy class selectors
+
+Policy `prompt_class` values are case-sensitive identifiers of 1–64 ASCII
+characters: an initial letter or digit followed by letters, digits, `_`, `.`,
+or `-`. Names such as `prompt_injection` and `content_filter` remain exact
+class selectors. Invalid values, including blank strings and `*`, return 400
+without creating a policy. Omit the field or use JSON `null` to intentionally
+match every class. Supplied identifiers are neither trimmed nor truncated.
+
 ## Development
 
 Use Python 3.13 and uv 0.11.26 with read access to the seven pinned private

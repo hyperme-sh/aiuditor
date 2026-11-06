@@ -7,12 +7,12 @@ purpose default (renter/service allow, IR uses the taxonomy).
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
 
-from aiuditor_service.approvals import _safe_text
 from aiuditor_service.domain.models import (
     ApprovalPolicy,
     ApprovalPolicyCreate,
@@ -23,6 +23,8 @@ from aiuditor_service.store import PolicyStore
 POLICY_NOT_FOUND = "Policy not found"
 POLICY_EXISTS = "policy already exists for this purpose, class, and connection"
 POLICY_PURPOSE = "purpose must be renter, ir, or service"
+POLICY_CLASS = "prompt_class must be a 1-64 character identifier using letters, digits, _, . or -"
+_CLASS_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", re.ASCII)
 POLICY_PURPOSES = frozenset({"renter", "ir", "service"})
 
 
@@ -82,7 +84,11 @@ def put_policy(
     purpose = (body.purpose or "").strip().lower()
     if purpose not in POLICY_PURPOSES:
         raise HTTPException(status_code=400, detail=POLICY_PURPOSE)
-    prompt_class = _safe_text(body.prompt_class)
+    # Only an omitted/null class intentionally creates a wildcard policy.
+    # Content redaction must never broaden a supplied authorization selector.
+    prompt_class = body.prompt_class
+    if prompt_class is not None and _CLASS_IDENTIFIER.fullmatch(prompt_class) is None:
+        raise HTTPException(status_code=400, detail=POLICY_CLASS)
     existing = store.matching(
         tenant_id,
         purpose=purpose,
