@@ -221,3 +221,44 @@ async def test_site_inbox_is_not_on_policy_paths(http_client):
     assert "/api/v1/aiuditor/policies" in paths
     assert "/api/v1/auditor/v0/tickets" not in paths
     assert "/api/v1/grants/v0/grants" not in paths
+
+
+@pytest.mark.parametrize("prompt_class", ["prompt_injection", "content_filter", "message_safety", "a" * 64])
+@pytest.mark.parametrize("disposition", list(PolicyDisposition))
+def test_class_identifier_is_retained_and_never_matches_unrelated_class(prompt_class, disposition):
+    store = PolicyStore()
+    tenant = uuid.uuid4()
+    row = put_policy(store, tenant, ApprovalPolicyCreate(
+        purpose="ir", prompt_class=prompt_class, disposition=disposition,
+    ))
+    assert row.prompt_class == prompt_class
+    assert evaluate_policy(store, tenant, purpose="ir", prompt_class=prompt_class) is disposition
+    assert evaluate_policy(store, tenant, purpose="ir", prompt_class="unrelated") is None
+    assert evaluate_policy(store, tenant, purpose="ir") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_class", ["", " ", " content_filter ", "content/filter", "*", "class\n", "class\x00", "class name", "cláss"])
+@pytest.mark.parametrize("disposition", ["allow", "deny"])
+async def test_invalid_class_rejected_without_persisting_or_emitting_policy(
+    http_client, tenant_headers, event_sink, prompt_class, disposition,
+):
+    response = await http_client.post(
+        "/api/v1/aiuditor/policies", headers=tenant_headers,
+        json={"purpose": "ir", "prompt_class": prompt_class, "disposition": disposition},
+    )
+    assert response.status_code == 400, response.text
+    listed = await http_client.get("/api/v1/aiuditor/policies", headers=tenant_headers)
+    assert listed.json() == []
+    assert POLICY_CREATED_V1 not in [event["event_type"] for event in event_sink]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selector", [{}, {"prompt_class": None}])
+async def test_explicit_wildcard_remains_supported(http_client, tenant_headers, selector):
+    response = await http_client.post(
+        "/api/v1/aiuditor/policies", headers=tenant_headers,
+        json={"purpose": "ir", "disposition": "hold", **selector},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["prompt_class"] is None
