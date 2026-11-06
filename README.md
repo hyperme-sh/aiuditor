@@ -231,3 +231,28 @@ bound to a contract in AIuditor or on the plane. It selects another eligible
 connection or returns 409 before creating signed authority. Existing unbound
 renter leases retain their reuse path; lease validation occurs before signing.
 This is a selection precondition, not a distributed allocation transaction.
+
+### Provider destination policy
+
+The operator must set `AIUDITOR_PROVIDER_ALLOWED_HOSTS` to comma-separated exact
+ASCII hostnames, for example `api.vendor.example,inference.vendor.example`.
+Unset/empty configuration permits no provider destinations. Wildcards, suffix
+matching and tenant-supplied exceptions are not supported. Configure the actual
+provider hostname before enabling its connection; this change alone does not
+configure or qualify a live provider.
+
+Provider endpoints require HTTPS on port 443, with no credentials, query,
+fragment, escaped path/host, whitespace or backslash. Each request resolves the
+approved hostname once, rejects the entire answer set if any address is not
+public (including mapped/transition IPv6), and connects to one validated numeric
+address. The original Host header and TLS server name are retained with normal
+certificate and hostname verification. Redirects and environment proxies are
+disabled; a redirect response is returned without forwarding credentials to its
+target. DNS/connect failures are not retried against another destination.
+
+This uses HTTPcore's documented [SNI hostname extension](https://www.encode.io/httpcore/extensions/#sni_hostname)
+with HTTPX [environment handling disabled](https://www.python-httpx.org/environment_variables/).
+Package regressions include real loopback TLS: a trusted certificate for the
+original hostname succeeds through the pinned socket, and a trusted certificate
+for another hostname is refused before sending HTTP headers. This is transport
+qualification, not live provider acceptance or deployment.
