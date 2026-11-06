@@ -200,3 +200,13 @@ even when they carry self-requested operator scope strings. Their compatibility
 seed endpoint initializes only empty default classes and preserves any existing
 operator-managed workload and pack. Qualification program changes require the
 existing authenticated tenant-session `operator:program` authority.
+
+### CI artifact retention
+
+PR preparation archives and temporary main image-transfer archives expire after
+one day. Main package archives expire after seven days. Published registry
+images and explicitly published release assets have separate retention; these
+CI settings do not delete them. Preserve source revisions, artifact digests and
+validation results in the run/PR evidence. A release needing an expired package
+archive must requalify its exact source; it must not silently rebuild or accept
+a different artifact.
