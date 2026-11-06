@@ -340,3 +340,84 @@ async def test_catalog_propagates_authenticated_renter_and_custom_meters(http_cl
     contract = response.json()['contract']
     assert {p['subject'] for p in contract['parties'] if p['role']=='renter'} == {'11111111-1111-1111-1111-111111111111'}
     assert plane_hop.offers[0]['contract_meters'] == contract['meters'] == ['token_digest_count']
+
+
+@pytest.mark.asyncio
+async def test_repeat_allocation_rejects_bound_connection_without_new_authority(
+    http_client, app, tenant_headers, host_lookup, plane_hop, tenant_a, event_sink,
+):
+    host_lookup.enroll(FYBER_AGX_DEVICE_ID, tenant_id=tenant_a, class_id="agx-large")
+    await _lease_host(http_client, tenant_headers, FYBER_AGX_DEVICE_ID)
+    service = await _catalog_p1(http_client, tenant_headers)
+    path = f"/api/v1/aiuditor/catalog/{service['id']}/allocate"
+    first = await http_client.post(path, headers=tenant_headers, json={"renter": "renter"})
+    assert first.status_code == 201, first.text
+    before = app.state.contract_store.list_for(tenant_a)
+    assert len(before) == 1
+    # A reconstructed store must also reject the persisted binding.
+    from aiuditor_service.store import ContractStore
+    app.state.contract_store = ContractStore(persist=app.state.aiuditor_persist)
+    second = await http_client.post(path, headers=tenant_headers, json={"renter": "renter"})
+    assert second.status_code == 409, second.text
+    assert second.json()["detail"] == NO_LIVE_CONNECTION
+    assert app.state.contract_store.list_for(tenant_a) == before
+    assert len(plane_hop.offers) == 1
+    assert sum(e["event_type"] == CATALOG_SERVICE_ALLOCATED_V1 for e in event_sink) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fresh_alternative", [False, True])
+async def test_plane_bound_lease_is_excluded_before_contract_creation(
+    http_client, app, tenant_headers, host_lookup, plane_hop, tenant_a, fresh_alternative,
+):
+    host_lookup.enroll(FYBER_AGX_DEVICE_ID, tenant_id=tenant_a, class_id="agx-large")
+    host = await _lease_host(http_client, tenant_headers, FYBER_AGX_DEVICE_ID)
+    lease_id = uuid.uuid4()
+    plane_hop.add_lease(lease_id, device_id=FYBER_AGX_DEVICE_ID,
+                       tenant_id=tenant_a, contract_id=uuid.uuid4())
+    # Simulate another replica's contract being absent from the local store.
+    row = app.state.connection_store.get(tenant_a, uuid.UUID(host['id']))
+    app.state.connection_store.put(row.model_copy(update={"lease_id": lease_id}))
+    if fresh_alternative:
+        alternate_device = uuid.uuid4()
+        host_lookup.enroll(alternate_device, tenant_id=tenant_a, class_id="agx-large")
+        alternate = await _lease_host(http_client, tenant_headers, alternate_device)
+    service = await _catalog_p1(http_client, tenant_headers)
+    response = await http_client.post(f"/api/v1/aiuditor/catalog/{service['id']}/allocate",
+                                     headers=tenant_headers, json={"renter": "renter"})
+    if fresh_alternative:
+        assert response.status_code == 201, response.text
+        assert response.json()['connection_id'] == alternate['id']
+        assert len(app.state.contract_store.list_for(tenant_a)) == 1
+        assert len(plane_hop.offers) == 1
+    else:
+        assert response.status_code == 409, response.text
+        assert app.state.contract_store.list_for(tenant_a) == []
+        assert plane_hop.offers == []
+
+
+@pytest.mark.asyncio
+async def test_lease_bound_during_selection_is_rejected_before_signing(
+    http_client, app, tenant_headers, host_lookup, plane_hop, tenant_a, monkeypatch,
+):
+    host_lookup.enroll(FYBER_AGX_DEVICE_ID, tenant_id=tenant_a, class_id="agx-large")
+    host = await _lease_host(http_client, tenant_headers, FYBER_AGX_DEVICE_ID)
+    lease_id = uuid.uuid4()
+    lease = plane_hop.add_lease(lease_id, device_id=FYBER_AGX_DEVICE_ID, tenant_id=tenant_a)
+    row = app.state.connection_store.get(tenant_a, uuid.UUID(host['id']))
+    app.state.connection_store.put(row.model_copy(update={"lease_id": lease_id}))
+    calls = 0
+    async def changed_binding(tenant, requested, **kwargs):
+        nonlocal calls
+        from dataclasses import replace
+        assert tenant == tenant_a and requested == lease_id
+        calls += 1
+        return lease if calls == 1 else replace(lease, contract_id=uuid.uuid4())
+    monkeypatch.setattr(plane_hop, "get_lease", changed_binding)
+    service = await _catalog_p1(http_client, tenant_headers)
+    response = await http_client.post(f"/api/v1/aiuditor/catalog/{service['id']}/allocate",
+                                     headers=tenant_headers, json={"renter": "renter"})
+    assert response.status_code == 409, response.text
+    assert calls == 2
+    assert app.state.contract_store.list_for(tenant_a) == []
+    assert plane_hop.offers == []

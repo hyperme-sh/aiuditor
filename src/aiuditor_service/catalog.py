@@ -158,6 +158,8 @@ async def pick_live_connection(
     service: CatalogService,
     *,
     lookup: HostLookup,
+    contracts: ContractStore,
+    plane: PlaneHop,
     headers: dict[str, str] | None = None,
 ) -> Connection:
     if service.backend is ServiceBackend.PROVIDER:
@@ -183,6 +185,14 @@ async def pick_live_connection(
         host = await lookup.get(service.tenant_id, row.device_id, headers=headers)
         if host is None or not _host_is_live(host) or not _matches_service(service, host):
             continue
+        if row.lease_id is not None:
+            # Reusing a connection must not mint new authority for a lease
+            # already owned by a contract, including another plane replica.
+            if contracts.lease_for(service.tenant_id, row.lease_id) is not None:
+                continue
+            lease = await plane.get_lease(service.tenant_id, row.lease_id, headers=headers)
+            if lease is None or lease.contract_id is not None:
+                continue
         candidates.append(row)
     if not candidates:
         raise HTTPException(status_code=409, detail=NO_LIVE_CONNECTION)
@@ -227,7 +237,19 @@ async def allocate_service(
         renter = str(await plane.checkout_renter(tenant_id, subject=signed_by, headers=headers))
     if renter is None:
         raise HTTPException(status_code=400, detail=RENTER_REQUIRED)
-    row = await pick_live_connection(connections, service, lookup=lookup, headers=headers)
+    row = await pick_live_connection(
+        connections, service, lookup=lookup, contracts=contracts, plane=plane, headers=headers
+    )
+    # Validate existing lease authority before persisting a new signed contract.
+    existing_lease = None
+    if service.backend is not ServiceBackend.PROVIDER and row.lease_id is not None:
+        existing_lease = await plane.get_lease(tenant_id, row.lease_id, headers=headers)
+        if existing_lease is None:
+            raise HTTPException(status_code=404, detail="Lease not found")
+        if existing_lease.contract_id is not None or contracts.lease_for(tenant_id, row.lease_id) is not None:
+            raise HTTPException(status_code=409, detail=LEASE_ALREADY_BOUND)
+        if existing_lease.purpose not in _RENTER_PURPOSE:
+            raise HTTPException(status_code=409, detail=LEASE_IS_AUDITOR)
     clock = _now(now)
     hours = max(1, min(int(body.reserved_hours), 24 * 30))
     draft = put_contract(
@@ -265,12 +287,7 @@ async def allocate_service(
     if row.device_id is None:
         raise HTTPException(status_code=409, detail=NO_LIVE_CONNECTION)
     if lease_id is not None:
-        lease = await plane.get_lease(tenant_id, lease_id, headers=headers)
-        if lease is None:
-            raise HTTPException(status_code=404, detail="Lease not found")
-        if lease.purpose not in _RENTER_PURPOSE:
-            raise HTTPException(status_code=409, detail=LEASE_IS_AUDITOR)
-        purpose = lease.purpose
+        purpose = existing_lease.purpose
     else:
         kind = (
             "p1_hardware"
