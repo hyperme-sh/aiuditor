@@ -56,3 +56,13 @@ preparation, package validation and release jobs. This supersedes earlier hosted
 runner exceptions in this file. Keep dedicated infrastructure-convergence and
 trusted payment-smoke jobs on their existing specialized selectors. Reusable
 workflows must route private callers to debrunners. Do not add approval gates.
+
+## Authorized automatic test containers
+
+The owner authorized qualified test containers for the live test Compose VM,
+using the existing `0.24.0-test.N` train. Successful main qualification may
+publish the corresponding test bundle through the pinned shared publisher.
+Infra imports the retained qualified runtime into ACR without rebuilding it.
+This exception applies only to test automation; embedded package versions and
+stable release authority remain unchanged. No production deployment, stable
+tag, approval requirement or new registry permission is authorized here.

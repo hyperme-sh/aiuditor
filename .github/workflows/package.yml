@@ -107,7 +107,7 @@ jobs:
           name: tested-runtime-image
           path: ${{ env.TESTED_IMAGE_DIR }}/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
           compression-level: 0
       - name: Retain validated package bytes
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
