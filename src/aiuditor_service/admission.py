@@ -535,30 +535,31 @@ def resolve_admission(
     actor = (resolved_by or "").strip()
     if not actor or actor.lower() == LLM_RESOLVER:
         raise HTTPException(status_code=400, detail="resolved_by must be a named human")
-    row = store.get(tenant_id, admission_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
-    if row.verdict is not None:
-        raise HTTPException(status_code=409, detail=ADMISSION_ALREADY_RESOLVED)
-    if body.verdict is AdmissionVerdict.ALLOW and not sandbox_passed(row):
-        raise HTTPException(status_code=409, detail=SOAK_REQUIRED)
-    clock = _now(now)
-    status = (
-        AdmissionStatus.ALLOWED
-        if body.verdict is AdmissionVerdict.ALLOW
-        else AdmissionStatus.DENIED
-    )
-    updated = row.model_copy(
-        update={
-            "status": status,
-            "verdict": body.verdict,
-            "reason": _safe_text(body.reason),
-            "resolved_by": actor[:256],
-            "resolved_at": clock,
-        }
-    )
-    store.put(updated)
-    return updated
+    def apply_verdict(row):
+        if row is None:
+            raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
+        if row.verdict is not None:
+            raise HTTPException(status_code=409, detail=ADMISSION_ALREADY_RESOLVED)
+        if body.verdict is AdmissionVerdict.ALLOW and not sandbox_passed(row):
+            raise HTTPException(status_code=409, detail=SOAK_REQUIRED)
+        clock = _now(now)
+        status = (
+            AdmissionStatus.ALLOWED
+            if body.verdict is AdmissionVerdict.ALLOW
+            else AdmissionStatus.DENIED
+        )
+        updated = row.model_copy(
+            update={
+                "status": status,
+                "verdict": body.verdict,
+                "reason": _safe_text(body.reason),
+                "resolved_by": actor[:256],
+                "resolved_at": clock,
+            }
+        )
+        return updated
+    from aiuditor_service.admission_reporting import mutate_admission
+    return mutate_admission(store.persist, tenant_id, admission_id, apply_verdict)
 
 
 async def resolve_admission_async(

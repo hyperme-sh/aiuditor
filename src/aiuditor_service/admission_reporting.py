@@ -109,25 +109,8 @@ def _apply(row, report, now):
 
 def persist_report(persist, report, now):
     """Serialize the report receipt and policy transition on the admission row."""
-    from aiuditor_service.persist import MemoryPersistSession, dump_for_persist, sql_row
-    if isinstance(persist, MemoryPersistSession):
-        with persist._lab_report_lock:
-            bucket = persist.rows.setdefault("admissions", {}).setdefault(str(report.tenant_id), {})
-            payload = bucket.get(str(report.admission_id))
-            row = _apply(Admission.model_validate(payload) if payload else None, report, now)
-            bucket[str(row.id)] = dump_for_persist(row)
-            return row
-    from sqlalchemy import select, text
-    from aiuditor_service.models import AiuditorAdmission
-    with persist._session_factory() as session, session.begin():
-        session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(report.tenant_id)})
-        old = session.scalar(select(AiuditorAdmission).where(
-            AiuditorAdmission.tenant_id == report.tenant_id,
-            AiuditorAdmission.id == report.admission_id).with_for_update())
-        row = _apply(Admission.model_validate({c.name: getattr(old, c.name) for c in old.__table__.columns}) if old else None, report, now)
-        for key, value in sql_row("admissions", dump_for_persist(row)).items():
-            setattr(old, key, value)
-        return row
+    return mutate_admission(persist, report.tenant_id, report.admission_id,
+        lambda row: _apply(row, report, now))
 
 
 def bind_assignment(row, queued, catalog_id):
@@ -148,7 +131,6 @@ def bind_assignment(row, queued, catalog_id):
 
 def install_assignment(persist, tenant_id, admission_id, assignment):
     """A delayed queue retry cannot replace an assignment or accepted verdict."""
-    from aiuditor_service.persist import MemoryPersistSession, dump_for_persist
     def install(row):
         if row is None:
             raise HTTPException(404, "Admission not found")
@@ -156,11 +138,17 @@ def install_assignment(persist, tenant_id, admission_id, assignment):
             return row
         return row.model_copy(update={"lab_assignment": assignment,
             "status": AdmissionStatus.SANDBOXING, "reason": "lab quarantine soak queued"})
+    return mutate_admission(persist, tenant_id, admission_id, install)
+
+
+def mutate_admission(persist, tenant_id, admission_id, apply):
+    """Verdicts share the evidence lock and read the latest complete row."""
+    from aiuditor_service.persist import MemoryPersistSession, dump_for_persist, sql_row
     if isinstance(persist, MemoryPersistSession):
         with persist._lab_report_lock:
             bucket = persist.rows.setdefault("admissions", {}).setdefault(str(tenant_id), {})
             old = bucket.get(str(admission_id))
-            row = install(Admission.model_validate(old) if old else None)
+            row = apply(Admission.model_validate(old) if old else None)
             bucket[str(row.id)] = dump_for_persist(row)
             return row
     from sqlalchemy import select, text
@@ -169,6 +157,7 @@ def install_assignment(persist, tenant_id, admission_id, assignment):
         session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(tenant_id)})
         old = session.scalar(select(AiuditorAdmission).where(
             AiuditorAdmission.tenant_id == tenant_id, AiuditorAdmission.id == admission_id).with_for_update())
-        row = install(Admission.model_validate({c.name: getattr(old,c.name) for c in old.__table__.columns}) if old else None)
-        old.lab_assignment, old.status, old.reason = row.lab_assignment, row.status.value, row.reason
+        row = apply(Admission.model_validate({c.name:getattr(old,c.name) for c in old.__table__.columns}) if old else None)
+        for key, value in sql_row("admissions", dump_for_persist(row)).items():
+            setattr(old, key, value)
         return row
