@@ -61,8 +61,10 @@ IR/service exchange, or generic internal token grants no measurement authority.
 Authentication expires after five minutes; new evidence must be measured within
 24 hours and after assignment. Identical evidence retries are idempotent across
 restarts; changed evidence conflicts. A passing report enters human hold and never
-certifies or promotes. Old unassigned rows remain closed to reports; requeue them
-through the normal admission pipeline. Plane's companion implementation must be
+certifies or promotes. Old unassigned rows remain closed to reports. An auditor can retry scheduling
+through `POST /admissions/{id}/quarantine` with a `source_ref`; artifact metadata
+comes from the persisted admission. Plane cancels an exact matching legacy run
+and creates a fresh bound assignment instead of trusting old evidence. Plane's companion implementation must be
 deployed before new assignments are available. Private admissions remain separate.
 One-use approvals use a tenant-scoped conditional database update. Live caller,
 PostgreSQL/RLS deployment and consumer cutover acceptance remain tracked in #3/#7.

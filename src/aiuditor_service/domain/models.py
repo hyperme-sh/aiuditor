@@ -576,6 +576,12 @@ class AdmissionCreate(BaseModel):
     )
 
 
+class AdmissionQuarantineRetry(BaseModel):
+    """Retry scheduling only; persisted artifact metadata cannot be replaced."""
+    model_config = {"extra": "forbid"}
+    source_ref: str | None = Field(default=None, max_length=512)
+
+
 class AdmissionResolve(BaseModel):
     """Allow or deny an uploaded artifact. LLM is never the resolver."""
 

@@ -126,3 +126,19 @@ def test_concurrent_conflicting_reports_choose_one_receipt():
     with ThreadPoolExecutor(2) as pool: results=list(pool.map(deliver,[True,False]))
     assert sum(result==409 for result in results)==1
     assert store.get(row.tenant_id,row.id).sandbox_report_sha256 is not None
+
+
+async def test_legacy_unassigned_admission_can_retry_queue_without_measurement_authority(http_client,app,tenant_a,plane_hop):
+    store=app.state.admission_store
+    row=submit_admission(store,tenant_a,AdmissionCreate(file_hash='sha256:'+'ab'*32,
+        format='gguf',license='mit',intended_class='agx-large'),run_pipeline=False)
+    path=f'/api/v1/aiuditor/admissions/{row.id}/quarantine'
+    headers=tenant_session_headers(tenant_a)
+    assert (await http_client.post(path,headers=headers,json={'egress_ok':True})).status_code==422
+    first=await http_client.post(path,headers=headers,json={'source_ref':'owner/repo@revision/model.gguf'})
+    assert first.status_code==200,first.text
+    assert first.json()['lab_assignment']['admission_id']==str(row.id)
+    assert first.json()['sandbox_soak_ok'] is None and first.json()['verdict'] is None
+    repeat=await http_client.post(path,headers=headers,json={})
+    assert repeat.json()==first.json() and len(plane_hop.soaks)==1
+    assert (await http_client.post(path,headers={'X-Tenant-ID':str(tenant_a),'X-Internal-Token':'generic'},json={})).status_code in {401,403}

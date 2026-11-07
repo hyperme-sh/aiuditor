@@ -51,6 +51,7 @@ from aiuditor_service.domain.models import (
     AllowedSet,
     AdmissionCreate,
     AdmissionResolve,
+    AdmissionQuarantineRetry,
     AdmissionSandboxReport,
     Approval,
     ApprovalCreate,
@@ -1137,6 +1138,26 @@ async def create_admission(request: Request, body: AdmissionCreate) -> Admission
         payload=row.to_event_payload(),
     )
     return row
+
+
+@router.post("/admissions/{admission_id}/quarantine", response_model=Admission,
+    summary="Retry an unassigned upload quarantine using its persisted artifact pins")
+async def retry_admission_quarantine(request: Request, admission_id: uuid.UUID,
+    body: AdmissionQuarantineRetry) -> Admission:
+    require_grant_write(role_from_request(request))
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
+    store = _admissions(request)
+    row = store.get(tenant_id, admission_id)
+    if row is None:
+        raise HTTPException(404, ADMISSION_NOT_FOUND)
+    if row.verdict is not None:
+        raise HTTPException(409, "Admission already resolved")
+    from aiuditor_service.admission import advance_admission_async
+    return await advance_admission_async(store, tenant_id, admission_id,
+        body=AdmissionCreate(file_hash=row.file_hash, format=row.format,
+            quant=row.quant, license=row.license, intended_class=row.intended_class,
+            size_bytes=row.size_bytes, source_ref=body.source_ref),
+        plane=getattr(request.app.state, "plane_hop", None), approvals=_approvals(request))
 
 
 @router.get(
