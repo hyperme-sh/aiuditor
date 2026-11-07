@@ -266,3 +266,15 @@ Package regressions include real loopback TLS: a trusted certificate for the
 original hostname succeeds through the pinned socket, and a trusted certificate
 for another hostname is refused before sending HTTP headers. This is transport
 qualification, not live provider acceptance or deployment.
+
+Main runtime publication does not transfer Docker archives through Actions.
+Validation and the isolated publisher use the existing `shared-local` runner
+group, verify the exact Docker image configuration and source label, and push
+those already tested bytes to the registry. A short-lived local package archive
+is bound by its SHA-256 job output; the publisher checks file types, names,
+size bounds and digest without checking out or executing application code.
+Successful publication removes its job-owned image alias and local archive;
+failed publishers retain them for retry. Optional one-day `tested-dist` retention
+can fail without blocking runtime publication. If the quota prevents retention,
+versioned test-bundle publication explicitly skips; deployment remains on its
+previous reviewed bundle until one is available. Stable release paths are unchanged.

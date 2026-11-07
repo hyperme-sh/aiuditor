@@ -19,7 +19,17 @@ jobs:
       contents: write
       actions: read
     steps:
+      - name: Check optional retained bundle inputs
+        id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          available=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '[.artifacts[] | select(.name == "tested-dist" and .expired == false)] | length')
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          if [[ "$available" != 1 ]]; then echo '::notice::No retained test bundle; qualified runtime remains in the registry'; fi
       - name: Publish exact qualified test bundle
+        if: steps.inputs.outputs.available == '1'
         uses: hyperme-sh/.github/actions/bundle-channel@2f4d291a3e833520b7a8c5cb5e5cbc812395f691
         with:
           mode: test
