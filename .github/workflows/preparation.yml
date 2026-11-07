@@ -40,7 +40,12 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+psycopg://postgres:package-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
         run: bash scripts/check-postgres.sh --fixtures
+      - name: Verify local qualification outputs before optional PR retention
+        run: |
+          test -s "$PREPARED_OUTPUT"/dist/*.whl
+          test -s "$PREPARED_OUTPUT"/dist/*.tar.gz
       - name: Retain tested preparation bytes
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: prepared-dist
