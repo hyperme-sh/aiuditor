@@ -10,7 +10,10 @@ jobs:
   package:
     permissions:
       contents: read
-      packages: write
+    outputs:
+      image-id: ${{ steps.handoff.outputs.image-id }}
+      local-image: ${{ steps.handoff.outputs.local-image }}
+      package-artifact: ${{ steps.package-upload.outputs.artifact-id }}
     if: github.ref == 'refs/heads/main'
     runs-on:
       group: shared-local
@@ -95,6 +98,48 @@ jobs:
             -t aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} .
           docker run --rm --network none --entrypoint /app/.venv/bin/python aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} \
             -c 'from aiuditor_service.app import app; import controlplane_db; assert app.openapi()["paths"]'
+      - name: Bind tested image on the shared-local Docker daemon
+        id: handoff
+        if: github.event_name == 'push'
+        run: |
+          image="aiuditor:ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "image-id=$(docker image inspect "$image" --format '{{.Id}}')" >> "$GITHUB_OUTPUT"
+          echo "local-image=$image" >> "$GITHUB_OUTPUT"
+      - name: Transfer validated package bytes
+        id: package-upload
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qualified-dist-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_ARTIFACT_DIR }}/*
+          if-no-files-found: error
+          retention-days: 1
+      - name: Clean up qualification without a publisher
+        if: always() && (github.event_name != 'push' || !success())
+        run: docker image rm "aiuditor:ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >/dev/null 2>&1 || true
+
+  publish-test-image:
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on:
+      group: shared-local
+      labels: [self-hosted, linux, x64, debrunner]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    env:
+      QUALIFIED_ID: ${{ needs.package.outputs.image-id }}
+      QUALIFIED_REF: ${{ needs.package.outputs.local-image }}
+    steps:
+      - name: Prepare isolated publisher directory
+        run: echo "RELEASE_ARTIFACT_DIR=$(mktemp -d "$RUNNER_TEMP/publish-dist.XXXXXX")" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.package.outputs.package-artifact }}
+          path: ${{ env.RELEASE_ARTIFACT_DIR }}
+          merge-multiple: true
       - name: Publish the qualified main runtime and record its digest
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -104,8 +149,10 @@ jobs:
           set -euo pipefail
           export DOCKER_CONFIG=$(mktemp -d "$RUNNER_TEMP/runtime-login.XXXXXX")
           trap 'rm -rf -- "$DOCKER_CONFIG"' EXIT
-          local_image="aiuditor:ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          local_image="$QUALIFIED_REF"
+          [[ "$local_image" =~ ^aiuditor:ci-[0-9]+-[0-9]+$ ]]
           config=$(docker image inspect "$local_image" --format '{{.Id}}')
+          test "$config" = "$QUALIFIED_ID"
           revision=$(docker image inspect "$local_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
           test "$revision" = "$GITHUB_SHA"
           image="ghcr.io/${GITHUB_REPOSITORY,,}/runtime:test-${GITHUB_SHA}"
@@ -146,4 +193,4 @@ jobs:
           compression-level: 0
       - name: Remove job-owned runtime aliases
         if: always()
-        run: docker image rm "aiuditor:ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >/dev/null 2>&1 || true
+        run: docker image rm "$QUALIFIED_REF" >/dev/null 2>&1 || true
