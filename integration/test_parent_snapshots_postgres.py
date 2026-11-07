@@ -116,3 +116,23 @@ def test_concurrent_receipts_cannot_reintroduce_stale_allow(migrated_postgres):
         assert new_stores(persist).policy_store.list_for(tenant) == []
     finally:
         persist._session_factory.kw['bind'].dispose()
+
+
+def test_absent_row_still_cannot_be_claimed_by_another_parent(migrated_postgres):
+    tenant = uuid.uuid4()
+    seed(migrated_postgres, tenant)
+    persist = SqlPersistSession.from_url(migrated_postgres)
+    try:
+        stores = new_stores(persist)
+        remote = policy(tenant)
+        apply_hydrate(stores, snapshot(tenant, policies=[remote]), parent_id='original')
+        stores.policy_store.delete(tenant, remote.id)
+        with pytest.raises(HTTPException) as conflict:
+            apply_hydrate(stores, snapshot(tenant, tick=1, policies=[remote]), parent_id='replacement')
+        assert conflict.value.status_code == 409
+        assert stores.policy_store.list_for(tenant) == []
+        apply_hydrate(stores, snapshot(tenant, tick=1), parent_id='original')
+        apply_hydrate(stores, snapshot(tenant, tick=2, policies=[remote]), parent_id='replacement')
+        assert stores.policy_store.list_for(tenant) == [remote]
+    finally:
+        persist._session_factory.kw['bind'].dispose()

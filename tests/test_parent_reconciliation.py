@@ -173,3 +173,20 @@ def test_parent_identity_is_stable_across_credentials_and_default_port():
     assert one == two
     assert one != parent_identity(HttpParentHop('https://different.example/base'))
     assert one != parent_identity(HttpParentHop('https://parent.example/other'))
+
+
+def test_missing_row_does_not_transfer_its_parent_receipt_ownership():
+    tenant = uuid.uuid4()
+    stores = new_stores()
+    remote = policy(tenant)
+    first = snapshot(tenant, policies=[remote])
+    apply_hydrate(stores, first, parent_id='original')
+    stores.policy_store.delete(tenant, remote.id)
+    with pytest.raises(HTTPException) as conflict:
+        apply_hydrate(stores, snapshot(tenant, tick=1, policies=[remote]), parent_id='replacement')
+    assert conflict.value.status_code == 409
+    assert stores.policy_store.list_for(tenant) == []
+    # Ownership can end only when its original parent reconciles the ID away.
+    apply_hydrate(stores, snapshot(tenant, tick=1), parent_id='original')
+    apply_hydrate(stores, snapshot(tenant, tick=2, policies=[remote]), parent_id='replacement')
+    assert stores.policy_store.list_for(tenant) == [remote]

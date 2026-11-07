@@ -395,6 +395,11 @@ class MemoryPersistSession:
                 bucket = staged.setdefault(table, {}).setdefault(str(tenant_id), {})
                 old_ids = set(owned.get(table, []))
                 new_ids = {str(row['id']) for row in payloads}
+                other_ids = {rid for source, receipt in self._parent_snapshots.items()
+                             if source[0] == key[0] and source != key
+                             for rid in receipt['owned_rows'].get(table, [])}
+                if (old_ids | new_ids).intersection(other_ids):
+                    raise SnapshotConflict('Snapshot row identity belongs to another parent')
                 if (new_ids - old_ids).intersection(bucket):
                     raise SnapshotConflict('Parent snapshot conflicts with locally owned rows')
                 for rid in old_ids - new_ids:
@@ -684,7 +689,7 @@ class SqlPersistSession:
 
     def replace_parent_snapshot(self, tenant_id, parent_id, exported_at, snapshot_sha256, rows):
         import copy
-        from sqlalchemy import delete, text
+        from sqlalchemy import delete, select, text
         from sqlalchemy.dialects.postgresql import insert
         from aiuditor_service.models import AiuditorParentSnapshot
         from aiuditor_service.parent_state import SnapshotConflict, replay_receipt
@@ -696,7 +701,9 @@ class SqlPersistSession:
                 if not session.scalar(text('SELECT pg_try_advisory_xact_lock(hashtextextended(:key,0))'),
                                       {'key': f'aiuditor-parent-snapshot:{tenant_id}'}):
                     raise SnapshotConflict('Parent snapshot reconciliation in progress; retry')
-                receipt = session.get(AiuditorParentSnapshot, (tenant_id, parent_id))
+                receipts = session.scalars(select(AiuditorParentSnapshot).where(
+                    AiuditorParentSnapshot.tenant_id == tenant_id)).all()
+                receipt = next((item for item in receipts if item.parent_id == parent_id), None)
                 previous = None if receipt is None else dict(exported_at=receipt.exported_at,
                     snapshot_sha256=receipt.snapshot_sha256, owned_rows=receipt.owned_rows)
                 if replay_receipt(previous, exported_at, snapshot_sha256):
@@ -707,6 +714,10 @@ class SqlPersistSession:
                     model = models[table]
                     old_ids = set(owned.get(table, []))
                     new_ids = {str(row['id']) for row in payloads}
+                    other_ids = {rid for item in receipts if item.parent_id != parent_id
+                                 for rid in item.owned_rows.get(table, [])}
+                    if (old_ids | new_ids).intersection(other_ids):
+                        raise SnapshotConflict('Snapshot row identity belongs to another parent')
                     for row in payloads:
                         values = sql_row(table, row)
                         statement = insert(model).values(**values)
