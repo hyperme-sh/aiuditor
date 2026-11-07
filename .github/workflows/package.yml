@@ -145,5 +145,5 @@ jobs:
           retention-days: 7
           compression-level: 0
       - name: Remove job-owned runtime aliases
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: always()
         run: docker image rm "aiuditor:ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >/dev/null 2>&1 || true
