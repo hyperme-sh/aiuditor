@@ -9,18 +9,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import hashlib
+import json
 import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import HTTPException
 
 from aiuditor_service.domain.models import HydrateSnapshot
 from aiuditor_service.export import _reject_bodies
-from aiuditor_service.persist import row_from_payload
+from aiuditor_service.persist import row_from_payload, dump_for_persist
+from aiuditor_service.parent_state import SnapshotConflict
 from aiuditor_service.role import AiuditorRole, writer_for
 from aiuditor_service.store import CandidateStore, StoreBundle
 
@@ -90,7 +94,10 @@ class HttpParentHop:
         if response.status_code >= 400:
             raise ParentUnavailable(PARENT_HOP_FAILED)
         try:
-            return HydrateSnapshot.model_validate(response.json())
+            snapshot = HydrateSnapshot.model_validate(response.json())
+            if snapshot.tenant_id != tenant_id:
+                raise ValueError('parent returned a foreign tenant')
+            return snapshot
         except (ValueError, TypeError) as exc:
             raise ParentUnavailable(PARENT_HOP_FAILED) from exc
 
@@ -218,7 +225,7 @@ async def run_hydrate_loop(
     while not stop.is_set():
         try:
             snapshot = await hop.hydrate(tenant_id)
-            apply_hydrate(stores_from_app(app), snapshot)
+            apply_hydrate(stores_from_app(app), snapshot, tenant_id=tenant_id, parent_id=parent_identity(hop))
             logger.info("aiuditor witness hydrate applied tenant=%s", tenant_id)
         except Exception as exc:
             logger.warning("aiuditor witness hydrate failed: %s", exc)
@@ -231,24 +238,57 @@ async def run_hydrate_loop(
             await sleep(every)
 
 
-def apply_hydrate(stores: StoreBundle, snapshot: HydrateSnapshot) -> HydrateSnapshot:
-    _reject_bodies(snapshot.model_dump(mode="json"))
-    if snapshot.tenant_id is None:
+def parent_identity(hop) -> str:
+    # Configuration identifies the parent; credentials are never part of it.
+    source = getattr(hop, '_base', None)
+    if source is None:
+        source = 'configured-parent'
+    else:
+        parts = urlsplit(source)
+        host = (parts.hostname or '').lower()
+        authority = f'[{host}]' if ':' in host else host
+        if parts.port is not None and parts.port != {'http': 80, 'https': 443}.get(parts.scheme):
+            authority += f':{parts.port}'
+        source = urlunsplit((parts.scheme, authority, parts.path.rstrip('/'), '', ''))
+    return hashlib.sha256(source.encode()).hexdigest()
+
+
+def apply_hydrate(stores: StoreBundle, snapshot: HydrateSnapshot, *,
+                  tenant_id: uuid.UUID | None = None, parent_id: str = 'default') -> HydrateSnapshot:
+    _reject_bodies(snapshot.model_dump(mode='json'))
+    if snapshot.tenant_id is None or (tenant_id is not None and snapshot.tenant_id != tenant_id):
         raise HTTPException(status_code=400, detail=PARENT_HOP_FAILED)
-    mapping = (
-        ("connections", snapshot.connections, stores.connection_store),
-        ("policies", snapshot.policies, stores.policy_store),
-        ("contracts", snapshot.contracts, stores.contract_store),
-        ("violations", snapshot.violations, stores.violation_store),
-        ("approvals", snapshot.approvals, stores.approval_store),
-        ("catalog", snapshot.catalog, stores.catalog_store),
-        ("envelopes", snapshot.envelopes, stores.envelope_store),
-        ("suite_members", snapshot.suite_members, stores.suite_store),
-        ("admissions", snapshot.admissions, stores.admission_store),
-    )
-    for table, rows, store in mapping:
-        for payload in rows:
-            if not isinstance(payload, dict):
-                raise HTTPException(status_code=400, detail=PARENT_HOP_FAILED)
-            store.put(row_from_payload(table, payload))
+    if snapshot.exported_at.tzinfo is None:
+        raise HTTPException(status_code=400, detail=PARENT_HOP_FAILED)
+    if not {'connections', 'policies', 'contracts', 'violations', 'approvals', 'catalog'} <= snapshot.model_fields_set:
+        raise HTTPException(status_code=400, detail=PARENT_HOP_FAILED)
+    mapping = ('connections', 'policies', 'contracts', 'violations', 'approvals',
+               'catalog', 'envelopes', 'suite_members', 'admissions')
+    staged = {}
+    try:
+        for table in mapping:
+            # Older parent versions omit these optional tables. Omission never
+            # authorizes deleting their previously accepted rows.
+            if table not in snapshot.model_fields_set:
+                continue
+            parsed = []
+            ids = set()
+            for payload in getattr(snapshot, table):
+                if not isinstance(payload, dict):
+                    raise ValueError('invalid snapshot row')
+                row = row_from_payload(table, payload)
+                if row.tenant_id != snapshot.tenant_id or row.id in ids:
+                    raise ValueError('foreign or duplicate snapshot row')
+                ids.add(row.id)
+                parsed.append(dump_for_persist(row))
+            staged[table] = parsed
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=PARENT_HOP_FAILED) from exc
+    digest = hashlib.sha256(json.dumps(snapshot.model_dump(mode='json', exclude_unset=True),
+        sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    try:
+        stores.persist.replace_parent_snapshot(snapshot.tenant_id, parent_id,
+            snapshot.exported_at, digest, staged)
+    except SnapshotConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return snapshot

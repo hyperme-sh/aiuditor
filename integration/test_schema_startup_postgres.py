@@ -42,7 +42,7 @@ def test_owner_startup_ignores_retired_foreign_tables(isolated_owner_db, monkeyp
         assert schema_startup.main() == 0
         assert schema_startup.main() == 0
         after = migrations.current_heads(url)
-        assert after['aiuditor'] == migrations.chain_heads()['aiuditor']
+        assert after['aiuditor'] == schema_startup.owner_head()
         assert {name: value for name, value in after.items() if name != 'aiuditor'} == {
             name: value for name, value in before.items() if name != 'aiuditor'}
         assert not inspect(engine).has_table('onramp_sessions')
@@ -57,5 +57,46 @@ def test_service_startup_refuses_unadopted_database(isolated_owner_db, monkeypat
     engine = create_engine(isolated_owner_db)
     try:
         assert inspect(engine).get_table_names(schema='public') == []
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize('ahead', [False, True])
+def test_service_bundle_upgrades_adopted_rows_and_refuses_missing_receipt_table(isolated_owner_db, ahead):
+    from aiuditor_service.persist import SqlPersistSession
+    from aiuditor_service.store import PolicyStore
+    from test_parent_reconciliation import policy
+    url = isolated_owner_db
+    migrations.upgrade(url)
+    tenant = uuid.uuid4()
+    engine = create_engine(url)
+    try:
+        with engine.begin() as cx:
+            cx.execute(text('INSERT INTO tenants(id,name,is_active) VALUES(:id,:name,true)'),
+                       {'id': tenant, 'name': str(tenant)})
+        persist = SqlPersistSession.from_url(url)
+        try:
+            store = PolicyStore(persist=persist)
+            original = policy(tenant)
+            store.put(original)
+            before = migrations.current_heads(url)
+            schema_startup.upgrade_schema(url)
+            assert store.get(tenant, original.id) == original
+            after = migrations.current_heads(url)
+            assert after['aiuditor'] == schema_startup.owner_head()
+            assert {k:v for k,v in after.items() if k != 'aiuditor'} == {k:v for k,v in before.items() if k != 'aiuditor'}
+            if ahead:
+                with engine.begin() as cx:
+                    cx.execute(text("UPDATE alembic_version_aiuditor SET version_num='aiuditor_9999_future'"))
+                schema_startup.upgrade_schema(url)
+                assert migrations.current_heads(url)['aiuditor'] == 'aiuditor_9999_future'
+            # A claimed current head with a missing table is corruption, not an
+            # authorization to silently recreate state or reset provenance.
+            with engine.begin() as cx:
+                cx.execute(text('DROP TABLE aiuditor_parent_snapshots'))
+            with pytest.raises(ValueError, match='missing.*tables'):
+                schema_startup.upgrade_schema(url)
+        finally:
+            persist._session_factory.kw['bind'].dispose()
     finally:
         engine.dispose()
