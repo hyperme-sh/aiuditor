@@ -436,18 +436,22 @@ async def advance_admission_async(
         source_ref=source_ref,
         hold_for_human=hold_for_human,
     )
-    # Static gate + quarantine. Do not claim sandbox pass without a report.
-    advanced = advance_admission(
-        store,
-        tenant_id,
-        admission_id,
-        body=gate_body.model_copy(update={"hold_for_human": False}),
-        sandbox_egress_ok=sandbox_egress_ok,
-        sandbox_soak_ok=sandbox_soak_ok,
-        hold_for_human=False,
-        now=now,
-    )
-    if advanced.verdict is not None:
+    # Serialize pure gate transitions with assignment/report/verdict updates.
+    # The network queue hop runs after this transaction has released its lock.
+    from aiuditor_service.admission_reporting import mutate_admission
+    def quarantine(current):
+        if current is None:
+            raise HTTPException(404, ADMISSION_NOT_FOUND)
+        if current.lab_assignment is not None or current.verdict is not None:
+            return current
+        scratch = AdmissionStore()
+        scratch.put(current)
+        return advance_admission(scratch, tenant_id, admission_id,
+            body=gate_body.model_copy(update={"hold_for_human": False}),
+            sandbox_egress_ok=sandbox_egress_ok, sandbox_soak_ok=sandbox_soak_ok,
+            hold_for_human=False, now=now)
+    advanced = mutate_admission(store.persist, tenant_id, admission_id, quarantine)
+    if advanced.verdict is not None or advanced.lab_assignment is not None:
         return advanced
 
     if sandbox_passed(advanced):
@@ -491,13 +495,16 @@ async def advance_admission_async(
             from aiuditor_service.admission_reporting import install_assignment
             advanced = install_assignment(store.persist, tenant_id, advanced.id, assignment)
         except HostLookupUnavailable:
-            advanced = advanced.model_copy(
-                update={
-                    "status": AdmissionStatus.HOLD,
-                    "reason": "no ready lab host",
-                }
-            )
-            store.put(advanced)
+            def no_ready_host(current):
+                if current is None:
+                    raise HTTPException(404, ADMISSION_NOT_FOUND)
+                if current.lab_assignment is not None or current.verdict is not None:
+                    return current
+                return current.model_copy(update={"status": AdmissionStatus.HOLD,
+                    "reason": "no ready lab host"})
+            advanced = mutate_admission(store.persist, tenant_id, advanced.id, no_ready_host)
+            if advanced.lab_assignment is not None or advanced.verdict is not None:
+                return advanced
             if approvals is not None:
                 hold_approval(
                     approvals,

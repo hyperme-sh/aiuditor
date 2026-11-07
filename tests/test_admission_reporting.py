@@ -142,3 +142,28 @@ async def test_legacy_unassigned_admission_can_retry_queue_without_measurement_a
     repeat=await http_client.post(path,headers=headers,json={})
     assert repeat.json()==first.json() and len(plane_hop.soaks)==1
     assert (await http_client.post(path,headers={'X-Tenant-ID':str(tenant_a),'X-Internal-Token':'generic'},json={})).status_code in {401,403}
+
+
+async def test_delayed_queue_failure_cannot_erase_accepted_assignment_or_report():
+    import asyncio
+    from aiuditor_service.admission import advance_admission_async
+    from aiuditor_service.hypermesh import HostLookupUnavailable
+    store=AdmissionStore();tenant=uuid.uuid4()
+    row=submit_admission(store,tenant,AdmissionCreate(file_hash='sha256:'+'ab'*32,
+        format='gguf',license='mit',intended_class='agx-large'),run_pipeline=False)
+    started,release=asyncio.Event(),asyncio.Event()
+    class DelayedFailure(FakePlaneHop):
+        async def queue_lab_soak(self,*args,**kwargs):
+            started.set();await release.wait()
+            raise HostLookupUnavailable('unavailable')
+    first=asyncio.create_task(advance_admission_async(store,tenant,row.id,plane=DelayedFailure()))
+    await started.wait()
+    bound=await advance_admission_async(store,tenant,row.id,plane=FakePlaneHop())
+    now=datetime.now(UTC)
+    report=Report(**bound.lab_assignment,soak_passed=True,egress_ok=True,
+        measured_at=now,issued_at=now)
+    accepted=persist_report(store.persist,report,now)
+    release.set()
+    assert await first==accepted
+    assert store.get(tenant,row.id)==accepted
+    assert persist_report(store.persist,report,now)==accepted
