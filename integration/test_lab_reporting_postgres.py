@@ -101,3 +101,34 @@ async def test_purpose_route_owns_real_tenant_transaction(reporter_db,monkeypatc
         replay=await client.post('/api/v1/aiuditor/envelopes',**signed(value))
         assert replay.status_code==201 and replay.json()==first.json()
     assert len(events)==1
+
+
+def test_admission_report_atomic_restart_and_rls(reporter_db):
+    from aiuditor_service.admission_reporting import persist_report
+    from aiuditor_service.store import AdmissionStore
+    from test_admission_reporting import assigned
+    from fastapi import HTTPException
+    admin, engine, tid, other = reporter_db
+    with engine.connect() as connection:
+        role = connection.scalar(text('SELECT current_user'))
+    with admin.begin() as c:
+        c.exec_driver_sql(f'GRANT SELECT,INSERT,UPDATE ON aiuditor_admissions TO "{role}"')
+    persist = SqlPersistSession(sessionmaker(engine))
+    row, body = assigned(AdmissionStore(persist=persist), tid)
+    barrier = Barrier(3)
+    def deliver(_):
+        barrier.wait()
+        return persist_report(SqlPersistSession(sessionmaker(engine)), body, datetime.now(UTC))
+    with ThreadPoolExecutor(3) as pool:
+        results = list(pool.map(deliver, range(3)))
+    assert all(result == results[0] for result in results)
+    assert results[0].status.value == 'hold' and results[0].verdict is None
+    engine.dispose()
+    assert persist_report(SqlPersistSession(sessionmaker(engine)), body,
+        datetime.now(UTC)+timedelta(days=2)) == results[0]
+    with pytest.raises(HTTPException) as error:
+        persist_report(persist, body.model_copy(update={'egress_ok':False}), datetime.now(UTC))
+    assert error.value.status_code == 409
+    with engine.begin() as c:
+        c.execute(text("SELECT set_config('app.current_tenant_id',:tid,true)"), {'tid':str(other)})
+        assert c.scalar(text('SELECT count(*) FROM aiuditor_admissions')) == 0

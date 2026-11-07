@@ -423,6 +423,8 @@ async def advance_admission_async(
     row = store.get(tenant_id, admission_id)
     if row is None:
         raise HTTPException(status_code=404, detail=ADMISSION_NOT_FOUND)
+    if row.lab_assignment is not None or row.verdict is not None:
+        return row
     source_ref = body.source_ref if body is not None else None
     gate_body = body or AdmissionCreate(
         file_hash=row.file_hash,
@@ -464,12 +466,15 @@ async def advance_admission_async(
             now=now,
         )
 
+    if advanced.lab_assignment is not None:
+        return advanced
+
     if plane is not None:
         catalog_id = admission_catalog_id(
             intended_class=advanced.intended_class, file_hash=advanced.file_hash
         )
         try:
-            await plane.queue_lab_soak(
+            queued = await plane.queue_lab_soak(
                 tenant_id,
                 class_id=advanced.intended_class,
                 catalog_id=catalog_id,
@@ -481,13 +486,10 @@ async def advance_admission_async(
                 enqueue_pull=True,
                 admission_id=advanced.id,
             )
-            advanced = advanced.model_copy(
-                update={
-                    "status": AdmissionStatus.SANDBOXING,
-                    "reason": "lab quarantine soak queued",
-                }
-            )
-            store.put(advanced)
+            from aiuditor_service.admission_reporting import bind_assignment
+            assignment = bind_assignment(advanced, queued, catalog_id)
+            from aiuditor_service.admission_reporting import install_assignment
+            advanced = install_assignment(store.persist, tenant_id, advanced.id, assignment)
         except HostLookupUnavailable:
             advanced = advanced.model_copy(
                 update={

@@ -171,6 +171,8 @@ _ALLOWED = {
         "created_at",
     },
     "admissions": {
+        "lab_assignment",
+        "sandbox_report_sha256",
         "id",
         "tenant_id",
         "file_hash",

@@ -913,6 +913,15 @@ class FakePlaneHop:
             "size_bytes": size_bytes,
             "tenant_id": tenant_id,
         }
+        if admission_id is not None:
+            from datetime import UTC, datetime
+            body["lab_assignment"] = {
+                "protocol_version": 1, "tenant_id": str(tenant_id),
+                "admission_id": str(admission_id), "job_id": body["soak_job_id"],
+                "device_id": body["device_id"], "class_id": class_id,
+                "catalog_id": catalog_id, "file_hash": file_hash,
+                "binding_sha256": "a" * 64, "created_at": datetime.now(UTC).isoformat(),
+            }
         self.soaks.append(body)
         return body
 

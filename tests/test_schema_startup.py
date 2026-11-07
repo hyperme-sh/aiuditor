@@ -14,7 +14,7 @@ def test_packaged_bundle_retains_frozen_baseline_and_only_owner_chain():
     config = schema_startup.owner_config()
     script = ScriptDirectory.from_config(config)
     assert script.get_base() == 'aiuditor_0053_baseline'
-    assert script.get_current_head() == 'aiuditor_0059_parent_snapshots'
+    assert script.get_current_head() == 'aiuditor_0060_admission_reports'
     entry = json.loads((schema_startup.ROOT / 'owner.json').read_text())
     assert hashlib.sha256((schema_startup.ROOT / 'versions/baseline.sql').read_bytes()).hexdigest() == entry['baseline_sha256']
     assert 'aiuditor_parent_snapshots' in entry['tables']

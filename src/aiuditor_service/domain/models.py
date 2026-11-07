@@ -613,6 +613,8 @@ class Admission(BaseModel):
     sandbox_soak_ok: bool | None = None
     sandbox_egress_ok: bool | None = None
     sandbox_egress_reason: str | None = None
+    lab_assignment: dict | None = None
+    sandbox_report_sha256: str | None = None
     created_at: datetime
     resolved_at: datetime | None = None
 
