@@ -191,6 +191,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
-      - name: Remove job-owned runtime aliases
-        if: always()
+      # Failed publisher reruns reuse the successful package job's image output.
+      - name: Remove job-owned runtime aliases after successful publication
+        if: success()
         run: docker image rm "$QUALIFIED_REF" >/dev/null 2>&1 || true
