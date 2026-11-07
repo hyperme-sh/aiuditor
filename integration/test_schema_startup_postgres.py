@@ -100,3 +100,51 @@ def test_service_bundle_upgrades_adopted_rows_and_refuses_missing_receipt_table(
             persist._session_factory.kw['bind'].dispose()
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize('state', ['ready', 'outdated', 'missing_table', 'unprovisioned'])
+def test_witness_checks_schema_with_select_only_role(isolated_owner_db, monkeypatch, state):
+    """An installed witness cannot stamp, upgrade, seed, or repair the owner DB."""
+    import json
+    url = isolated_owner_db
+    if state != 'unprovisioned':
+        migrations.upgrade(url)
+        if state != 'outdated':
+            schema_startup.upgrade_schema(url)
+    admin = create_engine(url)
+    role = 'witness_read_' + uuid.uuid4().hex
+    try:
+        with admin.begin() as db:
+            if state == 'missing_table':
+                db.execute(text('DROP TABLE aiuditor_parent_snapshots'))
+            db.execute(text(f'CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOBYPASSRLS'))
+            db.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+            entry = json.loads((schema_startup.ROOT / 'owner.json').read_text())
+            tables = set(inspect(db).get_table_names(schema='public'))
+            before = sorted(tables)
+            for table in sorted((set(entry['tables']) | {entry['version_table']}) & tables):
+                db.execute(text(f'GRANT SELECT ON public."{table}" TO "{role}"'))
+            revision_before = db.execute(text('SELECT version_num FROM public.alembic_version_aiuditor')).scalars().all() if entry['version_table'] in tables else None
+        readonly = create_engine(url, connect_args={
+            'options': f'-c role={role} -c default_transaction_read_only=on'})
+        with readonly.connect() as db:
+            assert db.scalar(text('SELECT current_user')) == role
+            assert db.scalar(text('SHOW transaction_read_only')) == 'on'
+            assert db.scalar(text('SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user')) is False
+        monkeypatch.setattr(migrations, '_engine', lambda _: readonly)
+        monkeypatch.setenv('AIUDITOR_ROLE', 'witness')
+        monkeypatch.setenv('DATABASE_URL', url)
+        if state == 'ready':
+            assert schema_startup.main() == 0
+        else:
+            with pytest.raises(ValueError, match='provision|missing required owner tables'):
+                schema_startup.main()
+        with admin.connect() as db:
+            assert sorted(inspect(db).get_table_names(schema='public')) == before
+            if revision_before is not None:
+                assert db.execute(text('SELECT version_num FROM public.alembic_version_aiuditor')).scalars().all() == revision_before
+    finally:
+        with admin.begin() as db:
+            db.execute(text(f'DROP OWNED BY "{role}"'))
+            db.execute(text(f'DROP ROLE "{role}"'))
+        admin.dispose()

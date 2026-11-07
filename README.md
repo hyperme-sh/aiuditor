@@ -141,6 +141,12 @@ exercised. This does not qualify financial-owner migration or live callers.
 
 ## Witness owner qualification
 
+The container entrypoint resolves the role before touching PostgreSQL. A
+database-free witness skips owner migrations. A witness with a database checks
+the adopted AIuditor revision and required tables in a read-only transaction;
+an owner deployment must provision or upgrade that schema first. Global and
+operator deployments retain the scoped owner migration path.
+
 The PostgreSQL integration lane includes the source #716 witness refusal and
 loopback HTTP framing cases. See [the security note](docs/witness-violation-security.md)
 for tested boundaries and the remaining deployed acceptance. These cases run in
