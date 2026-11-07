@@ -138,6 +138,7 @@ from aiuditor_service.parent import (
     ClosedParentHop,
     ParentUnavailable,
     apply_hydrate,
+    parent_identity,
     build_hydrate,
 )
 from aiuditor_service.provider import ProviderUnavailable
@@ -372,7 +373,7 @@ async def pull_hydrate(request: Request) -> HydrateSnapshot:
         snapshot = await hop.hydrate(tenant_id, headers=_forward_headers(request))
     except ParentUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc) or PARENT_REQUIRED) from exc
-    return apply_hydrate(_stores(request), snapshot)
+    return apply_hydrate(_stores(request), snapshot, tenant_id=tenant_id, parent_id=parent_identity(hop))
 
 
 @router.get("/connections", response_model=list[Connection])

@@ -1,0 +1,34 @@
+{
+  "baseline": "aiuditor_0053_baseline",
+  "version_table": "alembic_version_aiuditor",
+  "tables": [
+    "aiuditor_admissions",
+    "aiuditor_approvals",
+    "aiuditor_candidates",
+    "aiuditor_catalog",
+    "aiuditor_connections",
+    "aiuditor_contracts",
+    "aiuditor_crawl_state",
+    "aiuditor_envelopes",
+    "aiuditor_machine_identities",
+    "aiuditor_policies",
+    "aiuditor_private_model_admissions",
+    "aiuditor_suite_members",
+    "aiuditor_violations",
+    "aiuditor_envelope_reports",
+    "aiuditor_parent_snapshots"
+  ],
+  "baseline_sha256": "58e39340aa9fc3526c2e366a62ab2f4c4265ee46e8d892f3f0fe42eceedd3016",
+  "baseline_tables": [
+    "aiuditor_admissions",
+    "aiuditor_approvals",
+    "aiuditor_candidates",
+    "aiuditor_catalog",
+    "aiuditor_connections",
+    "aiuditor_contracts",
+    "aiuditor_envelopes",
+    "aiuditor_policies",
+    "aiuditor_suite_members",
+    "aiuditor_violations"
+  ]
+}

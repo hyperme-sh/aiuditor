@@ -45,9 +45,10 @@ standalone owner runner; it never searches or imports the retiring monorepo.
 The main workflow automatically qualifies package forms and PostgreSQL contracts
 with a scoped dependency-read credential. No human approval gate is introduced.
 
-The service-owned migration copies are in `migrations/aiuditor`; their matching
-reviewed resources ship in the pinned database package. Frozen mixed/baseline
-resources remain unchanged. Reconcile any existing monorepo database separately;
+The canonical AIuditor migration bundle ships in the runtime wheel under
+`aiuditor_service/migration_bundle`; `migrations/aiuditor` retains review copies.
+Its frozen owner baseline remains byte-identical. The pinned shared database
+package supplies generic helpers, not this service's new migration resources. Reconcile any existing monorepo database separately;
 never stamp an unknown revision to force adoption of the standalone chain.
 Container, deployed RLS/witness behavior, hydration and consumer cutover remain
 functional acceptance checks. No image or live deployment is published here.
@@ -119,8 +120,8 @@ migration lock, then provisions marketplace tenancy through the tenancy owner.
 An absent or ambiguous owner revision stops startup; first-time platform/schema
 provisioning remains an explicit deployment operation. It never stamps a mixed
 history, bootstraps an empty database, or validates/upgrades another service's
-schema. The exact locked database package supplies the migration resources and
-its guarded handling of an unknown newer owner revision. That guard permits
+schema. The installed AIuditor package supplies its own migration resources and retains
+the locked database helper's guarded handling of an unknown newer owner revision. That guard permits
 startup only; existing-data compatibility still requires clone qualification.
 
 PostgreSQL regressions reproduce a native payment revision with retired legacy

@@ -48,7 +48,13 @@ def postgres_sync_url(request) -> str:
 def migrated_postgres(postgres_sync_url: str) -> str:
     # This integration fixture only uses the installed standalone owner runner.
     # It never locates a sibling monorepo or implicitly stamps a legacy database.
-    migrations.upgrade(postgres_sync_url)
+    # Bootstrap foreign fixtures with the pinned shared package, but never ask
+    # that older graph to interpret this service's newer owner revision.
+    migrations.upgrade(postgres_sync_url, chains=tuple(name for name in migrations._ORDER if name != 'aiuditor'))
+    if migrations.current_heads(postgres_sync_url)['aiuditor'] is None:
+        migrations.upgrade(postgres_sync_url, chains=('aiuditor',))
+    from aiuditor_service.schema_startup import upgrade_schema
+    upgrade_schema(postgres_sync_url)
     return postgres_sync_url
 
 

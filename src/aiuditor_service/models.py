@@ -358,3 +358,14 @@ class AiuditorCrawlState(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
+class AiuditorParentSnapshot(Base):
+    """Durable provenance; never part of an exported grant or parent snapshot."""
+    __tablename__ = 'aiuditor_parent_snapshots'
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('tenants.id', ondelete='CASCADE'), primary_key=True)
+    parent_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    exported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    snapshot_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    owned_rows: Mapped[dict] = mapped_column(JSONB, nullable=False)

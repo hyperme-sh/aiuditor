@@ -288,6 +288,8 @@ class PersistSession(Protocol):
 
     def load_rows(self, table: str, tenant_id: uuid.UUID) -> dict[str, dict[str, Any]]: ...
 
+    def replace_parent_snapshot(self, tenant_id, parent_id, exported_at, snapshot_sha256, rows): ...
+
 
 class MemoryPersistSession:
     """In-process row store. A new store on the same session reloads rows."""
@@ -297,7 +299,9 @@ class MemoryPersistSession:
         return persist_report(self, report, now)
 
     def __init__(self, rows: dict[str, dict[str, dict[str, Any]]] | None = None) -> None:
-        from threading import Lock
+        from threading import Lock, RLock
+        self._parent_lock = RLock()
+        self._parent_snapshots = {}
         self._approval_lock = Lock()
         self._lab_report_lock = Lock()
         self.rows: dict[str, dict[str, dict[str, Any]]] = rows or {table: {} for table in TABLES}
@@ -318,27 +322,30 @@ class MemoryPersistSession:
             return True
 
     def snapshot(self) -> dict[str, Any]:
-        return {
-            table: {tid: dict(items) for tid, items in by_tenant.items()}
-            for table, by_tenant in self.rows.items()
-        }
+        with self._parent_lock:
+            return {
+                table: {tid: dict(items) for tid, items in by_tenant.items()}
+                for table, by_tenant in self.rows.items()
+            }
 
     def upsert(self, table: str, tenant_id: uuid.UUID, key: object, payload: dict[str, Any]) -> None:
-        bucket = self.rows.setdefault(table, {}).setdefault(str(tenant_id), {})
-        body = dict(payload)
-        for banned in _BANNED:
-            body.pop(banned, None)
-        bucket[str(key)] = body
+        with self._parent_lock:
+            bucket = self.rows.setdefault(table, {}).setdefault(str(tenant_id), {})
+            body = dict(payload)
+            for banned in _BANNED:
+                body.pop(banned, None)
+            bucket[str(key)] = body
 
     def create_envelope(self, payload: dict[str, Any]) -> bool:
-        # Memory mode is used within the synchronous service event-loop path.
-        tenant = str(payload["tenant_id"])
-        bucket = self.rows.setdefault("envelopes", {}).setdefault(tenant, {})
-        if any(row["class_id"] == payload["class_id"] and row["catalog_id"] == payload["catalog_id"]
-               for row in bucket.values()):
-            return False
-        bucket[str(payload["id"])] = dict(payload)
-        return True
+        with self._parent_lock:
+            # Memory mode is used within the synchronous service event-loop path.
+            tenant = str(payload["tenant_id"])
+            bucket = self.rows.setdefault("envelopes", {}).setdefault(tenant, {})
+            if any(row["class_id"] == payload["class_id"] and row["catalog_id"] == payload["catalog_id"]
+                   for row in bucket.values()):
+                return False
+            bucket[str(payload["id"])] = dict(payload)
+            return True
 
     @contextmanager
     def candidate_scope(self):
@@ -362,15 +369,42 @@ class MemoryPersistSession:
         yield
 
     def delete(self, table: str, tenant_id: uuid.UUID, key: object) -> None:
-        bucket = self.rows.setdefault(table, {}).setdefault(str(tenant_id), {})
-        bucket.pop(str(key), None)
+        with self._parent_lock:
+            bucket = self.rows.setdefault(table, {}).setdefault(str(tenant_id), {})
+            bucket.pop(str(key), None)
 
     def hydrate(self, stores: Any) -> None:
         apply_snapshot(stores, self.rows)
 
     def load_rows(self, table: str, tenant_id: uuid.UUID) -> dict[str, dict[str, Any]]:
-        bucket = self.rows.get(table, {}).get(str(tenant_id), {})
-        return {key: dict(payload) for key, payload in bucket.items()}
+        with self._parent_lock:
+            bucket = self.rows.get(table, {}).get(str(tenant_id), {})
+            return {key: dict(payload) for key, payload in bucket.items()}
+
+    def replace_parent_snapshot(self, tenant_id, parent_id, exported_at, snapshot_sha256, rows):
+        import copy
+        from aiuditor_service.parent_state import SnapshotConflict, replay_receipt
+        key = (str(tenant_id), parent_id)
+        with self._parent_lock:
+            previous = self._parent_snapshots.get(key)
+            if replay_receipt(previous, exported_at, snapshot_sha256):
+                return
+            owned = copy.deepcopy(previous['owned_rows']) if previous else {}
+            staged = copy.deepcopy(self.rows)
+            for table, payloads in rows.items():
+                bucket = staged.setdefault(table, {}).setdefault(str(tenant_id), {})
+                old_ids = set(owned.get(table, []))
+                new_ids = {str(row['id']) for row in payloads}
+                if (new_ids - old_ids).intersection(bucket):
+                    raise SnapshotConflict('Parent snapshot conflicts with locally owned rows')
+                for rid in old_ids - new_ids:
+                    bucket.pop(rid, None)
+                for row in payloads:
+                    bucket[str(row['id'])] = copy.deepcopy(row)
+                owned[table] = sorted(new_ids)
+            self.rows = staged
+            self._parent_snapshots[key] = dict(exported_at=exported_at,
+                snapshot_sha256=snapshot_sha256, owned_rows=owned)
 
 
 def apply_snapshot(stores: Any, rows: dict[str, Any]) -> None:
@@ -647,6 +681,60 @@ class SqlPersistSession:
             raise
         except Exception as exc:
             raise PersistUnavailable(PERSIST_UNAVAILABLE) from exc
+
+    def replace_parent_snapshot(self, tenant_id, parent_id, exported_at, snapshot_sha256, rows):
+        import copy
+        from sqlalchemy import delete, text
+        from sqlalchemy.dialects.postgresql import insert
+        from aiuditor_service.models import AiuditorParentSnapshot
+        from aiuditor_service.parent_state import SnapshotConflict, replay_receipt
+        try:
+            with self._session_factory() as session, session.begin():
+                session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {'tid': str(tenant_id)})
+                # Serialize all parent sources for this tenant, including first
+                # receipts. A missing receipt cannot itself provide a row lock.
+                if not session.scalar(text('SELECT pg_try_advisory_xact_lock(hashtextextended(:key,0))'),
+                                      {'key': f'aiuditor-parent-snapshot:{tenant_id}'}):
+                    raise SnapshotConflict('Parent snapshot reconciliation in progress; retry')
+                receipt = session.get(AiuditorParentSnapshot, (tenant_id, parent_id))
+                previous = None if receipt is None else dict(exported_at=receipt.exported_at,
+                    snapshot_sha256=receipt.snapshot_sha256, owned_rows=receipt.owned_rows)
+                if replay_receipt(previous, exported_at, snapshot_sha256):
+                    return
+                owned = copy.deepcopy(previous['owned_rows']) if previous else {}
+                models = _sql_models()
+                for table, payloads in rows.items():
+                    model = models[table]
+                    old_ids = set(owned.get(table, []))
+                    new_ids = {str(row['id']) for row in payloads}
+                    for row in payloads:
+                        values = sql_row(table, row)
+                        statement = insert(model).values(**values)
+                        if str(row['id']) in old_ids:
+                            statement = statement.on_conflict_do_update(index_elements=[model.id],
+                                set_={k: v for k, v in values.items() if k not in {'id', 'tenant_id'}},
+                                where=model.tenant_id == tenant_id)
+                        else:
+                            # Never adopt or overwrite an untracked local row,
+                            # even if it is inserted after selection begins.
+                            statement = statement.on_conflict_do_nothing(index_elements=[model.id])
+                        if session.execute(statement.returning(model.id)).scalar_one_or_none() is None:
+                            raise SnapshotConflict('Parent snapshot conflicts with locally owned rows')
+                    removed = old_ids - new_ids
+                    if removed:
+                        session.execute(delete(model).where(model.tenant_id == tenant_id,
+                            model.id.in_([uuid.UUID(rid) for rid in removed])))
+                    owned[table] = sorted(new_ids)
+                if receipt is None:
+                    receipt = AiuditorParentSnapshot(tenant_id=tenant_id, parent_id=parent_id)
+                    session.add(receipt)
+                receipt.exported_at = exported_at
+                receipt.snapshot_sha256 = snapshot_sha256
+                receipt.owned_rows = owned
+        except (SnapshotConflict, PersistUnavailable):
+            raise
+        except Exception as exc:
+            raise PersistUnavailable('Parent snapshot persistence unavailable') from exc
 
     def delete(self, table: str, tenant_id: uuid.UUID, key: object) -> None:
         from sqlalchemy import text
