@@ -51,6 +51,7 @@ from aiuditor_service.domain.models import (
     AllowedSet,
     AdmissionCreate,
     AdmissionResolve,
+    AdmissionQuarantineRetry,
     AdmissionSandboxReport,
     Approval,
     ApprovalCreate,
@@ -1139,6 +1140,26 @@ async def create_admission(request: Request, body: AdmissionCreate) -> Admission
     return row
 
 
+@router.post("/admissions/{admission_id}/quarantine", response_model=Admission,
+    summary="Retry an unassigned upload quarantine using its persisted artifact pins")
+async def retry_admission_quarantine(request: Request, admission_id: uuid.UUID,
+    body: AdmissionQuarantineRetry) -> Admission:
+    require_grant_write(role_from_request(request))
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
+    store = _admissions(request)
+    row = store.get(tenant_id, admission_id)
+    if row is None:
+        raise HTTPException(404, ADMISSION_NOT_FOUND)
+    if row.verdict is not None:
+        raise HTTPException(409, "Admission already resolved")
+    from aiuditor_service.admission import advance_admission_async
+    return await advance_admission_async(store, tenant_id, admission_id,
+        body=AdmissionCreate(file_hash=row.file_hash, format=row.format,
+            quant=row.quant, license=row.license, intended_class=row.intended_class,
+            size_bytes=row.size_bytes, source_ref=body.source_ref),
+        plane=getattr(request.app.state, "plane_hop", None), approvals=_approvals(request))
+
+
 @router.get(
     "/admissions",
     response_model=list[Admission],
@@ -1168,20 +1189,15 @@ async def get_admission(request: Request, admission_id: uuid.UUID) -> Admission:
     "/admissions/{admission_id}/sandbox",
     response_model=Admission,
     summary="Record lab soak + egress observation for an upload admission",
-    description=(
-        "Unavailable (503) until authenticated lab job/device/artifact binding "
-        "is implemented. Tenant and generic service credentials cannot supply "
-        "measurement authority. Does not certify or promote a catalog row."
-    ),
+    description="Dedicated signed job/device/artifact-bound lab evidence. Never certifies or promotes.",
 )
-async def report_admission_sandbox(
-    request: Request, admission_id: uuid.UUID, body: AdmissionSandboxReport
-) -> Admission:
+async def report_admission_sandbox(request: Request, admission_id: uuid.UUID) -> Admission:
     require_grant_write(role_from_request(request))
-    # This legacy admission has no persisted lab job/device assignment. A token
-    # alone cannot bind submitted measurements to a queued run. Refuse until
-    # the owner evidence contract provides authenticated assignment validation.
-    raise HTTPException(503, "Trusted lab assignment validation is unavailable")
+    from aiuditor_service.admission_reporting import authenticated_report, persist_report
+    body, now = await authenticated_report(request)
+    if body.admission_id != admission_id:
+        raise HTTPException(409, "Lab report admission mismatch")
+    return await asyncio.to_thread(persist_report, _admissions(request).persist, body, now)
 
 
 @router.post(

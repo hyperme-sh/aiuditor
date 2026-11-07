@@ -101,3 +101,68 @@ async def test_purpose_route_owns_real_tenant_transaction(reporter_db,monkeypatc
         replay=await client.post('/api/v1/aiuditor/envelopes',**signed(value))
         assert replay.status_code==201 and replay.json()==first.json()
     assert len(events)==1
+
+
+def test_admission_report_atomic_restart_and_rls(reporter_db):
+    from aiuditor_service.admission_reporting import persist_report
+    from aiuditor_service.store import AdmissionStore
+    from test_admission_reporting import assigned
+    from fastapi import HTTPException
+    admin, engine, tid, other = reporter_db
+    with engine.connect() as connection:
+        role = connection.scalar(text('SELECT current_user'))
+    with admin.begin() as c:
+        c.exec_driver_sql(f'GRANT SELECT,INSERT,UPDATE ON aiuditor_admissions TO "{role}"')
+    persist = SqlPersistSession(sessionmaker(engine))
+    row, body = assigned(AdmissionStore(persist=persist), tid)
+    barrier = Barrier(3)
+    def deliver(_):
+        barrier.wait()
+        return persist_report(SqlPersistSession(sessionmaker(engine)), body, datetime.now(UTC))
+    with ThreadPoolExecutor(3) as pool:
+        results = list(pool.map(deliver, range(3)))
+    assert all(result == results[0] for result in results)
+    assert results[0].status.value == 'hold' and results[0].verdict is None
+    engine.dispose()
+    assert persist_report(SqlPersistSession(sessionmaker(engine)), body,
+        datetime.now(UTC)+timedelta(days=2)) == results[0]
+    with pytest.raises(HTTPException) as error:
+        persist_report(persist, body.model_copy(update={'egress_ok':False}), datetime.now(UTC))
+    assert error.value.status_code == 409
+    with engine.begin() as c:
+        c.execute(text("SELECT set_config('app.current_tenant_id',:tid,true)"), {'tid':str(other)})
+        assert c.scalar(text('SELECT count(*) FROM aiuditor_admissions')) == 0
+
+
+def test_human_denial_overlapping_report_preserves_receipt(reporter_db, monkeypatch):
+    from threading import Event
+    import aiuditor_service.admission_reporting as reporting
+    from aiuditor_service.admission import resolve_admission
+    from aiuditor_service.domain.models import AdmissionResolve
+    from aiuditor_service.store import AdmissionStore
+    from test_admission_reporting import assigned
+    admin, engine, tid, _ = reporter_db
+    with engine.connect() as connection:
+        role = connection.scalar(text('SELECT current_user'))
+    with admin.begin() as c:
+        c.exec_driver_sql(f'GRANT SELECT,INSERT,UPDATE ON aiuditor_admissions TO "{role}"')
+    persist = SqlPersistSession(sessionmaker(engine))
+    row, body = assigned(AdmissionStore(persist=persist), tid)
+    locked, release = Event(), Event()
+    apply = reporting._apply
+    def paused(old, report, now):
+        locked.set()
+        assert release.wait(10)
+        return apply(old, report, now)
+    monkeypatch.setattr(reporting, '_apply', paused)
+    with ThreadPoolExecutor(2) as pool:
+        evidence = pool.submit(reporting.persist_report, persist, body, datetime.now(UTC))
+        assert locked.wait(10)
+        verdict = pool.submit(resolve_admission, AdmissionStore(persist=persist), tid, row.id,
+            AdmissionResolve(verdict='deny'), resolved_by='named-person')
+        release.set()
+        accepted, denied = evidence.result(timeout=15), verdict.result(timeout=15)
+    assert denied.verdict.value == 'deny'
+    assert denied.sandbox_report_sha256 == accepted.sandbox_report_sha256
+    assert denied.sandbox_soak_ok is True and denied.sandbox_egress_ok is True
+    assert reporting.persist_report(persist, body, datetime.now(UTC)) == denied

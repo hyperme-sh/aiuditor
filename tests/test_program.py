@@ -172,7 +172,7 @@ async def test_program_http_and_hydrate(
         "/api/v1/aiuditor/admissions",
         headers=tenant_headers,
         json={
-            "file_hash": "sha256:upload-2",
+            "file_hash": "sha256:" + "ab" * 32,
             "format": "gguf",
             "license": "mit",
             "intended_class": "nx-volume",

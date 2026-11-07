@@ -53,12 +53,21 @@ never stamp an unknown revision to force adoption of the standalone chain.
 Container, deployed RLS/witness behavior, hydration and consumer cutover remain
 functional acceptance checks. No image or live deployment is published here.
 
-Legacy upload-admission sandbox reporting returns 503 until authenticated lab
-job/device/artifact binding is implemented (#7). Tenant sessions and generic
-service/internal credentials cannot supply measurement authority. This disables
-that upload promotion path; it does not qualify the separate private-admission
-contract. One-use approvals are consumed with a tenant-scoped conditional
-database update; PostgreSQL/RLS acceptance remains in #3.
+Legacy upload admissions persist the queue owner's exact tenant/admission/job/device/
+artifact assignment. Sandbox reports require the dedicated `AIUDITOR_LAB_REPORT_KEY`
+(minimum 32 characters, different from generic internal/model tokens), HMAC-SHA256
+with purpose `aiuditor.admission-sandbox.v1\n`, and the exact signed body. A tenant,
+IR/service exchange, or generic internal token grants no measurement authority.
+Authentication expires after five minutes; new evidence must be measured within
+24 hours and after assignment. Identical evidence retries are idempotent across
+restarts; changed evidence conflicts. A passing report enters human hold and never
+certifies or promotes. Old unassigned rows remain closed to reports. An auditor can retry scheduling
+through `POST /admissions/{id}/quarantine` with a `source_ref`; artifact metadata
+comes from the persisted admission. Plane cancels an exact matching legacy run
+and creates a fresh bound assignment instead of trusting old evidence. Plane's companion implementation must be
+deployed before new assignments are available. Private admissions remain separate.
+One-use approvals use a tenant-scoped conditional database update. Live caller,
+PostgreSQL/RLS deployment and consumer cutover acceptance remain tracked in #3/#7.
 
 
 ## Single-operator test-plane approval policy

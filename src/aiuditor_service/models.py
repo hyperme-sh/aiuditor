@@ -270,6 +270,8 @@ class AiuditorAdmission(Base):
     sandbox_soak_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     sandbox_egress_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     sandbox_egress_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lab_assignment: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    sandbox_report_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
