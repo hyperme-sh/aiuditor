@@ -25,7 +25,7 @@ HUMAN = "/api/v1/aiuditor/private-model-admissions"
 
 
 @pytest.fixture
-async def plane(async_engine, monkeypatch):
+async def plane(async_engine, monkeypatch, legacy_directory):
     maker = async_sessionmaker(async_engine, expire_on_commit=False)
     monkeypatch.setattr(routes, "get_session_maker", lambda: maker)
     monkeypatch.setenv("AIUDITOR_MODEL_ADMISSION_TOKEN", "a" * 32)

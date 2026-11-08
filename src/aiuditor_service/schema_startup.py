@@ -6,15 +6,22 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import inspect, text
-from controlplane_db import migrations
-from controlplane_db.startup import _revision_missing_from_image, _require_ahead_of_image
+from sqlalchemy import create_engine, inspect, text
+from controlplane_events.store import normalize_sync_url
+from aiuditor_service.migration_state import revision_missing, require_owner_ahead
 from controlplane_tenancy.marketplace import MARKETPLACE_TENANT_ID, ensure_marketplace_tenant
 from aiuditor_service.package import witness_uses_memory_persist
 from aiuditor_service.role import AiuditorRole, resolve_role
 
 OWNER = 'aiuditor'
 ROOT = Path(__file__).with_name('migration_bundle')
+_SERVER_AUTHORITY_ROLES = frozenset({
+    'pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files',
+})
+
+
+def _engine(url):
+    return create_engine(normalize_sync_url(url), pool_pre_ping=True)
 
 
 def owner_config(connection=None):
@@ -34,7 +41,7 @@ def owner_head():
 
 def upgrade_schema(url):
     entry = json.loads((ROOT / 'owner.json').read_text())
-    engine = migrations._engine(url)
+    engine = _engine(url)
     try:
         with engine.begin() as connection:
             connection.execute(text("SELECT pg_advisory_xact_lock(hashtext('controlplane-owner-migrations'))"))
@@ -45,8 +52,8 @@ def upgrade_schema(url):
             if len(revisions) != 1:
                 raise ValueError(f'{OWNER}: exactly one adopted owner revision is required')
             script = ScriptDirectory.from_config(owner_config())
-            if _revision_missing_from_image(script, revisions[0]):
-                _require_ahead_of_image(OWNER, revisions[0], script.get_current_head(), entry['tables'], tables)
+            if revision_missing(script, revisions[0]):
+                require_owner_ahead(revisions[0], script.get_current_head(), entry['tables'], tables)
                 logging.getLogger(__name__).warning('Skipping unknown newer AIuditor revision %s', revisions[0])
             else:
                 command.upgrade(owner_config(connection), 'head')
@@ -61,7 +68,7 @@ def upgrade_schema(url):
 def check_witness_schema(url):
     """A SQL witness validates an adopted schema without acquiring write authority."""
     entry = json.loads((ROOT / 'owner.json').read_text())
-    engine = migrations._engine(url)
+    engine = _engine(url)
     try:
         with engine.begin() as connection:
             connection.execute(text('SET TRANSACTION READ ONLY'))
@@ -81,7 +88,7 @@ def check_witness_schema(url):
 def check_runtime_schema(url):
     """Check an explicitly provisioned owner without migration or tenant writes."""
     entry = json.loads((ROOT / 'owner.json').read_text())
-    engine = migrations._engine(url)
+    engine = _engine(url)
     try:
         with engine.begin() as connection:
             connection.execute(text('SET TRANSACTION READ ONLY'))
@@ -107,6 +114,8 @@ def check_runtime_schema(url):
             if not roles or len(roles) > 1000:
                 raise ValueError('runtime: database role authority is unavailable')
             for role, privileged in roles:
+                if role in _SERVER_AUTHORITY_ROLES:
+                    raise ValueError('runtime: server file and execution authority is forbidden')
                 if privileged or connection.scalar(text(
                     "SELECT has_schema_privilege(:role,'public','CREATE') "
                     "OR EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='public' "

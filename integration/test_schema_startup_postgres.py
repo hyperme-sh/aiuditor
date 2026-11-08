@@ -4,7 +4,7 @@ import pytest
 from alembic import command
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
-from controlplane_db import migrations
+from machine_postgres import provision_owner
 from aiuditor_service import schema_startup
 pytest_plugins = ['machine_postgres']
 
@@ -23,29 +23,31 @@ def isolated_owner_db(postgres_sync_url):
         admin.dispose()
 
 
-def test_owner_startup_ignores_retired_foreign_tables(isolated_owner_db, monkeypatch):
-    url = isolated_owner_db
-    migrations.upgrade(url, baseline_only=True)
-    migrations.prepare_event_source_index(url)
-    migrations.upgrade(url, chains=tuple(name for name in migrations._ORDER if name != 'aiuditor'))
+def owner_revision(url):
     engine = create_engine(url)
     try:
-        with engine.begin() as connection:
-            command.upgrade(migrations._config(migrations._ROOT, 'aiuditor', connection), 'aiuditor_0057_lab_reports')
-            connection.execute(text("UPDATE alembic_version_payment_service SET version_num='payment_service_0080_fin_state'"))
-            connection.execute(text('DROP TABLE IF EXISTS onramp_sessions CASCADE'))
-        before = migrations.current_heads(url)
-        # The pinned DB owner already recognizes the retired table as optional.
-        # Qualify this service's scoped startup directly rather than asserting
-        # obsolete behavior in another owner's compatibility helper.
+        with engine.connect() as db:
+            return db.scalar(text('SELECT version_num FROM public.alembic_version_aiuditor'))
+    finally:
+        engine.dispose()
+
+
+def test_owner_startup_ignores_retired_foreign_tables(isolated_owner_db, monkeypatch):
+    url = isolated_owner_db
+    provision_owner(url, revision='aiuditor_0057_lab_reports')
+    engine = create_engine(url)
+    try:
+        with engine.begin() as db:
+            db.execute(text('CREATE TABLE foreign_owner_marker(revision text NOT NULL)'))
+            db.execute(text("INSERT INTO foreign_owner_marker VALUES('unrelated-newer-owner')"))
         monkeypatch.setenv('DATABASE_URL', url)
         assert schema_startup.main() == 0
         assert schema_startup.main() == 0
-        after = migrations.current_heads(url)
-        assert after['aiuditor'] == schema_startup.owner_head()
-        assert {name: value for name, value in after.items() if name != 'aiuditor'} == {
-            name: value for name, value in before.items() if name != 'aiuditor'}
+        assert owner_revision(url) == schema_startup.owner_head()
+        with engine.connect() as db:
+            assert db.scalar(text('SELECT revision FROM foreign_owner_marker')) == 'unrelated-newer-owner'
         assert not inspect(engine).has_table('onramp_sessions')
+        assert not inspect(engine).has_table('users')
     finally:
         engine.dispose()
 
@@ -67,7 +69,7 @@ def test_service_bundle_upgrades_adopted_rows_and_refuses_missing_receipt_table(
     from aiuditor_service.store import PolicyStore
     from test_parent_reconciliation import policy
     url = isolated_owner_db
-    migrations.upgrade(url)
+    provision_owner(url)
     tenant = uuid.uuid4()
     engine = create_engine(url)
     try:
@@ -79,17 +81,17 @@ def test_service_bundle_upgrades_adopted_rows_and_refuses_missing_receipt_table(
             store = PolicyStore(persist=persist)
             original = policy(tenant)
             store.put(original)
-            before = migrations.current_heads(url)
+            before = owner_revision(url)
             schema_startup.upgrade_schema(url)
             assert store.get(tenant, original.id) == original
-            after = migrations.current_heads(url)
-            assert after['aiuditor'] == schema_startup.owner_head()
-            assert {k:v for k,v in after.items() if k != 'aiuditor'} == {k:v for k,v in before.items() if k != 'aiuditor'}
+            after = owner_revision(url)
+            assert after == schema_startup.owner_head()
+            assert before == after
             if ahead:
                 with engine.begin() as cx:
                     cx.execute(text("UPDATE alembic_version_aiuditor SET version_num='aiuditor_9999_future'"))
                 schema_startup.upgrade_schema(url)
-                assert migrations.current_heads(url)['aiuditor'] == 'aiuditor_9999_future'
+                assert owner_revision(url) == 'aiuditor_9999_future'
             # A claimed current head with a missing table is corruption, not an
             # authorization to silently recreate state or reset provenance.
             with engine.begin() as cx:
@@ -108,7 +110,7 @@ def test_witness_checks_schema_with_select_only_role(isolated_owner_db, monkeypa
     import json
     url = isolated_owner_db
     if state != 'unprovisioned':
-        migrations.upgrade(url)
+        provision_owner(url, revision='aiuditor_0053_baseline' if state == 'outdated' else 'head')
         if state != 'outdated':
             schema_startup.upgrade_schema(url)
     admin = create_engine(url)
@@ -131,7 +133,7 @@ def test_witness_checks_schema_with_select_only_role(isolated_owner_db, monkeypa
             assert db.scalar(text('SELECT current_user')) == role
             assert db.scalar(text('SHOW transaction_read_only')) == 'on'
             assert db.scalar(text('SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user')) is False
-        monkeypatch.setattr(migrations, '_engine', lambda _: readonly)
+        monkeypatch.setattr(schema_startup, '_engine', lambda _: readonly)
         monkeypatch.setenv('AIUDITOR_ROLE', 'witness')
         monkeypatch.setenv('DATABASE_URL', url)
         if state == 'ready':
@@ -150,7 +152,7 @@ def test_witness_checks_schema_with_select_only_role(isolated_owner_db, monkeypa
         admin.dispose()
 
 
-@pytest.mark.parametrize('state', ['ready', 'superuser', 'database_owner', 'schema_create', 'table_owner', 'version_write', 'tenant_column_write', 'set_role', 'inherit_owner', 'mixed_owner', 'admin_owner', 'session_superuser', 'definer', 'inactive', 'missing_tenant', 'outdated', 'missing_table', 'wrong_search_path'])
+@pytest.mark.parametrize('state', ['ready', 'superuser', 'database_owner', 'schema_create', 'table_owner', 'version_write', 'tenant_column_write', 'set_role', 'inherit_owner', 'mixed_owner', 'admin_owner', 'server_program', 'server_read', 'server_write', 'session_superuser', 'definer', 'inactive', 'missing_tenant', 'outdated', 'missing_table', 'wrong_search_path'])
 def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(isolated_owner_db, monkeypatch, state):
     """Real LOGIN roles qualify frozen fresh DDL and refuse reachable repair authority."""
     import json
@@ -197,6 +199,9 @@ def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(i
                     db.execute(text(f'CREATE ROLE "{bridge}" NOLOGIN NOINHERIT'))
                     db.execute(text(f'GRANT "{extra}" TO "{bridge}" WITH INHERIT TRUE, SET FALSE'))
                     db.execute(text(f'GRANT "{bridge}" TO "{role}" WITH INHERIT FALSE, SET TRUE'))
+            if state in ('server_program', 'server_read', 'server_write'):
+                server_role = {'server_program': 'pg_execute_server_program', 'server_read': 'pg_read_server_files', 'server_write': 'pg_write_server_files'}[state]
+                db.execute(text(f'GRANT "{server_role}" TO "{role}" WITH INHERIT TRUE, SET TRUE'))
             if state == 'definer':
                 db.execute(text("CREATE FUNCTION public.fixture_repair() RETURNS void LANGUAGE SQL SECURITY DEFINER AS $$ UPDATE public.tenants SET is_active=true $$"))
             if state == 'outdated':db.execute(text("UPDATE public.alembic_version_aiuditor SET version_num='aiuditor_0053_baseline'"))
@@ -215,7 +220,7 @@ def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(i
         if state == 'session_superuser':
             runtime.dispose()
             runtime = create_engine(isolated_owner_db, connect_args={'options': '-c role=' + role + ' -c search_path=public'})
-        monkeypatch.setattr(migrations, '_engine', lambda _: runtime)
+        monkeypatch.setattr(schema_startup, '_engine', lambda _: runtime)
         monkeypatch.setenv('AIUDITOR_ROLE', 'operator')
         monkeypatch.setenv('AIUDITOR_SCHEMA_STARTUP', 'verify')
         monkeypatch.setenv('DATABASE_URL', runtime_url)

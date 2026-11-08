@@ -70,6 +70,21 @@ definer functions. Unknown startup modes fail closed. Existing `upgrade` mode
 remains the default for previously adopted deployments; witness startup retains
 its separate read-only behavior.
 
+The additive `aiuditor_0061_owned_outbox` revision installs this owner's
+`service_outbox` and tenant delivery inventory. The installed event factory uses
+the owned outbox by default; delivery uses the Events HTTP relay with AIuditor's
+runtime URL and a dedicated producer token. It never opens User, Payment or the
+Events archive's SQL. Failed delivery retains the same UUID and facts for retry.
+The frozen baseline is unchanged. Provisioning also needs the configured tenant
+reference rows, whose write authority stays outside ordinary runtime. Verify
+mode additionally refuses PostgreSQL server-file and server-program roles.
+
+PostgreSQL qualification builds only the packaged AIuditor chain and tenant
+references in fresh databases. Explicit local legacy-directory compatibility
+cases install their own temporary test tables; canonical provisioning does not
+create them or adopt the retired mixed migration registry. Lifecycle-safe legacy
+credential compatibility stays on its separately pinned revision.
+
 Legacy upload admissions persist the queue owner's exact tenant/admission/job/device/
 artifact assignment. Sandbox reports require the dedicated `AIUDITOR_LAB_REPORT_KEY`
 (minimum 32 characters, different from generic internal/model tokens), HMAC-SHA256
