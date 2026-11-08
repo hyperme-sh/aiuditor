@@ -227,7 +227,37 @@ def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(i
         with admin.connect() as db:
             before = db.execute(text('SELECT version_num FROM public.alembic_version_aiuditor')).scalars().all()
             tenants_before = db.execute(text('SELECT id,name,is_active FROM public.tenants ORDER BY id')).all()
-        if state == 'ready':assert schema_startup.main() == 0
+        if state == 'ready':
+            assert schema_startup.main() == 0
+            from sqlalchemy.orm import sessionmaker
+            from aiuditor_service.persist import SqlPersistSession, dump_for_persist
+            from sqlalchemy.exc import ProgrammingError
+            from aiuditor_service.store import new_stores
+            from test_parent_reconciliation import policy
+            with admin.connect() as db:
+                tenant = db.scalar(text('SELECT id FROM tenants WHERE is_active LIMIT 1'))
+            original = policy(tenant)
+            SqlPersistSession(sessionmaker(admin)).upsert(
+                'policies', tenant, original.id,
+                dump_for_persist(original),
+            )
+            persist = SqlPersistSession(sessionmaker(runtime))
+            stores = new_stores(persist)
+            assert stores.policy_store.policies[tenant][original.id] == original
+            assert persist.snapshot() is not None
+            # A failed table or registry read must not silently replace a
+            # previously hydrated cache with a partial/empty snapshot.
+            for table in ('aiuditor_policies', 'tenants'):
+                with admin.begin() as db:
+                    db.execute(text(f'REVOKE SELECT ON public."{table}" FROM "{role}"'))
+                try:
+                    with pytest.raises(ProgrammingError):
+                        persist.hydrate(stores)
+                    assert stores.policy_store.policies[tenant][original.id] == original
+                finally:
+                    with admin.begin() as db:
+                        db.execute(text(f'GRANT SELECT ON public."{table}" TO "{role}"'))
+
         else:
             with pytest.raises(ValueError, match='runtime:'):
                 schema_startup.main()

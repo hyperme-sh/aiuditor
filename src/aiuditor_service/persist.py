@@ -469,19 +469,12 @@ def _sql_models():
 
 
 def _sql_hydrate_tenant_gucs(session) -> list[str]:
-    from sqlalchemy import select
-
     from controlplane_tenancy.tenant_registry import tenant_ids_sync
 
-    gucs = [""]
-    try:
-        for tenant_id in tenant_ids_sync(session):
-            value = str(tenant_id)
-            if value not in gucs:
-                gucs.append(value)
-    except Exception:
-        logger.debug("aiuditor persist: tenant list unavailable during hydrate", exc_info=True)
-    return gucs
+    # Every persisted owner row is tenant-bound. An empty GUC is not a global
+    # scope and cannot safely be cast by the frozen UUID RLS policies.
+    # Registry failures must abort hydration before replacing cached stores.
+    return list(dict.fromkeys(str(tenant_id) for tenant_id in tenant_ids_sync(session)))
 
 
 class SqlPersistSession:
@@ -546,10 +539,7 @@ class SqlPersistSession:
                     {"tid": tenant_guc},
                 )
                 for table, model in models.items():
-                    try:
-                        rows = session.execute(select(model)).scalars().all()
-                    except Exception:
-                        continue
+                    rows = session.execute(select(model)).scalars().all()
                     for row in rows:
                         payload = {c.key: getattr(row, c.key) for c in row.__table__.columns}
                         memory.upsert(table, row.tenant_id, row.id, payload)
