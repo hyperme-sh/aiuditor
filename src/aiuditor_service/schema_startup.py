@@ -94,11 +94,15 @@ def check_runtime_schema(url):
             revisions = connection.execute(text('SELECT version_num FROM public.alembic_version_aiuditor')).scalars().all()
             if revisions != [owner_head()]:
                 raise ValueError('runtime: provision the exact image owner revision before startup')
-            # SET ROLE authority matters even when privileges are not inherited.
+            # An actor may SET one role and then inherit a different owner whose
+            # membership forbids SET. Follow both edge kinds transitively.
             roles = connection.execute(text(
+                "WITH RECURSIVE reachable(oid) AS ("
+                "SELECT oid FROM pg_roles WHERE rolname IN (current_user,session_user) "
+                "UNION SELECT m.roleid FROM pg_auth_members m JOIN reachable r ON m.member=r.oid "
+                "WHERE m.inherit_option OR m.set_option) "
                 "SELECT rolname,(rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolreplication) "
-                "FROM pg_roles WHERE rolname IN (current_user,session_user) "
-                "OR pg_has_role(current_user,oid,'SET') OR pg_has_role(session_user,oid,'SET') LIMIT 1001"
+                "FROM pg_roles WHERE oid IN (SELECT oid FROM reachable) LIMIT 1001"
             )).all()
             if not roles or len(roles) > 1000:
                 raise ValueError('runtime: database role authority is unavailable')
