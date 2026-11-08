@@ -150,7 +150,7 @@ def test_witness_checks_schema_with_select_only_role(isolated_owner_db, monkeypa
         admin.dispose()
 
 
-@pytest.mark.parametrize('state', ['ready', 'superuser', 'database_owner', 'schema_create', 'table_owner', 'version_write', 'tenant_column_write', 'set_role', 'inherit_owner', 'mixed_owner', 'session_superuser', 'definer', 'inactive', 'missing_tenant', 'outdated', 'missing_table', 'wrong_search_path'])
+@pytest.mark.parametrize('state', ['ready', 'superuser', 'database_owner', 'schema_create', 'table_owner', 'version_write', 'tenant_column_write', 'set_role', 'inherit_owner', 'mixed_owner', 'admin_owner', 'session_superuser', 'definer', 'inactive', 'missing_tenant', 'outdated', 'missing_table', 'wrong_search_path'])
 def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(isolated_owner_db, monkeypatch, state):
     """Real LOGIN roles qualify frozen fresh DDL and refuse reachable repair authority."""
     import json
@@ -186,11 +186,13 @@ def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(i
                 db.execute(text(f'CREATE ROLE "{extra}" NOLOGIN NOINHERIT'))
                 db.execute(text(f'GRANT UPDATE ON public.tenants TO "{extra}"'))
                 db.execute(text(f'GRANT "{extra}" TO "{role}" WITH INHERIT FALSE, SET TRUE'))
-            if state in ('inherit_owner', 'mixed_owner'):
+            if state in ('inherit_owner', 'mixed_owner', 'admin_owner'):
                 db.execute(text(f'CREATE ROLE "{extra}" NOLOGIN NOINHERIT'))
                 db.execute(text(f'ALTER TABLE public.aiuditor_policies OWNER TO "{extra}"'))
                 if state == 'inherit_owner':
                     db.execute(text(f'GRANT "{extra}" TO "{role}" WITH INHERIT TRUE, SET FALSE'))
+                elif state == 'admin_owner':
+                    db.execute(text(f'GRANT "{extra}" TO "{role}" WITH ADMIN TRUE, INHERIT FALSE, SET FALSE'))
                 else:
                     db.execute(text(f'CREATE ROLE "{bridge}" NOLOGIN NOINHERIT'))
                     db.execute(text(f'GRANT "{extra}" TO "{bridge}" WITH INHERIT TRUE, SET FALSE'))
@@ -201,6 +203,15 @@ def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(i
             if state == 'missing_table':db.execute(text('DROP TABLE public.aiuditor_parent_snapshots'))
         runtime_url = make_url(isolated_owner_db).set(username=role, password=password).render_as_string(hide_password=False)
         runtime = create_engine(runtime_url, connect_args={'options': '-c search_path=' + ('pg_catalog' if state == 'wrong_search_path' else 'public')})
+        if state == 'admin_owner':
+            # Prove the login can recover SET authority despite having neither
+            # effective inheritance nor SET beforehand; roll the grant back.
+            with runtime.connect() as db:
+                transaction = db.begin()
+                assert db.scalar(text('SELECT pg_has_role(current_user,:owner,\'SET\')'), {'owner': extra}) is False
+                db.execute(text(f'GRANT "{extra}" TO "{role}" WITH SET TRUE'))
+                assert db.scalar(text('SELECT pg_has_role(current_user,:owner,\'SET\')'), {'owner': extra}) is True
+                transaction.rollback()
         if state == 'session_superuser':
             runtime.dispose()
             runtime = create_engine(isolated_owner_db, connect_args={'options': '-c role=' + role + ' -c search_path=public'})
@@ -224,9 +235,9 @@ def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(i
         with admin.begin() as db:
             if state == 'database_owner':db.execute(text(f'ALTER DATABASE "{make_url(isolated_owner_db).database}" OWNER TO CURRENT_USER'))
             db.execute(text(f'DROP OWNED BY "{role}" CASCADE'))
-            if state in ('set_role', 'inherit_owner', 'mixed_owner'):db.execute(text(f'DROP OWNED BY "{extra}" CASCADE'))
+            if state in ('set_role', 'inherit_owner', 'mixed_owner', 'admin_owner'):db.execute(text(f'DROP OWNED BY "{extra}" CASCADE'))
             if state == 'mixed_owner':db.execute(text(f'DROP OWNED BY "{bridge}" CASCADE'))
             db.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
-            if state in ('set_role', 'inherit_owner', 'mixed_owner'):db.execute(text(f'DROP ROLE IF EXISTS "{extra}"'))
+            if state in ('set_role', 'inherit_owner', 'mixed_owner', 'admin_owner'):db.execute(text(f'DROP ROLE IF EXISTS "{extra}"'))
             if state == 'mixed_owner':db.execute(text(f'DROP ROLE IF EXISTS "{bridge}"'))
         admin.dispose()

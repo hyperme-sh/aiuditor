@@ -94,13 +94,13 @@ def check_runtime_schema(url):
             revisions = connection.execute(text('SELECT version_num FROM public.alembic_version_aiuditor')).scalars().all()
             if revisions != [owner_head()]:
                 raise ValueError('runtime: provision the exact image owner revision before startup')
-            # An actor may SET one role and then inherit a different owner whose
-            # membership forbids SET. Follow both edge kinds transitively.
+            # Follow effective and acquirable authority: an actor may SET one
+            # role, inherit another owner, or use ADMIN to enable a repair role.
             roles = connection.execute(text(
                 "WITH RECURSIVE reachable(oid) AS ("
                 "SELECT oid FROM pg_roles WHERE rolname IN (current_user,session_user) "
                 "UNION SELECT m.roleid FROM pg_auth_members m JOIN reachable r ON m.member=r.oid "
-                "WHERE m.inherit_option OR m.set_option) "
+                "WHERE m.inherit_option OR m.set_option OR m.admin_option) "
                 "SELECT rolname,(rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolreplication) "
                 "FROM pg_roles WHERE oid IN (SELECT oid FROM reachable) LIMIT 1001"
             )).all()

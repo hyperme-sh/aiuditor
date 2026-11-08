@@ -65,7 +65,7 @@ authorization remain with the User HTTP authority.
 Use a separate runtime login with business-table permissions and read access to
 the version table and tenant references. Verify mode refuses superuser, database,
 schema and table ownership, schema creation, metadata writes (including column
-grants), reachable `SET ROLE` repair authority and executable public security
+grants), reachable `SET ROLE`/inherited repair authority and ADMIN membership options and executable public security
 definer functions. Unknown startup modes fail closed. Existing `upgrade` mode
 remains the default for previously adopted deployments; witness startup retains
 its separate read-only behavior.
