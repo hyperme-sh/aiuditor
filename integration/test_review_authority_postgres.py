@@ -83,7 +83,7 @@ def test_conditional_update_refuses_invalid_authority(scoped_engine, changes):
     assert not SqlPersistSession(sessionmaker(engine)).consume_approval(tenant, row.id, datetime.now(UTC))
 
 @pytest.mark.parametrize("role_name", ["auditor", "admin"])
-async def test_human_session_rechecks_live_membership(async_engine, monkeypatch, role_name):
+async def test_human_session_rechecks_live_membership(async_engine, monkeypatch, role_name, legacy_directory):
     maker = async_sessionmaker(async_engine, expire_on_commit=False)
     monkeypatch.setattr(routes, "get_session_maker", lambda: maker)
     tenant, user, role_id, subject = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), str(uuid.uuid4())

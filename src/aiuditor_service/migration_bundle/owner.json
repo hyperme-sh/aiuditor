@@ -16,7 +16,9 @@
     "aiuditor_suite_members",
     "aiuditor_violations",
     "aiuditor_envelope_reports",
-    "aiuditor_parent_snapshots"
+    "aiuditor_parent_snapshots",
+    "service_tenants",
+    "service_outbox"
   ],
   "baseline_sha256": "58e39340aa9fc3526c2e366a62ab2f4c4265ee46e8d892f3f0fe42eceedd3016",
   "baseline_tables": [

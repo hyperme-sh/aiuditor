@@ -53,6 +53,38 @@ never stamp an unknown revision to force adoption of the standalone chain.
 Container, deployed RLS/witness behavior, hydration and consumer cutover remain
 functional acceptance checks. No image or live deployment is published here.
 
+Set `AIUDITOR_SCHEMA_STARTUP=verify` when a separate owner migration operation
+has already installed the exact image revision. This mode performs only a
+read-only startup check. It requires the existing public-schema owner bundle,
+its complete tables and an already active configured marketplace tenant; it
+neither adopts an empty database nor creates tenant metadata. Keep the immutable
+baseline unchanged and provision only this owner's chain and configured tenant
+reference metadata in its reserved namespace. User identity, organizations and
+authorization remain with the User HTTP authority.
+
+Use a separate runtime login with business-table permissions and read access to
+the version table and tenant references. Verify mode refuses superuser, database,
+schema and table ownership, schema creation, metadata writes (including column
+grants), reachable `SET ROLE`/inherited repair authority and ADMIN membership options and executable public security
+definer functions. Unknown startup modes fail closed. Existing `upgrade` mode
+remains the default for previously adopted deployments; witness startup retains
+its separate read-only behavior.
+
+The additive `aiuditor_0061_owned_outbox` revision installs this owner's
+`service_outbox` and tenant delivery inventory. The installed event factory uses
+the owned outbox by default; delivery uses the Events HTTP relay with AIuditor's
+runtime URL and a dedicated producer token. It never opens User, Payment or the
+Events archive's SQL. Failed delivery retains the same UUID and facts for retry.
+The frozen baseline is unchanged. Provisioning also needs the configured tenant
+reference rows, whose write authority stays outside ordinary runtime. Verify
+mode additionally refuses PostgreSQL server-file and server-program roles.
+
+PostgreSQL qualification builds only the packaged AIuditor chain and tenant
+references in fresh databases. Explicit local legacy-directory compatibility
+cases install their own temporary test tables; canonical provisioning does not
+create them or adopt the retired mixed migration registry. Lifecycle-safe legacy
+credential compatibility stays on its separately pinned revision.
+
 Legacy upload admissions persist the queue owner's exact tenant/admission/job/device/
 artifact assignment. Sandbox reports require the dedicated `AIUDITOR_LAB_REPORT_KEY`
 (minimum 32 characters, different from generic internal/model tokens), HMAC-SHA256

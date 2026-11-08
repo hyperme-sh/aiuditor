@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.engine import make_url
-from controlplane_db import migrations
+from sqlalchemy import create_engine
+from sqlalchemy.schema import CreateTable
+from alembic import command
+from controlplane_db.models import Tenant
+from aiuditor_service import schema_startup
 
 
 def _database_url(value: str, driver: str) -> str:
@@ -44,18 +49,57 @@ def postgres_sync_url(request) -> str:
     return _database_url(container.get_connection_url(), "postgresql+psycopg")
 
 
+def provision_owner(url, revision='head'):
+    """Fresh local owner + tenant-reference fixture, without User/payment schemas."""
+    engine = create_engine(url)
+    try:
+        with engine.begin() as db:
+            db.execute(CreateTable(Tenant.__table__, include_foreign_key_constraints=[]))
+            command.upgrade(schema_startup.owner_config(db), revision)
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture(scope="session")
-def migrated_postgres(postgres_sync_url: str) -> str:
-    # This integration fixture only uses the installed standalone owner runner.
-    # It never locates a sibling monorepo or implicitly stamps a legacy database.
-    # Bootstrap foreign fixtures with the pinned shared package, but never ask
-    # that older graph to interpret this service's newer owner revision.
-    migrations.upgrade(postgres_sync_url, chains=tuple(name for name in migrations._ORDER if name != 'aiuditor'))
-    if migrations.current_heads(postgres_sync_url)['aiuditor'] is None:
-        migrations.upgrade(postgres_sync_url, chains=('aiuditor',))
-    from aiuditor_service.schema_startup import upgrade_schema
-    upgrade_schema(postgres_sync_url)
-    return postgres_sync_url
+def migrated_postgres(postgres_sync_url: str):
+    # Imported fixture definitions can be registered by more than one module.
+    # Give each instance a genuinely fresh database rather than repairing or
+    # adopting an earlier module's schema.
+    name = 'aiuditor_suite_' + uuid.uuid4().hex
+    admin = create_engine(postgres_sync_url, isolation_level='AUTOCOMMIT')
+    with admin.connect() as db:
+        db.exec_driver_sql(f'CREATE DATABASE "{name}"')
+    url = make_url(postgres_sync_url).set(database=name).render_as_string(hide_password=False)
+    try:
+        provision_owner(url)
+        schema_startup.upgrade_schema(url)
+        yield url
+    finally:
+        with admin.connect() as db:
+            db.exec_driver_sql(f'DROP DATABASE "{name}" WITH (FORCE)')
+        admin.dispose()
+
+
+@pytest.fixture
+def legacy_directory(migrated_postgres):
+    """Only legacy-compatibility cases install local directory fixtures.
+
+    Canonical owner provisioning never installs these tables. Current User
+    authority is independently qualified by its owner; no shared TEST is used.
+    """
+    from controlplane_db.models import Role, User, Group, UserGroupMembership
+    tables = [model.__table__ for model in (Role, User, Group, UserGroupMembership)]
+    engine = create_engine(migrated_postgres)
+    try:
+        with engine.begin() as db:
+            for table in tables:
+                db.execute(CreateTable(table, include_foreign_key_constraints=[]))
+        yield
+    finally:
+        with engine.begin() as db:
+            for table in reversed(tables):
+                table.drop(db, checkfirst=True)
+        engine.dispose()
 
 
 @pytest.fixture(scope="session")
