@@ -101,7 +101,7 @@ async def resolver_subject(request: Request) -> str:
     if len(subject) > 256:
         raise HTTPException(403, NAMED_HUMAN_REQUIRED)
     async with transaction(tenant, Response()) as session:
-        await approver(session, tenant, subject)
+        await approver(session, tenant, subject, request)
     return subject
 
 

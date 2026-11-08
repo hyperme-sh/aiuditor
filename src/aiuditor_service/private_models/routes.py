@@ -116,7 +116,12 @@ async def transaction(tenant, response):
             raise
 
 
-async def approver(session, tenant, subject):
+async def approver(session, tenant, subject, request=None):
+    if os.environ.get('USER_SCOPED_AUTHORITY_REQUIRED')=='1':
+        if request is None:raise HTTPException(403,'Verified interactive request required')
+        from aiuditor_service.approval_authority import require_current_approval
+        await require_current_approval(request,tenant,subject)
+        return
     for role in ("auditor", "admin"):
         if (
             await get_active_tenant_role_member(
@@ -255,7 +260,7 @@ async def sandbox(
 async def list_holds(request: Request, response: Response):
     tenant, subject = await asyncio.to_thread(human, request)
     async with transaction(tenant, response) as session:
-        await approver(session, tenant, subject)
+        await approver(session, tenant, subject, request)
         rows = await session.scalars(
             select(AiuditorPrivateModelAdmission)
             .where(AiuditorPrivateModelAdmission.tenant_id == tenant)
@@ -271,7 +276,7 @@ async def verdict(
 ):
     tenant, subject = await asyncio.to_thread(human, request)
     async with transaction(tenant, response) as session:
-        await approver(session, tenant, subject)
+        await approver(session, tenant, subject, request)
         row = await admission(session, tenant, admission_id)
         if row.status in {"allowed", "denied", "revoked"}:
             raise HTTPException(409, "Private admission already resolved")
@@ -301,7 +306,7 @@ async def verdict(
 async def revoke(request: Request, response: Response, admission_id: uuid.UUID):
     tenant, subject = await asyncio.to_thread(human, request)
     async with transaction(tenant, response) as session:
-        await approver(session, tenant, subject)
+        await approver(session, tenant, subject, request)
         row = await admission(session, tenant, admission_id)
         if row.status == "revoked":
             return view(row)
