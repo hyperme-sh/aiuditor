@@ -9,7 +9,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from controlplane_db import migrations
 from controlplane_db.startup import _revision_missing_from_image, _require_ahead_of_image
-from controlplane_tenancy.marketplace import ensure_marketplace_tenant
+from controlplane_tenancy.marketplace import MARKETPLACE_TENANT_ID, ensure_marketplace_tenant
 from aiuditor_service.package import witness_uses_memory_persist
 from aiuditor_service.role import AiuditorRole, resolve_role
 
@@ -78,6 +78,63 @@ def check_witness_schema(url):
         engine.dispose()
 
 
+def check_runtime_schema(url):
+    """Check an explicitly provisioned owner without migration or tenant writes."""
+    entry = json.loads((ROOT / 'owner.json').read_text())
+    engine = migrations._engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text('SET TRANSACTION READ ONLY'))
+            if connection.scalar(text('SELECT current_schema()')) != 'public':
+                raise ValueError('runtime: public owner schema must be explicitly provisioned')
+            tables = set(inspect(connection).get_table_names(schema='public'))
+            required = set(entry['tables']) | {entry['version_table'], 'tenants'}
+            if required - tables:
+                raise ValueError('runtime: provision all required owner tables before startup')
+            revisions = connection.execute(text('SELECT version_num FROM public.alembic_version_aiuditor')).scalars().all()
+            if revisions != [owner_head()]:
+                raise ValueError('runtime: provision the exact image owner revision before startup')
+            # SET ROLE authority matters even when privileges are not inherited.
+            roles = connection.execute(text(
+                "SELECT rolname,(rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolreplication) "
+                "FROM pg_roles WHERE rolname IN (current_user,session_user) "
+                "OR pg_has_role(current_user,oid,'SET') OR pg_has_role(session_user,oid,'SET') LIMIT 1001"
+            )).all()
+            if not roles or len(roles) > 1000:
+                raise ValueError('runtime: database role authority is unavailable')
+            for role, privileged in roles:
+                if privileged or connection.scalar(text(
+                    "SELECT has_schema_privilege(:role,'public','CREATE') "
+                    "OR EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='public' "
+                    "AND nspowner=(SELECT oid FROM pg_roles WHERE rolname=:role)) "
+                    "OR EXISTS(SELECT 1 FROM pg_database WHERE datname=current_database() "
+                    "AND datdba=(SELECT oid FROM pg_roles WHERE rolname=:role))"
+                ), {'role': role}):
+                    raise ValueError('runtime: migration authority is forbidden')
+                for table in ('tenants', entry['version_table']):
+                    if connection.scalar(text(
+                        "SELECT has_table_privilege(:role,:table,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') "
+                        "OR has_any_column_privilege(:role,:table,'INSERT,UPDATE,REFERENCES')"
+                    ), {'role': role, 'table': 'public.' + table}):
+                        raise ValueError('runtime: tenant and migration metadata must be read only')
+                if connection.scalar(text(
+                    "SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                    "WHERE n.nspname='public' AND c.relowner=(SELECT oid FROM pg_roles WHERE rolname=:role) "
+                    "AND c.relname = ANY(:tables))"
+                ), {'role': role, 'tables': sorted(required)}):
+                    raise ValueError('runtime: owner table authority is forbidden')
+                if connection.scalar(text(
+                    "SELECT EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+                    "WHERE n.nspname='public' AND p.prosecdef AND has_function_privilege(:role,p.oid,'EXECUTE'))"
+                ), {'role': role}):
+                    raise ValueError('runtime: security definer authority is forbidden')
+            active = connection.scalar(text('SELECT is_active FROM public.tenants WHERE id=:id'), {'id': MARKETPLACE_TENANT_ID})
+            if active is not True:
+                raise ValueError('runtime: configured marketplace tenant must already be active')
+    finally:
+        engine.dispose()
+
+
 def main() -> int:
     role = resolve_role()
     url = os.environ.get('DATABASE_URL', '').strip()
@@ -87,7 +144,13 @@ def main() -> int:
         return 0
     if not url:
         raise ValueError('DATABASE_URL is required for owner schema startup')
-    upgrade_schema(url)
+    mode = os.environ.get('AIUDITOR_SCHEMA_STARTUP', 'upgrade')
+    if mode == 'verify':
+        check_runtime_schema(url)
+    elif mode == 'upgrade':
+        upgrade_schema(url)
+    else:
+        raise ValueError('AIUDITOR_SCHEMA_STARTUP must be upgrade or verify')
     return 0
 
 

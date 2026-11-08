@@ -53,6 +53,23 @@ never stamp an unknown revision to force adoption of the standalone chain.
 Container, deployed RLS/witness behavior, hydration and consumer cutover remain
 functional acceptance checks. No image or live deployment is published here.
 
+Set `AIUDITOR_SCHEMA_STARTUP=verify` when a separate owner migration operation
+has already installed the exact image revision. This mode performs only a
+read-only startup check. It requires the existing public-schema owner bundle,
+its complete tables and an already active configured marketplace tenant; it
+neither adopts an empty database nor creates tenant metadata. Keep the immutable
+baseline unchanged and provision only this owner's chain and configured tenant
+reference metadata in its reserved namespace. User identity, organizations and
+authorization remain with the User HTTP authority.
+
+Use a separate runtime login with business-table permissions and read access to
+the version table and tenant references. Verify mode refuses superuser, database,
+schema and table ownership, schema creation, metadata writes (including column
+grants), reachable `SET ROLE` repair authority and executable public security
+definer functions. Unknown startup modes fail closed. Existing `upgrade` mode
+remains the default for previously adopted deployments; witness startup retains
+its separate read-only behavior.
+
 Legacy upload admissions persist the queue owner's exact tenant/admission/job/device/
 artifact assignment. Sandbox reports require the dedicated `AIUDITOR_LAB_REPORT_KEY`
 (minimum 32 characters, different from generic internal/model tokens), HMAC-SHA256

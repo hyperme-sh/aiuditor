@@ -26,6 +26,28 @@ def test_invalid_role_is_refused_before_opening_database(monkeypatch):
         schema_startup.main()
 
 
+@pytest.mark.parametrize('role', ['global', 'operator'])
+def test_explicit_verify_mode_never_runs_migrations_or_tenant_seed(monkeypatch, role):
+    checked = []
+    monkeypatch.setenv('AIUDITOR_ROLE', role)
+    monkeypatch.setenv('AIUDITOR_SCHEMA_STARTUP', 'verify')
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://runtime@localhost/owner')
+    monkeypatch.setattr(schema_startup, 'check_runtime_schema', checked.append)
+    monkeypatch.setattr(schema_startup, 'upgrade_schema', lambda *_: pytest.fail('runtime ran migration'))
+    monkeypatch.setattr(schema_startup, 'ensure_marketplace_tenant', lambda *_: pytest.fail('runtime seeded tenant'))
+    assert schema_startup.main() == 0
+    assert checked == ['postgresql://runtime@localhost/owner']
+
+
+def test_unknown_schema_mode_cannot_fall_back_to_upgrade(monkeypatch):
+    monkeypatch.setenv('AIUDITOR_ROLE', 'operator')
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://unused@localhost/owner')
+    monkeypatch.setenv('AIUDITOR_SCHEMA_STARTUP', 'repair')
+    monkeypatch.setattr(schema_startup.migrations, '_engine', lambda *_: pytest.fail('invalid mode opened database'))
+    with pytest.raises(ValueError, match='AIUDITOR_SCHEMA_STARTUP'):
+        schema_startup.main()
+
+
 def test_container_startup_module_accepts_database_free_witness(monkeypatch):
     import os
     import subprocess

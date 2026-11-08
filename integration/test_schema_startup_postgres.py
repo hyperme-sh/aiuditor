@@ -148,3 +148,73 @@ def test_witness_checks_schema_with_select_only_role(isolated_owner_db, monkeypa
             db.execute(text(f'DROP OWNED BY "{role}"'))
             db.execute(text(f'DROP ROLE "{role}"'))
         admin.dispose()
+
+
+@pytest.mark.parametrize('state', ['ready', 'superuser', 'database_owner', 'schema_create', 'table_owner', 'version_write', 'tenant_column_write', 'set_role', 'session_superuser', 'definer', 'inactive', 'missing_tenant', 'outdated', 'missing_table', 'wrong_search_path'])
+def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(isolated_owner_db, monkeypatch, state):
+    """Real LOGIN roles qualify frozen fresh DDL and refuse reachable repair authority."""
+    import json
+    import secrets
+    from controlplane_tenancy.marketplace import MARKETPLACE_TENANT_ID
+    admin = create_engine(isolated_owner_db)
+    role = 'runtime_' + uuid.uuid4().hex
+    extra = 'repair_' + uuid.uuid4().hex
+    password = secrets.token_hex(32)
+    runtime = None
+    try:
+        with admin.begin() as db:
+            db.execute(text('CREATE TABLE public.tenants(id uuid PRIMARY KEY,name text NOT NULL,is_active boolean NOT NULL)'))
+            # Use the actual immutable standalone owner chain, with no mixed DB baseline.
+            command.upgrade(schema_startup.owner_config(db), 'head')
+            if state != 'missing_tenant':
+                db.execute(text('INSERT INTO public.tenants VALUES(:id,:name,:active)'), {'id': MARKETPLACE_TENANT_ID, 'name': 'Configured TEST', 'active': state != 'inactive'})
+            db.execute(text(f'CREATE ROLE "{role}" LOGIN PASSWORD \'{password}\' NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOBYPASSRLS'))
+            db.execute(text('REVOKE CREATE ON SCHEMA public FROM PUBLIC'))
+            db.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+            entry = json.loads((schema_startup.ROOT / 'owner.json').read_text())
+            for table in entry['tables']:
+                db.execute(text(f'GRANT SELECT,INSERT,UPDATE,DELETE ON public."{table}" TO "{role}"'))
+            db.execute(text(f'GRANT SELECT ON public.tenants,public.alembic_version_aiuditor TO "{role}"'))
+            if state == 'superuser':db.execute(text(f'ALTER ROLE "{role}" SUPERUSER'))
+            if state == 'database_owner':db.execute(text(f'ALTER DATABASE "{make_url(isolated_owner_db).database}" OWNER TO "{role}"'))
+            if state == 'schema_create':db.execute(text(f'GRANT CREATE ON SCHEMA public TO "{role}"'))
+            if state == 'table_owner':db.execute(text(f'ALTER TABLE public.aiuditor_policies OWNER TO "{role}"'))
+            if state == 'version_write':db.execute(text(f'GRANT UPDATE ON public.alembic_version_aiuditor TO "{role}"'))
+            if state == 'tenant_column_write':db.execute(text(f'GRANT UPDATE(is_active) ON public.tenants TO "{role}"'))
+            if state == 'set_role':
+                db.execute(text(f'CREATE ROLE "{extra}" NOLOGIN NOINHERIT'))
+                db.execute(text(f'GRANT UPDATE ON public.tenants TO "{extra}"'))
+                db.execute(text(f'GRANT "{extra}" TO "{role}" WITH INHERIT FALSE, SET TRUE'))
+            if state == 'definer':
+                db.execute(text("CREATE FUNCTION public.fixture_repair() RETURNS void LANGUAGE SQL SECURITY DEFINER AS $$ UPDATE public.tenants SET is_active=true $$"))
+            if state == 'outdated':db.execute(text("UPDATE public.alembic_version_aiuditor SET version_num='aiuditor_0053_baseline'"))
+            if state == 'missing_table':db.execute(text('DROP TABLE public.aiuditor_parent_snapshots'))
+        runtime_url = make_url(isolated_owner_db).set(username=role, password=password).render_as_string(hide_password=False)
+        runtime = create_engine(runtime_url, connect_args={'options': '-c search_path=' + ('pg_catalog' if state == 'wrong_search_path' else 'public')})
+        if state == 'session_superuser':
+            runtime.dispose()
+            runtime = create_engine(isolated_owner_db, connect_args={'options': '-c role=' + role + ' -c search_path=public'})
+        monkeypatch.setattr(migrations, '_engine', lambda _: runtime)
+        monkeypatch.setenv('AIUDITOR_ROLE', 'operator')
+        monkeypatch.setenv('AIUDITOR_SCHEMA_STARTUP', 'verify')
+        monkeypatch.setenv('DATABASE_URL', runtime_url)
+        with admin.connect() as db:
+            before = db.execute(text('SELECT version_num FROM public.alembic_version_aiuditor')).scalars().all()
+            tenants_before = db.execute(text('SELECT id,name,is_active FROM public.tenants ORDER BY id')).all()
+        if state == 'ready':assert schema_startup.main() == 0
+        else:
+            with pytest.raises(ValueError, match='runtime:'):
+                schema_startup.main()
+        with admin.connect() as db:
+            assert db.execute(text('SELECT version_num FROM public.alembic_version_aiuditor')).scalars().all() == before
+            assert db.execute(text('SELECT id,name,is_active FROM public.tenants ORDER BY id')).all() == tenants_before
+    finally:
+        if runtime is not None:runtime.dispose()
+        # Fixture-only teardown: no shared VM, application or configured accounts.
+        with admin.begin() as db:
+            if state == 'database_owner':db.execute(text(f'ALTER DATABASE "{make_url(isolated_owner_db).database}" OWNER TO CURRENT_USER'))
+            db.execute(text(f'DROP OWNED BY "{role}" CASCADE'))
+            if state == 'set_role':db.execute(text(f'DROP OWNED BY "{extra}" CASCADE'))
+            db.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+            if state == 'set_role':db.execute(text(f'DROP ROLE IF EXISTS "{extra}"'))
+        admin.dispose()
