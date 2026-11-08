@@ -489,6 +489,7 @@ async def advance_admission_async(
                 source_ref=(gate_body.source_ref or None),
                 enqueue_pull=True,
                 admission_id=advanced.id,
+                size_bytes=advanced.size_bytes,
             )
             from aiuditor_service.admission_reporting import bind_assignment
             assignment = bind_assignment(advanced, queued, catalog_id)
