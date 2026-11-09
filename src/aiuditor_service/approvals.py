@@ -77,6 +77,21 @@ def require_hold_actor(request: Request) -> uuid.UUID:
     return require_auditor_actor(request)
 
 
+def require_program_reader(request: Request) -> uuid.UUID:
+    """Allow the configured reader to list certification data for its bound tenant."""
+    token = os.environ.get("AIUDITOR_PROGRAM_READ_TOKEN", "")
+    if token and request_has_internal_token(request, token):
+        try:
+            tenant = uuid.UUID(os.environ.get("AIUDITOR_PROGRAM_READ_TENANT_ID", ""))
+        except ValueError:
+            raise HTTPException(503, "Program reader tenant is unconfigured") from None
+        if request.headers.get("X-Tenant-ID") != str(tenant):
+            raise HTTPException(403, "Program reader tenant mismatch")
+        request.state.tenant_id = tenant
+        return tenant
+    return require_hold_actor(request)
+
+
 def require_internal_actor(request: Request) -> uuid.UUID:
     """Door consume only. A named human resolves; they do not consume."""
 

@@ -25,6 +25,7 @@ from aiuditor_service.approvals import (
     hold_approval,
     latest_for,
     require_hold_actor,
+    require_program_reader,
     require_internal_actor,
     resolve_approval,
     resolver_subject,
@@ -1024,7 +1025,7 @@ async def list_envelopes(
     request: Request,
     class_id: str | None = Query(default=None),
 ) -> list[ClassEnvelope]:
-    tenant_id = await asyncio.to_thread(require_hold_actor, request)
+    tenant_id = await asyncio.to_thread(require_program_reader, request)
     return _envelopes(request).list_for(tenant_id, class_id=class_id)
 
 
@@ -1102,7 +1103,7 @@ async def list_suite_members(
     request: Request,
     class_id: str | None = Query(default=None),
 ) -> list[SuiteMember]:
-    tenant_id = await asyncio.to_thread(require_hold_actor, request)
+    tenant_id = await asyncio.to_thread(require_program_reader, request)
     return _suite(request).list_for(tenant_id, class_id=class_id)
 
 
