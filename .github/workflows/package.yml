@@ -121,8 +121,9 @@ jobs:
 
   publish-test-image:
     concurrency:
-      group: aiuditor-test-image-${{ github.sha }}
+      group: aiuditor-moving-test-image
       cancel-in-progress: false
+      queue: max
     needs: package
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on:
@@ -209,6 +210,29 @@ jobs:
               repository=os.environ['GITHUB_REPOSITORY'], revision=os.environ['GITHUB_SHA'],
               run_id=int(os.environ['GITHUB_RUN_ID'])), sort_keys=True)+'\n')
           PYTHON
+      - name: Advance moving TEST channel from qualified current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Serialized publishers must never let an older queued main replace newer TEST.
+          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [[ "$current" != "$GITHUB_SHA" ]]; then
+            echo 'Superseded qualified build retained as evidence; moving TEST is unchanged'
+            exit 0
+          fi
+          test "$(docker image inspect "$QUALIFIED_REF" --format '{{.Id}}')" = "$QUALIFIED_ID"
+          test "$(docker image inspect "$QUALIFIED_REF" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          export DOCKER_CONFIG=$(mktemp -d "$RUNNER_TEMP/test-channel-login.XXXXXX")
+          channel="ghcr.io/${GITHUB_REPOSITORY,,}/runtime:test"
+          trap 'docker image rm "$channel" >/dev/null 2>&1 || true; rm -rf -- "$DOCKER_CONFIG"' EXIT
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag "$QUALIFIED_ID" "$channel"
+          docker push "$channel"
+          docker pull "$channel"
+          test "$(docker image inspect "$channel" --format '{{.Id}}')" = "$QUALIFIED_ID"
+          echo "$channel tracks qualified main $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
       - name: Retain validated package bytes
         continue-on-error: true
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
