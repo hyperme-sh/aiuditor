@@ -5,7 +5,7 @@ scan/inspection, lab selection, immutable job inputs, host delivery and leases.
 This authority slice is a dependency for that integration; it grants no placement
 by itself and does not mark MS-03 complete.
 
-Private records use `aiuditor_private_model_admissions`, separate from the legacy
+Private records use `aiuditor_private_model_admissions`, separate from the uploaded-model
 public catalog promotion path. An allow verdict never publishes or certifies the
 revision. Migration `aiuditor_0055_private_admission` adds forced tenant RLS and
 retains verdict evidence on rollback.

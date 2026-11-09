@@ -192,13 +192,13 @@ def test_lab_outbox_failure_rolls_back_receipt_and_envelope(reporter_db, monkeyp
         assert db.scalar(text('SELECT count(*) FROM service_outbox WHERE tenant_id=:tid'),{'tid':tid})==1
 
 
-def test_legacy_missing_event_recovered_once_after_restart(reporter_db, monkeypatch):
+def test_missing_event_recovered_once_after_restart(reporter_db, monkeypatch):
     import aiuditor_service.lab_reporting as reporting
     admin,engine,tid,_=reporter_db
     body=LabEnvelopeReport.model_validate(report(tid));persist=SqlPersistSession(sessionmaker(engine))
     original=reporting.enqueue_event
     with monkeypatch.context() as patch:
-        # Isolated historical writer: receipt/envelope committed before publish.
+        # Isolated interrupted TEST write: receipt/envelope committed before publish.
         patch.setattr(reporting,'enqueue_event',lambda *args,**kwargs:None)
         row,_=persist.accept_lab_report(body,datetime.now(UTC))
     engine.dispose()
@@ -212,7 +212,7 @@ def test_legacy_missing_event_recovered_once_after_restart(reporter_db, monkeypa
 
 
 @pytest.mark.parametrize('copies',[1,2])
-def test_legacy_random_event_is_preserved_or_ambiguity_refused(reporter_db,monkeypatch,copies):
+def test_stored_uncorrelated_event_is_preserved_or_ambiguity_refused(reporter_db,monkeypatch,copies):
     import aiuditor_service.lab_reporting as reporting
     from controlplane_events.outbox import enqueue
     admin,engine,tid,_=reporter_db

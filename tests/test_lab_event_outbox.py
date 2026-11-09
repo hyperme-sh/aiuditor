@@ -8,7 +8,7 @@ from aiuditor_service.persist import MemoryPersistSession
 from test_lab_reporting import report
 
 
-def test_replay_recovers_missing_historical_event_without_rewriting_measurement(monkeypatch):
+def test_replay_recovers_missing_event_without_rewriting_measurement(monkeypatch):
     tenant=uuid.uuid4();body=LabEnvelopeReport.model_validate(report(tenant));persist=MemoryPersistSession()
     first,fresh=persist_report(persist,body,datetime.now(UTC))
     assert fresh
