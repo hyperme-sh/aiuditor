@@ -100,7 +100,13 @@ async def test_purpose_route_owns_real_tenant_transaction(reporter_db,monkeypatc
         assert first.status_code==201,first.text
         replay=await client.post('/api/v1/aiuditor/envelopes',**signed(value))
         assert replay.status_code==201 and replay.json()==first.json()
-    assert len(events)==1
+    assert events==[]  # No separately committed publication after the HTTP write.
+    with engine.begin() as db:
+        db.execute(text("SELECT set_config('app.current_tenant_id',:tid,true)"),{'tid':str(tid)})
+        durable=db.execute(text('SELECT id,envelope FROM service_outbox WHERE tenant_id=:tid'),{'tid':tid}).all()
+        assert len(durable)==1
+        assert durable[0].envelope['payload']=={key:first.json()[key] for key in durable[0].envelope['payload']}
+        assert durable[0].envelope['correlation_id']==str(durable[0].id)
 
 
 def test_admission_report_atomic_restart_and_rls(reporter_db):
