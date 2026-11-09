@@ -117,6 +117,48 @@ def _replay(receipt, digest):
     return ClassEnvelope.model_validate(receipt["accepted_envelope"]), False
 
 
+def event_for(row):
+    """One durable event identity per immutable accepted measurement receipt."""
+    from controlplane_events import ControlPlaneEventEnvelope
+    from controlplane_events.contracts import validate_event_envelope
+    from aiuditor_service.events import ENVELOPE_RECORDED_V1
+    identity = f"aiuditor.lab-envelope.v1:{row.tenant_id}:{row.lab_origin}:{row.lab_job_id}:{row.report_sha256}"
+    event_id = uuid.uuid5(uuid.NAMESPACE_URL, identity)
+    envelope = ControlPlaneEventEnvelope(event_type=ENVELOPE_RECORDED_V1,
+        service="aiuditor", tenant_id=row.tenant_id, occurred_at=row.measured_at,
+        correlation_id=str(event_id), payload=row.to_event_payload())
+    validate_event_envelope(envelope)
+    return event_id, envelope
+
+
+def enqueue_event(session, row, *, replay):
+    """Commit with the receipt; recover missing old events without republishing them."""
+    from sqlalchemy import text, bindparam
+    from sqlalchemy.dialects.postgresql import JSONB
+    from controlplane_events.outbox import enqueue
+    event_id, envelope = event_for(row)
+    existing = session.scalar(text("SELECT envelope FROM service_outbox WHERE tenant_id=:tenant AND id=:id"),
+        {"tenant":row.tenant_id, "id":event_id})
+    if existing is not None:
+        if existing != envelope.model_dump(mode="json"):
+            raise ValueError("Lab event identity binds different facts")
+        return
+    if replay:
+        # Old writers used random event IDs and no correlation. Preserve an
+        # already queued/delivered event with the exact public domain facts.
+        # Ambiguous legacy history must be reconciled explicitly, never guessed.
+        query = text("""SELECT id FROM service_outbox WHERE tenant_id=:tenant
+            AND envelope->>'event_type'=:kind AND envelope->>'correlation_id' IS NULL
+            AND envelope->'payload'=:payload LIMIT 2""").bindparams(bindparam("payload", type_=JSONB))
+        old = session.execute(query, {"tenant":row.tenant_id,
+            "kind":envelope.event_type,"payload":envelope.payload}).scalars().all()
+        if len(old)>1:
+            raise HTTPException(409,"Ambiguous historical lab event requires owner reconciliation")
+        if old:
+            return
+    enqueue(session, envelope, event_id=event_id)
+
+
 def persist_report(persist, report, now):
     """Serialize each job and target; receipt + envelope commit atomically."""
     from aiuditor_service.persist import MemoryPersistSession, dump_for_persist, sql_row
@@ -127,14 +169,24 @@ def persist_report(persist, report, now):
             key = f"{report.origin}:{report.job_id}"
             receipts = persist.rows.setdefault("envelope_reports", {}).setdefault(tid, {})
             if key in receipts:
-                return _replay(receipts[key], digest)
+                row, fresh = _replay(receipts[key], digest)
+                event_id, envelope = event_for(row)
+                events = persist.rows.setdefault("service_outbox", {}).setdefault(tid, {})
+                event_value = envelope.model_dump(mode="json")
+                if str(event_id) in events and events[str(event_id)] != event_value:
+                    raise HTTPException(409, "Lab event identity binds different facts")
+                events.setdefault(str(event_id), event_value)
+                return row, fresh
             bucket = persist.rows.setdefault("envelopes", {}).setdefault(tid, {})
             existing = next((ClassEnvelope.model_validate(r) for r in bucket.values()
                              if r["class_id"] == report.envelope.class_id and r["catalog_id"] == report.envelope.catalog_id), None)
             row = _new_row(report, existing, now)
             accepted = row.model_dump(mode="json")
+            event_id, envelope = event_for(row)
+            event_value = envelope.model_dump(mode="json")
             bucket[str(row.id)] = dump_for_persist(row)
             receipts[key] = {"payload_sha256": digest, "accepted_envelope": accepted}
+            persist.rows.setdefault("service_outbox", {}).setdefault(tid, {})[str(event_id)] = event_value
             return row, True
 
     from sqlalchemy import select, text
@@ -146,7 +198,9 @@ def persist_report(persist, report, now):
             session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"), {"key": key})
         receipt = session.get(AiuditorEnvelopeReport, (report.tenant_id, report.origin, report.job_id))
         if receipt is not None:
-            return _replay({"payload_sha256": receipt.payload_sha256, "accepted_envelope": receipt.accepted_envelope}, digest)
+            row, fresh = _replay({"payload_sha256": receipt.payload_sha256, "accepted_envelope": receipt.accepted_envelope}, digest)
+            enqueue_event(session, row, replay=True)
+            return row, fresh
         old = session.scalar(select(AiuditorEnvelope).where(
             AiuditorEnvelope.tenant_id == report.tenant_id,
             AiuditorEnvelope.class_id == report.envelope.class_id,
@@ -162,4 +216,5 @@ def persist_report(persist, report, now):
         session.add(AiuditorEnvelopeReport(tenant_id=report.tenant_id, origin=report.origin,
             job_id=report.job_id, payload_sha256=digest,
             accepted_envelope=row.model_dump(mode="json"), received_at=now))
+        enqueue_event(session, row, replay=False)
         return row, True

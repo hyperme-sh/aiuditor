@@ -28,7 +28,7 @@ def reporter_db(migrated_postgres):
             c.execute(text('INSERT INTO tenants(id,name,is_active) VALUES(:id,:name,true)'),{'id':id,'name':str(id)})
         c.exec_driver_sql(f'CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOBYPASSRLS')
         c.exec_driver_sql(f'GRANT USAGE ON SCHEMA public TO "{role}"')
-        c.exec_driver_sql(f'GRANT SELECT,INSERT,UPDATE ON aiuditor_envelopes,aiuditor_envelope_reports TO "{role}"')
+        c.exec_driver_sql(f'GRANT SELECT,INSERT,UPDATE ON aiuditor_envelopes,aiuditor_envelope_reports,service_outbox,service_tenants TO "{role}"')
     engine=create_engine(migrated_postgres)
     @event.listens_for(engine,'connect')
     def use_role(conn,_):
@@ -100,7 +100,13 @@ async def test_purpose_route_owns_real_tenant_transaction(reporter_db,monkeypatc
         assert first.status_code==201,first.text
         replay=await client.post('/api/v1/aiuditor/envelopes',**signed(value))
         assert replay.status_code==201 and replay.json()==first.json()
-    assert len(events)==1
+    assert events==[]  # No separately committed publication after the HTTP write.
+    with engine.begin() as db:
+        db.execute(text("SELECT set_config('app.current_tenant_id',:tid,true)"),{'tid':str(tid)})
+        durable=db.execute(text('SELECT id,envelope FROM service_outbox WHERE tenant_id=:tid'),{'tid':tid}).all()
+        assert len(durable)==1
+        assert durable[0].envelope['payload']=={key:first.json()[key] for key in durable[0].envelope['payload']}
+        assert durable[0].envelope['correlation_id']==str(durable[0].id)
 
 
 def test_admission_report_atomic_restart_and_rls(reporter_db):
@@ -166,3 +172,63 @@ def test_human_denial_overlapping_report_preserves_receipt(reporter_db, monkeypa
     assert denied.sandbox_report_sha256 == accepted.sandbox_report_sha256
     assert denied.sandbox_soak_ok is True and denied.sandbox_egress_ok is True
     assert reporting.persist_report(persist, body, datetime.now(UTC)) == denied
+
+
+def test_lab_outbox_failure_rolls_back_receipt_and_envelope(reporter_db, monkeypatch):
+    import aiuditor_service.lab_reporting as reporting
+    admin,engine,tid,_=reporter_db
+    body=LabEnvelopeReport.model_validate(report(tid));persist=SqlPersistSession(sessionmaker(engine))
+    original=reporting.enqueue_event
+    def fail(*args,**kwargs):raise RuntimeError('isolated outbox failure')
+    monkeypatch.setattr(reporting,'enqueue_event',fail)
+    with pytest.raises(RuntimeError,match='isolated outbox failure'):
+        persist.accept_lab_report(body,datetime.now(UTC))
+    with admin.connect() as db:
+        for table in ('aiuditor_envelopes','aiuditor_envelope_reports','service_outbox'):
+            assert db.scalar(text(f'SELECT count(*) FROM {table} WHERE tenant_id=:tid'),{'tid':tid})==0
+    monkeypatch.setattr(reporting,'enqueue_event',original)
+    row,fresh=persist.accept_lab_report(body,datetime.now(UTC));assert fresh
+    with admin.connect() as db:
+        assert db.scalar(text('SELECT count(*) FROM service_outbox WHERE tenant_id=:tid'),{'tid':tid})==1
+
+
+def test_legacy_missing_event_recovered_once_after_restart(reporter_db, monkeypatch):
+    import aiuditor_service.lab_reporting as reporting
+    admin,engine,tid,_=reporter_db
+    body=LabEnvelopeReport.model_validate(report(tid));persist=SqlPersistSession(sessionmaker(engine))
+    original=reporting.enqueue_event
+    with monkeypatch.context() as patch:
+        # Isolated historical writer: receipt/envelope committed before publish.
+        patch.setattr(reporting,'enqueue_event',lambda *args,**kwargs:None)
+        row,_=persist.accept_lab_report(body,datetime.now(UTC))
+    engine.dispose()
+    for _ in range(2):
+        replay,fresh=SqlPersistSession(sessionmaker(engine)).accept_lab_report(body,datetime.now(UTC)+timedelta(days=2))
+        assert not fresh and replay==row
+    with admin.connect() as db:
+        records=db.execute(text('SELECT id,envelope FROM service_outbox WHERE tenant_id=:tid'),{'tid':tid}).all()
+        assert records==[(reporting.event_for(row)[0],reporting.event_for(row)[1].model_dump(mode='json'))]
+        assert db.scalar(text('SELECT count(*) FROM aiuditor_envelope_reports WHERE tenant_id=:tid'),{'tid':tid})==1
+
+
+@pytest.mark.parametrize('copies',[1,2])
+def test_legacy_random_event_is_preserved_or_ambiguity_refused(reporter_db,monkeypatch,copies):
+    import aiuditor_service.lab_reporting as reporting
+    from controlplane_events.outbox import enqueue
+    admin,engine,tid,_=reporter_db
+    body=LabEnvelopeReport.model_validate(report(tid));persist=SqlPersistSession(sessionmaker(engine))
+    with monkeypatch.context() as patch:
+        patch.setattr(reporting,'enqueue_event',lambda *args,**kwargs:None)
+        row,_=persist.accept_lab_report(body,datetime.now(UTC))
+    envelope=reporting.event_for(row)[1].model_copy(update={'correlation_id':None})
+    with engine.begin() as db:
+        db.execute(text("SELECT set_config('app.current_tenant_id',:tid,true)"),{'tid':str(tid)})
+        for _ in range(copies):enqueue(db,envelope,event_id=uuid.uuid4())
+    if copies==1:
+        replay,fresh=persist.accept_lab_report(body,datetime.now(UTC))
+        assert not fresh and replay==row
+    else:
+        with pytest.raises(HTTPException) as error:persist.accept_lab_report(body,datetime.now(UTC))
+        assert error.value.status_code==409
+    with admin.connect() as db:
+        assert db.scalar(text('SELECT count(*) FROM service_outbox WHERE tenant_id=:tid'),{'tid':tid})==copies

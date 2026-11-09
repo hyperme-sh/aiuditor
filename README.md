@@ -316,3 +316,13 @@ failed publishers retain them for retry. Optional one-day `tested-dist` retentio
 can fail without blocking runtime publication. If the quota prevents retention,
 versioned test-bundle publication explicitly skips; deployment remains on its
 previous reviewed bundle until one is available. Stable release paths are unchanged.
+
+Signed class-envelope reports commit their immutable receipt, envelope and an
+owner-local event obligation in one transaction. Event identity and occurrence
+time come from the accepted measurement, so retries and relay failures preserve
+one UUID and facts. Replaying an older receipt can recover a missing obligation;
+a uniquely matching legacy uncorrelated event is preserved, including one already
+delivered. Ambiguous legacy history refuses reconciliation. This path uses the
+owned outbox even when another publisher transport is configured; the existing
+owner relay handles delivery. It does not repair fixture topology or authorize
+another run's measurement.

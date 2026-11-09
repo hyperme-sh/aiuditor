@@ -155,7 +155,7 @@ def test_admission_holds_for_named_verdict():
 
 @pytest.mark.asyncio
 async def test_program_http_and_hydrate(
-    http_client, tenant_headers, tenant_a, event_sink, monkeypatch
+    http_client, tenant_headers, tenant_a, event_sink, monkeypatch, app
 ):
     from test_lab_reporting import report, signed, KEY
     monkeypatch.setenv("AIUDITOR_LAB_REPORT_KEY", KEY)
@@ -220,7 +220,10 @@ async def test_program_http_and_hydrate(
     assert "'prompt':" not in dumped and '"prompt":' not in dumped
 
     types = {item["event_type"] for item in event_sink}
-    assert ENVELOPE_RECORDED_V1 in types
+    # Signed measurements persist their event in the owner transaction, not
+    # the separately committed publisher used by the remaining routes.
+    durable = app.state.envelope_store.persist.rows["service_outbox"][str(tenant_a)]
+    assert [item["event_type"] for item in durable.values()] == [ENVELOPE_RECORDED_V1]
     assert SUITE_MEMBER_RECORDED_V1 in types
     assert ADMISSION_SUBMITTED_V1 in types
     assert ADMISSION_RESOLVED_V1 in types
