@@ -63,7 +63,7 @@ async def test_signed_binding_cannot_be_changed(http_client,tenant_a,field):
     assert result.status_code==401
 
 
-async def test_fresh_assigned_report_replay_and_cas(http_client,tenant_a,event_sink):
+async def test_fresh_assigned_report_replay_and_cas(http_client,tenant_a,app):
     first=report(tenant_a)
     response=await http_client.post('/api/v1/aiuditor/envelopes/initial',**signed(first))
     assert response.status_code==201,response.text
@@ -87,7 +87,7 @@ async def test_fresh_assigned_report_replay_and_cas(http_client,tenant_a,event_s
     stale=report(tenant_a,mode='replace',expected_revision=original['revision'])
     request=signed(stale);request['headers']['If-Match']='"'+original['revision']+'"'
     assert (await http_client.post('/api/v1/aiuditor/envelopes',**request)).status_code==412
-    assert len([e for e in event_sink if e['event_type']=='aiuditor.envelope.recorded.v1'])==2
+    assert len(app.state.envelope_store.persist.rows["service_outbox"][str(tenant_a)])==2
 
 
 @pytest.mark.parametrize("change",['stale','future','unauthorized_replace','tenant','missing_key','reused_key'])

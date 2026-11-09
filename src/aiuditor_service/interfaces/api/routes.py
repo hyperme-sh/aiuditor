@@ -1009,10 +1009,8 @@ async def record_envelope(request: Request, body: "LabEnvelopeReport", response:
         raise HTTPException(503, "Lab evidence persistence unavailable") from None
     response.headers["ETag"] = f'"{row.revision}"'
     response.headers["X-Lab-Report-Replay"] = "false" if fresh else "true"
-    if fresh:
-        await get_tenant_event_publisher().publish(
-            tenant_id=body.tenant_id, event_type=ENVELOPE_RECORDED_V1,
-            payload=row.to_event_payload())
+    # Receipt, envelope and owner outbox obligation commit together. Replays
+    # reconcile historical missing obligations inside that same transaction.
     return row
 
 
