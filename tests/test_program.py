@@ -336,3 +336,19 @@ async def test_http_conditional_envelope_rejects_existing_reference(http_client,
     assert second.status_code==409
     rows=(await http_client.get("/api/v1/aiuditor/envelopes",headers=tenant_headers)).json()
     assert next(row for row in rows if row["id"]==first.json()["id"])["decode_tok_s"]==12
+
+
+async def test_program_reader_scope(http_client, tenant_a, monkeypatch):
+    token = "certification-list-reader"
+    monkeypatch.setenv("AIUDITOR_PROGRAM_READ_TOKEN", token)
+    monkeypatch.setenv("AIUDITOR_PROGRAM_READ_TENANT_ID", str(tenant_a))
+    headers = {"X-Tenant-ID": str(tenant_a), "X-Internal-Token": token}
+    for path in ("suite", "envelopes"):
+        url = "/api/v1/aiuditor/" + path
+        assert (await http_client.get(url, headers=headers)).status_code == 200
+        wrong_tenant = {**headers, "X-Tenant-ID": str(uuid.uuid4())}
+        assert (await http_client.get(url, headers=wrong_tenant)).status_code == 403
+        wrong_token = {**headers, "X-Internal-Token": "unrecognized"}
+        assert (await http_client.get(url, headers=wrong_token)).status_code == 401
+    seeded = await http_client.post("/api/v1/aiuditor/suite/seed", headers=headers)
+    assert seeded.status_code in (401, 403)
