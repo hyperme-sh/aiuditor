@@ -31,7 +31,7 @@ completed receipt returns current lease state without repeating those effects.
 Install both owner migrations and deploy the Hypermesh receiver before the new
 AIuditor sender. Existing violations are intentionally pending rather than assigned
 invented completion evidence; reevaluation reconciles them against the lease owner.
-Legacy internal callers without operation_id receive a deterministic lease/action/
+Internal requests without operation_id receive a deterministic lease/action/
 reason identity. Rollback retains receipts and progress. This change does not add a
 durable event outbox or guarantee delivery of the existing post-write events.
 

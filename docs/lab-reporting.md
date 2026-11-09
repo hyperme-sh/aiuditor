@@ -1,5 +1,7 @@
 # Authenticated lab envelope reporting
 
+This is the current pre-v0 contract, not a compatibility or migration API.
+
 Envelope writes require the dedicated measurement-owner authority, not a tenant,
 service, IR, or generic internal token. Both POST endpoints use the same signed
 protocol. Witness nodes refuse writes. Ordinary authenticated reads are unchanged.
@@ -17,7 +19,7 @@ Configure a unique secret of at least 32 characters in both service processes.
 Reusing a generic internal or admission credential is refused. An unset key keeps
 reporting closed. Supply it only to the independently deployed AIuditor and Hypermesh workloads. Install both
 service-owned migration tails from the pinned database package before enabling the publisher. Deploy the consumer and publisher
-together; legacy callers receive 401 or 422. No historical envelope is backfilled
+together; unsigned callers receive 401 or 422. No unverified envelope is backfilled
 with invented provenance: unverified rows require a new soak. To replace one, use
 a fresh authorized measurement and its current revision.
 
@@ -31,12 +33,15 @@ old. Refreshing authentication never refreshes observation time.
 Create uses `/envelopes/initial` with `If-None-Match: *` or `/envelopes` in create
 mode. Replacement requires the signed expected revision and matching quoted
 `If-Match`. Per-run receipts bind immutable evidence; an identical replay returns
-its original receipt without mutating the current envelope or publishing another
-event. Reusing the run with changed evidence is rejected. A replay after a later
+its original receipt without mutating the current envelope. Its event obligation
+is retained or recovered exactly once. Reusing the run with changed evidence is rejected. A replay after a later
 replacement returns the original result and cannot roll state back. Competing
-replacements serialize and only one matching revision succeeds. Receipts and
-current envelope commit together under tenant RLS, surviving process restarts.
-Events are published after acceptance; this protocol does not add an event outbox.
+replacements serialize and only one matching revision succeeds. Receipts, the current envelope and an owner-local outbox obligation commit
+together under tenant RLS, surviving process restarts. Event identity and occurrence
+time are bound to the accepted measurement. Replay can recover a missing event
+from an interrupted TEST publication; it preserves a uniquely matching stored
+uncorrelated event and refuses ambiguous stored events. Delivery retries retain
+the same UUID and facts through the owner relay.
 
 Qualification covers ordinary credential refusal, tampering, freshness, replay,
 CAS replacement, caller binding, concurrent PostgreSQL consumers, restart, and RLS.

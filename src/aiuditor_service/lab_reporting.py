@@ -144,9 +144,10 @@ def enqueue_event(session, row, *, replay):
             raise ValueError("Lab event identity binds different facts")
         return
     if replay:
-        # Old writers used random event IDs and no correlation. Preserve an
+        # An interrupted TEST publication may have a random ID and no correlation.
+        # Preserve an
         # already queued/delivered event with the exact public domain facts.
-        # Ambiguous legacy history must be reconciled explicitly, never guessed.
+        # Ambiguous stored events must be reconciled explicitly, never guessed.
         query = text("""SELECT id FROM service_outbox WHERE tenant_id=:tenant
             AND envelope->>'event_type'=:kind AND envelope->>'correlation_id' IS NULL
             AND envelope->'payload'=:payload LIMIT 2""").bindparams(bindparam("payload", type_=JSONB))

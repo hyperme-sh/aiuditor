@@ -80,12 +80,12 @@ reference rows, whose write authority stays outside ordinary runtime. Verify
 mode additionally refuses PostgreSQL server-file and server-program roles.
 
 PostgreSQL qualification builds only the packaged AIuditor chain and tenant
-references in fresh databases. Explicit local legacy-directory compatibility
+references in fresh databases. Explicit local identity-directory conversion
 cases install their own temporary test tables; canonical provisioning does not
-create them or adopt the retired mixed migration registry. Lifecycle-safe legacy
-credential compatibility stays on its separately pinned revision.
+create them or adopt the retired mixed migration registry. Lifecycle-safe identity-bridge
+credential handling stays on its separately pinned revision.
 
-Legacy upload admissions persist the queue owner's exact tenant/admission/job/device/
+Uploaded-model admissions persist the queue owner's exact tenant/admission/job/device/
 artifact assignment. Sandbox reports require the dedicated `AIUDITOR_LAB_REPORT_KEY`
 (minimum 32 characters, different from generic internal/model tokens), HMAC-SHA256
 with purpose `aiuditor.admission-sandbox.v1\n`, and the exact signed body. A tenant,
@@ -95,7 +95,7 @@ Authentication expires after five minutes; new evidence must be measured within
 restarts; changed evidence conflicts. A passing report enters human hold and never
 certifies or promotes. Old unassigned rows remain closed to reports. An auditor can retry scheduling
 through `POST /admissions/{id}/quarantine` with a `source_ref`; artifact metadata
-comes from the persisted admission. Plane cancels an exact matching legacy run
+comes from the persisted admission. Plane cancels an exact matching unbound run
 and creates a fresh bound assignment instead of trusting old evidence. Plane's companion implementation must be
 deployed before new assignments are available. Private admissions remain separate.
 One-use approvals use a tenant-scoped conditional database update. Live caller,
@@ -165,7 +165,7 @@ schema. The installed AIuditor package supplies its own migration resources and 
 the locked database helper's guarded handling of an unknown newer owner revision. That guard permits
 startup only; existing-data compatibility still requires clone qualification.
 
-PostgreSQL regressions reproduce a native payment revision with retired legacy
+PostgreSQL regressions reproduce a native payment revision with retired development
 tables absent. The former all-owner entrypoint refuses that schema; the scoped
 entrypoint upgrades this owner's earlier adopted revision, preserves every
 foreign head and leaves the retired table absent. Empty-database refusal is also
@@ -252,7 +252,7 @@ at startup. A program operator can move an existing suite member with
 unchanged; stale expected configuration or another member for the target model
 returns 409. The operation serializes with other program edits and bootstrap.
 
-This changes program configuration only. Legacy envelopes remain recorded under
+This changes program configuration only. Existing envelopes remain recorded under
 their original model IDs; no measurements, host certification or activation are
 granted. Fresh assigned native qualification must establish the new reference.
 
@@ -321,8 +321,8 @@ Signed class-envelope reports commit their immutable receipt, envelope and an
 owner-local event obligation in one transaction. Event identity and occurrence
 time come from the accepted measurement, so retries and relay failures preserve
 one UUID and facts. Replaying an older receipt can recover a missing obligation;
-a uniquely matching legacy uncorrelated event is preserved, including one already
-delivered. Ambiguous legacy history refuses reconciliation. This path uses the
+a uniquely matching stored uncorrelated event is preserved, including one already
+delivered. Ambiguous stored events refuses reconciliation. This path uses the
 owned outbox even when another publisher transport is configured; the existing
 owner relay handles delivery. It does not repair fixture topology or authorize
 another run's measurement.

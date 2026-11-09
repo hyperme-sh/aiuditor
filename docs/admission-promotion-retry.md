@@ -4,7 +4,9 @@ An allowed admission is the durable human verdict, not proof that the remote
 catalog call completed. An upstream outage or lost response may be retried by
 reposting an allow verdict through the existing authenticated auditor endpoint.
 Current tenant membership, interactive approval authority and witness write
-refusal still apply. The legacy sandbox-report endpoint remains disabled.
+refusal still apply. Sandbox reports require the dedicated measurement-owner signature and the
+persisted assignment. The authenticated report route is enabled; ordinary tenant,
+service and internal credentials cannot submit measurements.
 
 A retry reads the persisted tenant-scoped admission and preserves its original
 verdict, reason, resolver and resolution timestamp. It requires the original
