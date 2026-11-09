@@ -365,6 +365,7 @@ async def test_admission_async_queues_lab_and_awaits_soak():
             license="mit",
             intended_class="agx-large",
             source_ref="bartowski/Llama@main/model.gguf",
+            size_bytes=4096,
             hold_for_human=True,
         ),
         plane=hop,
@@ -374,5 +375,6 @@ async def test_admission_async_queues_lab_and_awaits_soak():
     assert hop.soaks
     assert hop.soaks[0]["source_ref"] == "bartowski/Llama@main/model.gguf"
     assert hop.soaks[0]["admission_id"] == str(row.id)
+    assert hop.soaks[0]["size_bytes"] == row.size_bytes
     # Approval inbox opens after sandbox report, not before soak.
     assert not any(a.purpose == "admission" for a in approvals.list_for(tenant))
