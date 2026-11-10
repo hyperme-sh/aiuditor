@@ -14,6 +14,8 @@ from aiuditor_service.lab_reporting import LabEnvelopeReport
 import uuid
 from datetime import UTC, datetime
 
+import os
+
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from api.infrastructure.messaging.tenant_event_publisher import get_tenant_event_publisher
@@ -923,7 +925,10 @@ async def fulfill_contract_route(
 async def fulfill_paid_contract(request: Request, body: ContractFulfill) -> Contract:
     require_grant_write(role_from_request(request))
     tenant = require_paid_checkout(request)
-    row = fulfill_checkout_contract(_contracts(request), tenant, body, rail="usdc")
+    rail = os.getenv("AIUDITOR_PAID_CHECKOUT_RAIL", "usdc")
+    if rail not in {"stripe", "usdc"}:
+        raise HTTPException(status_code=503, detail="Paid checkout rail is misconfigured")
+    row = fulfill_checkout_contract(_contracts(request), tenant, body, rail=rail)
     await get_tenant_event_publisher().publish(
         tenant_id=tenant, event_type=CONTRACT_FULFILLED_V1, payload=row.to_event_payload()
     )

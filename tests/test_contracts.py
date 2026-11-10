@@ -509,7 +509,9 @@ def test_named_contract_cannot_authorize_a_longer_reserved_window():
 
 
 @pytest.mark.asyncio
-async def test_paid_checkout_scope_and_rail(http_client, tenant_a, internal_token, monkeypatch, event_sink):
+@pytest.mark.parametrize("rail", ["stripe", "usdc"])
+async def test_paid_checkout_scope_and_rail(http_client, tenant_a, internal_token, monkeypatch, event_sink, rail):
+    monkeypatch.setenv("AIUDITOR_PAID_CHECKOUT_RAIL", rail)
     key = 'paid-checkout-only-' + 'a' * 32
     monkeypatch.setenv('AIUDITOR_PAID_CHECKOUT_TOKEN', key)
     monkeypatch.setenv('AIUDITOR_PAID_CHECKOUT_TENANT_ID', str(tenant_a))
@@ -520,6 +522,6 @@ async def test_paid_checkout_scope_and_rail(http_client, tenant_a, internal_toke
     assert (await http_client.post(path, headers=headers | {'X-Tenant-ID':str(uuid.uuid4())}, json=body)).status_code == 403
     first = await http_client.post(path, headers=headers, json=body)
     assert first.status_code == 201, first.text
-    assert first.json()['rail'] == 'usdc'
+    assert first.json()['rail'] == rail
     assert (await http_client.post(path, headers=headers, json=body)).json()['id'] == first.json()['id']
     assert (await http_client.post('/api/v1/aiuditor/contracts/fulfill',headers=headers,json=body)).status_code == 401
