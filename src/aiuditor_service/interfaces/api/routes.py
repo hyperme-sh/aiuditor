@@ -26,6 +26,7 @@ from aiuditor_service.approvals import (
     latest_for,
     require_hold_actor,
     require_program_reader,
+    require_paid_checkout,
     require_internal_actor,
     resolve_approval,
     resolver_subject,
@@ -914,6 +915,17 @@ async def fulfill_contract_route(
         tenant_id=tenant_id,
         event_type=CONTRACT_FULFILLED_V1,
         payload=row.to_event_payload(),
+    )
+    return row
+
+
+@router.post("/contracts/paid/fulfill", response_model=Contract, status_code=201)
+async def fulfill_paid_contract(request: Request, body: ContractFulfill) -> Contract:
+    require_grant_write(role_from_request(request))
+    tenant = require_paid_checkout(request)
+    row = fulfill_checkout_contract(_contracts(request), tenant, body, rail="usdc")
+    await get_tenant_event_publisher().publish(
+        tenant_id=tenant, event_type=CONTRACT_FULFILLED_V1, payload=row.to_event_payload()
     )
     return row
 
