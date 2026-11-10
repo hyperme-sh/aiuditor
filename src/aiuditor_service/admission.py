@@ -399,6 +399,21 @@ def record_sandbox_result(
     return row
 
 
+def _soak_catalog_id(store: AdmissionStore, row: Admission) -> str:
+    base = admission_catalog_id(intended_class=row.intended_class, file_hash=row.file_hash)
+    # A failed physical soak retains its immutable Plane catalog binding. A
+    # later submission must exercise its own workload and collect its own report.
+    for prior in store.list_for(row.tenant_id, intended_class=row.intended_class):
+        if (prior.file_hash == row.file_hash and prior.lab_assignment
+                and prior.lab_assignment.get("catalog_id") == base
+                and prior.verdict is AdmissionVerdict.DENY and prior.resolved_by == "sandbox"
+                and prior.reason == SOAK_FAILED and prior.sandbox_soak_ok is False
+                and prior.sandbox_egress_ok is True and prior.sandbox_report_sha256
+                and prior.resolved_at is not None and prior.resolved_at < row.created_at):
+            return f"upload-retry-{row.id.hex}"
+    return base
+
+
 async def advance_admission_async(
     store: AdmissionStore,
     tenant_id: uuid.UUID,
@@ -474,9 +489,7 @@ async def advance_admission_async(
         return advanced
 
     if plane is not None:
-        catalog_id = admission_catalog_id(
-            intended_class=advanced.intended_class, file_hash=advanced.file_hash
-        )
+        catalog_id = _soak_catalog_id(store, advanced)
         try:
             queued = await plane.queue_lab_soak(
                 tenant_id,
@@ -617,9 +630,8 @@ async def resolve_admission_async(
         return updated
     if plane is None:
         return updated
-    catalog_id = admission_catalog_id(
-        intended_class=updated.intended_class, file_hash=updated.file_hash
-    )
+    catalog_id = (updated.lab_assignment["catalog_id"] if updated.lab_assignment else
+                  admission_catalog_id(intended_class=updated.intended_class, file_hash=updated.file_hash))
     try:
         await plane.promote_catalog(
             tenant_id,

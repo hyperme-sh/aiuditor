@@ -329,3 +329,25 @@ async def test_promotion_retry_refuses_incomplete_original_authority(invalid_met
     assert failure.value.status_code == 409
     assert plane.attempts == []
     assert store.get(tenant, row.id) == row
+
+
+@pytest.mark.asyncio
+async def test_new_soak_after_measured_failure_has_independent_catalog():
+    store, tenant, plane = AdmissionStore(), uuid.uuid4(), FakePlaneHop()
+    body = AdmissionCreate(file_hash="sha256:" + "b"*64, format="gguf", license="mit",
+                           intended_class="agx-large", size_bytes=1024)
+    first = await submit_admission_async(store, tenant, body, plane=plane)
+    denied = record_sandbox_result(store, tenant, first.id, AdmissionSandboxReport(
+        soak_passed=False, egress_ok=True, egress_reason="overlay_publish_only"))
+    store.put(denied.model_copy(update={"sandbox_report_sha256": "a"*64}))
+    retry = await submit_admission_async(store, tenant, body, plane=plane)
+    assert retry.lab_assignment["catalog_id"] != first.lab_assignment["catalog_id"]
+    assert retry.lab_assignment["admission_id"] == str(retry.id)
+    assert retry.verdict is None
+    assert store.get(tenant, first.id).verdict is AdmissionVerdict.DENY
+    assert plane.promotions == []
+    record_sandbox_result(store, tenant, retry.id, AdmissionSandboxReport(
+        soak_passed=True, egress_ok=True, egress_reason="overlay_publish_only"))
+    await resolve_admission_async(store, tenant, retry.id, AdmissionResolve(
+        verdict=AdmissionVerdict.ALLOW), resolved_by="test-reviewer", plane=plane)
+    assert plane.promotions[0]["catalog_id"] == retry.lab_assignment["catalog_id"]
