@@ -582,6 +582,15 @@ class AdmissionQuarantineRetry(BaseModel):
     source_ref: str | None = Field(default=None, max_length=512)
 
 
+class AdmissionFailedRetry(BaseModel):
+    """Explicit compare-and-swap retry of a machine-denied lab attempt."""
+    model_config = {"extra": "forbid"}
+    request_id: uuid.UUID
+    expected_job_id: uuid.UUID
+    expected_report_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_ref: str = Field(min_length=1, max_length=512)
+
+
 class AdmissionResolve(BaseModel):
     """Allow or deny an uploaded artifact. LLM is never the resolver."""
 
@@ -621,6 +630,7 @@ class Admission(BaseModel):
     sandbox_egress_reason: str | None = None
     lab_assignment: dict | None = None
     sandbox_report_sha256: str | None = None
+    lab_attempt_history: list[dict] = Field(default_factory=list)
     created_at: datetime
     resolved_at: datetime | None = None
 

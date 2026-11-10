@@ -84,9 +84,18 @@ async def authenticated_report(request):
 def _apply(row, report, now):
     if row is None:
         raise HTTPException(404, "Admission not found")
-    if row.lab_assignment != Assignment.model_validate(report.model_dump(include=set(Assignment.model_fields))).model_dump(mode="json"):
-        raise HTTPException(409, "Report does not match the assigned lab run")
+    assignment = Assignment.model_validate(report.model_dump(include=set(Assignment.model_fields))).model_dump(mode="json")
     digest = report.evidence_hash()
+    if row.lab_attempt_history:
+        from aiuditor_service.admission_retry import validate_history
+        for attempt in validate_history(row):
+            previous = attempt['snapshot']
+            if previous['lab_assignment'] == assignment:
+                if previous['sandbox_report_sha256'] != digest:
+                    raise HTTPException(409, "Lab run already binds different evidence")
+                return row  # Acknowledge old immutable evidence without changing the current run.
+    if row.lab_assignment != assignment:
+        raise HTTPException(409, "Report does not match the assigned lab run")
     if row.sandbox_report_sha256 is not None:
         if row.sandbox_report_sha256 != digest:
             raise HTTPException(409, "Lab run already binds different evidence")

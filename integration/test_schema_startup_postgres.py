@@ -276,3 +276,28 @@ def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(i
             if state in ('set_role', 'inherit_owner', 'mixed_owner', 'admin_owner'):db.execute(text(f'DROP ROLE IF EXISTS "{extra}"'))
             if state == 'mixed_owner':db.execute(text(f'DROP ROLE IF EXISTS "{bridge}"'))
         admin.dispose()
+
+
+def test_admission_history_upgrade_preserves_existing_denial(isolated_owner_db):
+    import json
+    url=isolated_owner_db
+    provision_owner(url,revision='aiuditor_0061_owned_outbox')
+    engine=create_engine(url);tenant=uuid.uuid4();admission=uuid.uuid4()
+    try:
+        with engine.begin() as c:
+            c.execute(text('INSERT INTO tenants(id,name,is_active) VALUES(:id,:name,true)'),{'id':tenant,'name':str(tenant)})
+            c.execute(text("""INSERT INTO aiuditor_admissions
+                (id,tenant_id,file_hash,format,license,intended_class,status,verdict,reason,
+                 resolved_by,sandbox_soak_ok,sandbox_egress_ok,sandbox_report_sha256,created_at,resolved_at)
+                VALUES(:id,:tenant,:hash,'gguf','mit','agx-large','denied','deny','soak failed',
+                 'sandbox',false,true,:receipt,now(),now())"""),
+                {'id':admission,'tenant':tenant,'hash':'sha256:'+'a'*64,'receipt':'b'*64})
+            before=c.scalar(text('SELECT row_to_json(a)::text FROM aiuditor_admissions a WHERE id=:id'),{'id':admission})
+        schema_startup.upgrade_schema(url)
+        schema_startup.upgrade_schema(url)
+        with engine.connect() as c:
+            after=json.loads(c.scalar(text('SELECT row_to_json(a)::text FROM aiuditor_admissions a WHERE id=:id'),{'id':admission}))
+        assert after.pop('lab_attempt_history')==[]
+        assert after==json.loads(before)
+        assert owner_revision(url)==schema_startup.owner_head()
+    finally:engine.dispose()

@@ -53,6 +53,7 @@ from aiuditor_service.domain.models import (
     AdmissionCreate,
     AdmissionResolve,
     AdmissionQuarantineRetry,
+    AdmissionFailedRetry,
     AdmissionSandboxReport,
     Approval,
     ApprovalCreate,
@@ -1152,6 +1153,24 @@ async def retry_admission_quarantine(request: Request, admission_id: uuid.UUID,
     if row.verdict is not None:
         raise HTTPException(409, "Admission already resolved")
     from aiuditor_service.admission import advance_admission_async
+    return await advance_admission_async(store, tenant_id, admission_id,
+        body=AdmissionCreate(file_hash=row.file_hash, format=row.format,
+            quant=row.quant, license=row.license, intended_class=row.intended_class,
+            size_bytes=row.size_bytes, source_ref=body.source_ref),
+        plane=getattr(request.app.state, "plane_hop", None), approvals=_approvals(request))
+
+
+@router.post("/admissions/{admission_id}/retry", response_model=Admission,
+    summary="Explicitly retry a machine-denied lab attempt while preserving its complete receipt")
+async def retry_failed_admission(request: Request, admission_id: uuid.UUID,
+    body: AdmissionFailedRetry) -> Admission:
+    require_grant_write(role_from_request(request))
+    tenant_id = await asyncio.to_thread(require_auditor_actor, request)
+    actor = await resolver_subject(request)
+    from aiuditor_service.admission_retry import begin_failed_retry
+    from aiuditor_service.admission import advance_admission_async
+    store = _admissions(request)
+    row = await asyncio.to_thread(begin_failed_retry,store.persist, tenant_id, admission_id, body, actor)
     return await advance_admission_async(store, tenant_id, admission_id,
         body=AdmissionCreate(file_hash=row.file_hash, format=row.format,
             quant=row.quant, license=row.license, intended_class=row.intended_class,
