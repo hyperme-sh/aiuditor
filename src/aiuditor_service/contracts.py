@@ -97,6 +97,7 @@ def _put_contract(
     body: ContractCreate,
     *,
     now: datetime | None = None,
+    expected_rail: str = SPINE_RAIL,
 ) -> Contract:
     clock = _now(now)
     until = body.until
@@ -105,7 +106,7 @@ def _put_contract(
     if until <= clock:
         raise HTTPException(status_code=400, detail=CONTRACT_UNTIL_PAST)
     rail = (body.rail or SPINE_RAIL).strip().lower()
-    if rail != SPINE_RAIL:
+    if rail != expected_rail:
         raise HTTPException(status_code=400, detail=CONTRACT_RAIL)
     row = Contract(
         id=uuid.uuid4(),
@@ -179,10 +180,10 @@ def _bind_contract(
     return updated
 
 
-def _checkout_matches(row: Contract, body: ContractFulfill, clock: datetime) -> None:
+def _checkout_matches(row: Contract, body: ContractFulfill, clock: datetime, rail: str) -> None:
     wanted = {("renter", body.renter_subject), ("host", body.host_subject)}
     actual = {(party.role, party.subject) for party in row.parties if party.role in {"renter", "host"}}
-    if wanted != actual or set(row.meters) != set(_meters(body.meters)) or row.rail != SPINE_RAIL:
+    if wanted != actual or set(row.meters) != set(_meters(body.meters)) or row.rail != rail:
         raise HTTPException(409, "Checkout contract does not match lease authority")
     if row.status is not ContractStatus.SIGNED:
         raise HTTPException(409, CONTRACT_NOT_SIGNED)
@@ -196,12 +197,12 @@ def _checkout_matches(row: Contract, body: ContractFulfill, clock: datetime) -> 
 
 def fulfill_checkout_contract(
     store: ContractStore, tenant_id: uuid.UUID, body: ContractFulfill,
-    *, now: datetime | None = None,
+    *, now: datetime | None = None, rail: str = SPINE_RAIL,
 ) -> Contract:
     # The owner commits before the HTTP route acknowledges. A lost reply can
     # replay by tenant/lease without duplicate grants or cross-tenant SQL.
     with store.persist.checkout_contract_scope(tenant_id, body.lease_id, body.contract_id):
-        return _fulfill_checkout_contract(store, tenant_id, body, now=now)
+        return _fulfill_checkout_contract(store, tenant_id, body, now=now, rail=rail)
 
 
 def _fulfill_checkout_contract(
@@ -209,7 +210,7 @@ def _fulfill_checkout_contract(
     tenant_id: uuid.UUID,
     body: ContractFulfill,
     *,
-    now: datetime | None = None,
+    now: datetime | None = None, rail: str = SPINE_RAIL,
 ) -> Contract:
     """Mint or bind a signed Contract for lease checkout / first motion.
 
@@ -222,7 +223,7 @@ def _fulfill_checkout_contract(
     if existing is not None:
         if body.contract_id is not None and body.contract_id != existing.id:
             raise HTTPException(409, LEASE_ALREADY_BOUND)
-        _checkout_matches(existing, body, clock)
+        _checkout_matches(existing, body, clock, rail)
         if existing.signed_by == CHECKOUT_SIGNER and existing.until - existing.created_at != timedelta(hours=body.reserved_hours):
             raise HTTPException(409, "Checkout replay changes reserved duration")
         if existing.signed_by == CHECKOUT_SIGNER and (existing.connection_id != body.connection_id or existing.dispute_tip != _safe_text(body.dispute_tip)):
@@ -232,7 +233,7 @@ def _fulfill_checkout_contract(
         named = store.get(tenant_id, body.contract_id)
         if named is None:
             raise HTTPException(404, CONTRACT_NOT_FOUND)
-        _checkout_matches(named, body, clock)
+        _checkout_matches(named, body, clock, rail)
         return _bind_contract(
             store, tenant_id, body.contract_id, ContractBind(lease_id=body.lease_id)
         )
@@ -247,13 +248,13 @@ def _fulfill_checkout_contract(
                 ContractParty(role="host", subject=body.host_subject),
             ],
             meters=body.meters,
-            rail=SPINE_RAIL,
+            rail=rail,
             until=until,
             dispute_tip=body.dispute_tip,
             connection_id=body.connection_id,
             lease_id=body.lease_id,
         ),
-        now=clock,
+        now=clock, expected_rail=rail,
     )
     return sign_contract(
         store, tenant_id, row.id, signed_by=CHECKOUT_SIGNER, now=clock

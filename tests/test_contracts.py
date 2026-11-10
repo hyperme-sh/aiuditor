@@ -506,3 +506,20 @@ def test_named_contract_cannot_authorize_a_longer_reserved_window():
             renter_subject='renter@example.com', host_subject='agx-host', reserved_hours=720))
     assert refused.value.status_code == 409
     assert store.get(tenant, row.id).lease_id is None
+
+
+@pytest.mark.asyncio
+async def test_paid_checkout_scope_and_rail(http_client, tenant_a, internal_token, monkeypatch, event_sink):
+    key = 'paid-checkout-only-' + 'a' * 32
+    monkeypatch.setenv('AIUDITOR_PAID_CHECKOUT_TOKEN', key)
+    monkeypatch.setenv('AIUDITOR_PAID_CHECKOUT_TENANT_ID', str(tenant_a))
+    path = '/api/v1/aiuditor/contracts/paid/fulfill'
+    body = dict(lease_id=str(uuid.uuid4()), reserved_hours=1, renter_subject='renter', host_subject='host')
+    headers = {'X-Tenant-ID': str(tenant_a), 'X-Internal-Token': key}
+    assert (await http_client.post(path, headers=headers | {'X-Internal-Token':internal_token}, json=body)).status_code == 401
+    assert (await http_client.post(path, headers=headers | {'X-Tenant-ID':str(uuid.uuid4())}, json=body)).status_code == 403
+    first = await http_client.post(path, headers=headers, json=body)
+    assert first.status_code == 201, first.text
+    assert first.json()['rail'] == 'usdc'
+    assert (await http_client.post(path, headers=headers, json=body)).json()['id'] == first.json()['id']
+    assert (await http_client.post('/api/v1/aiuditor/contracts/fulfill',headers=headers,json=body)).status_code == 401
