@@ -26,8 +26,10 @@ the same write credential; do not claim that they can.
 Read README.md. Preserve verified tenant binding, human approval authority,
 witness write refusal and model-admission boundaries. ORM ownership is here;
 no Hypermesh ORM imports or cross-product foreign keys. Run bash scripts/check-package.sh.
-Use mock upstreams and memory persistence for package checks; qualify PostgreSQL,
-owner migrations and real witnesses separately before deployment.
+Use mock upstreams and memory persistence for package checks.
+Qualifying PostgreSQL, owner migrations and real witnesses stays in
+CI, including the nightly integration batch, not in ad-hoc agent
+runs on shared hosts.
 
 ## Package publication permission boundary
 
@@ -66,6 +68,30 @@ Infra imports the retained qualified runtime into ACR without rebuilding it.
 This exception applies only to test automation; embedded package versions and
 stable release authority remain unchanged. No production deployment, stable
 tag, approval requirement or new registry permission is authorized here.
+
+This authorization applies only to CI. Agents must not start or repeat
+these jobs by hand on shared hosts.
+
+## Integration and receipt runs
+
+No agent runs integration tests or functional API receipts by hand on hosts
+or other shared resources, and none run those suites outside CI. On a pull
+request, agents run only unit and contract tests. CI may add a smoke check
+scoped to the services the pull request touches. A toggle or configuration
+change needs a unit or contract test for that change, not a full receipt or
+end-to-end suite.
+
+The full integration suite runs once as a nightly CI batch against main.
+That batch uses a single concurrency group and cancels any run it supersedes.
+When a nightly run fails on something whose issue is already closed, CI files
+a new issue for that failure and links the closed issue when one exists.
+
+Receipts and full integration results are not a Product Sign-off gate. Green
+CI and clean reviews are enough for Sign-off.
+
+Authorized CI workflows, including test-bundle publication and existing smoke
+or owner-integration jobs, may keep running in CI. Agents must not start or
+repeat those jobs by hand on shared hosts.
 
 ## Service deployments and binary provenance
 
