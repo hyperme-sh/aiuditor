@@ -25,6 +25,9 @@ Database read failures return HTTP 503 rather than an empty snapshot or a
 missing-record response. Cached tenant rows remain intact while a read is
 unavailable; a successful empty query still reconciles deleted rows.
 
+See [the accounting interface](docs/accounting-interface.md) for signed commits,
+backend settlement capabilities and the neutral allocation response.
+
 ## Development
 
 Use Python 3.13 and uv 0.11.26. All pinned source dependencies are public;

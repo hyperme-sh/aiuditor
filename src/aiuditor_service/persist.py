@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Protocol
@@ -111,6 +111,7 @@ _ALLOWED = {
         "created_at",
     },
     "contracts": {
+        "accounting_backend", "accounting_ref", "accounting_commit_id", "accounting_commit_hash",
         "id",
         "tenant_id",
         "parties",
@@ -587,7 +588,7 @@ class SqlPersistSession:
         keys = [f"aiuditor-checkout-lease:{tenant_id}:{lease_id}"]
         if contract_id is not None:
             keys.append(f"aiuditor-checkout-contract:{tenant_id}:{contract_id}")
-        with self.candidate_scope():
+        with (self.candidate_scope() if _SCOPE.get() is None else nullcontext()):
             session = _SCOPE.get()
             for key in sorted(keys):
                 session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key})

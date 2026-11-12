@@ -326,6 +326,8 @@ async def allocate_service(
         lease_id=lease_id,
         purpose=purpose,
         exp=current.until,
+        funding_state=offered.funding_state if offered else "pending",
+        accounting_ref=offered.accounting_ref if offered else None,
         billing_record_id=offered.billing_record_id if offered else None,
         payment_amount_atoms=offered.payment_amount_atoms if offered else None,
         payment_test_credit_available=(

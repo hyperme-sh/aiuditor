@@ -212,7 +212,9 @@ class OfferedLease:
     device_id: uuid.UUID
     purpose: str
     contract_id: uuid.UUID | None = None
-    # Pending USDC payment Hypermesh opened for this lease.
+    funding_state: str = "pending"
+    accounting_ref: str | None = None
+    # Deprecated fields are retained only for the existing v1 allocation bridge.
     billing_record_id: uuid.UUID | None = None
     payment_amount_atoms: int | None = None
     payment_test_credit_available: bool = False
@@ -558,7 +560,17 @@ class HttpPlaneHop:
             raw_id = body.get("id") or body.get("lease_id")
             raw_device = body.get("device_id") or device_id
             raw_cid = body.get("contract_id") or contract_id
+            funding_state = body.get("funding_state", "pending")
+            accounting_ref = body.get("accounting_ref")
+            if accounting_ref is None and body.get("billing_record_id"):
+                accounting_ref = str(body["billing_record_id"])
+            if funding_state not in {"pending", "funded"} or (accounting_ref is not None and
+                (not isinstance(accounting_ref, str) or not 1 <= len(accounting_ref) <= 256)):
+                raise ValueError("Invalid accounting view")
+            if funding_state == "funded" and accounting_ref is None:
+                raise ValueError("Funded lease requires an accounting reference")
             return OfferedLease(
+                funding_state=funding_state, accounting_ref=accounting_ref,
                 lease_id=uuid.UUID(str(raw_id)),
                 device_id=uuid.UUID(str(raw_device)),
                 purpose=str(body.get("purpose") or "renter"),
@@ -856,12 +868,14 @@ class FakePlaneHop:
             tenant_id=tenant_id,
             contract_id=contract_id,
         )
+        accounting_ref = str(uuid.uuid4())
         offered = OfferedLease(
+            funding_state="pending", accounting_ref=accounting_ref,
             lease_id=lease_id,
             device_id=device_id,
             purpose="renter",
             contract_id=contract_id,
-            billing_record_id=uuid.uuid4(),
+            billing_record_id=uuid.UUID(accounting_ref),
             payment_amount_atoms=self.offer_amount_atoms,
             payment_test_credit_available=self.offer_test_credit_available,
         )

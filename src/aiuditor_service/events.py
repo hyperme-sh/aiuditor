@@ -18,3 +18,14 @@ ENVELOPE_RECORDED_V1 = "aiuditor.envelope.recorded.v1"
 SUITE_MEMBER_RECORDED_V1 = "aiuditor.suite.member.recorded.v1"
 ADMISSION_SUBMITTED_V1 = "aiuditor.admission.submitted.v1"
 ADMISSION_RESOLVED_V1 = "aiuditor.admission.resolved.v1"
+
+
+async def publish_contract(publisher, *, tenant_id, event_type, contract):
+    """Legacy rail grants retain their v1 wire; neutral grants use v2."""
+    from aiuditor_service.domain.models import LegacyContractEvent
+    if contract.rail is not None:
+        payload = LegacyContractEvent.model_validate(contract.model_dump()).to_event_payload()
+    else:
+        event_type = event_type.removesuffix('.v1') + '.v2'
+        payload = contract.to_event_payload()
+    return await publisher.publish(tenant_id=tenant_id, event_type=event_type, payload=payload)

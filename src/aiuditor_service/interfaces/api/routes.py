@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from aiuditor_service.lab_reporting import LabEnvelopeReport
+from aiuditor_service.domain.models import AccountingContract, AccountingAllocation
 
 import uuid
 from datetime import UTC, datetime
@@ -28,7 +29,6 @@ from aiuditor_service.approvals import (
     latest_for,
     require_hold_actor,
     require_program_reader,
-    require_paid_checkout,
     require_internal_actor,
     resolve_approval,
     resolver_subject,
@@ -96,6 +96,7 @@ from aiuditor_service.domain.models import (
 )
 from aiuditor_service.export import build_grant_export
 from aiuditor_service.persist import MemoryPersistSession
+from aiuditor_service.events import publish_contract
 from aiuditor_service.events import (
     ADMISSION_RESOLVED_V1,
     ADMISSION_SUBMITTED_V1,
@@ -805,17 +806,14 @@ async def delete_policy(request: Request, policy_id: uuid.UUID) -> None:
     "/contracts",
     response_model=Contract,
     status_code=status.HTTP_201_CREATED,
-    summary="Draft a spine §D contract. 1.x rail is Stripe.",
+    summary="Draft a contract with an opaque accounting binding.",
 )
 async def create_contract(request: Request, body: ContractCreate) -> Contract:
     require_grant_write(role_from_request(request))
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = put_contract(_contracts(request), tenant_id, body)
-    await get_tenant_event_publisher().publish(
-        tenant_id=tenant_id,
-        event_type=CONTRACT_CREATED_V1,
-        payload=row.to_event_payload(),
-    )
+    await publish_contract(get_tenant_event_publisher(), tenant_id=tenant_id,
+                           event_type=CONTRACT_CREATED_V1, contract=row)
     return row
 
 
@@ -874,11 +872,8 @@ async def sign_contract_route(request: Request, contract_id: uuid.UUID) -> Contr
     row = sign_contract(
         _contracts(request), tenant_id, contract_id, signed_by=signed_by
     )
-    await get_tenant_event_publisher().publish(
-        tenant_id=tenant_id,
-        event_type=CONTRACT_SIGNED_V1,
-        payload=row.to_event_payload(),
-    )
+    await publish_contract(get_tenant_event_publisher(), tenant_id=tenant_id,
+                           event_type=CONTRACT_SIGNED_V1, contract=row)
     return row
 
 
@@ -893,11 +888,8 @@ async def bind_contract_route(
     require_grant_write(role_from_request(request))
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = bind_contract(_contracts(request), tenant_id, contract_id, body)
-    await get_tenant_event_publisher().publish(
-        tenant_id=tenant_id,
-        event_type=CONTRACT_BOUND_V1,
-        payload=row.to_event_payload(),
-    )
+    await publish_contract(get_tenant_event_publisher(), tenant_id=tenant_id,
+                           event_type=CONTRACT_BOUND_V1, contract=row)
     return row
 
 
@@ -912,26 +904,24 @@ async def fulfill_contract_route(
 ) -> Contract:
     require_grant_write(role_from_request(request))
     tenant_id = require_internal_actor(request)
+    from aiuditor_service.accounting import selected_backend
+    if selected_backend() == 'http' and body.contract_id is None:
+        raise HTTPException(409, 'External accounting requires a signed commit callback')
     row = fulfill_checkout_contract(_contracts(request), tenant_id, body)
-    await get_tenant_event_publisher().publish(
-        tenant_id=tenant_id,
-        event_type=CONTRACT_FULFILLED_V1,
-        payload=row.to_event_payload(),
-    )
+    await publish_contract(get_tenant_event_publisher(), tenant_id=tenant_id,
+                           event_type=CONTRACT_FULFILLED_V1, contract=row)
     return row
 
 
-@router.post("/contracts/paid/fulfill", response_model=Contract, status_code=201)
-async def fulfill_paid_contract(request: Request, body: ContractFulfill) -> Contract:
+@router.post("/contracts/accounting/committed", response_model=AccountingContract, status_code=201)
+@router.post("/contracts/paid/fulfill", response_model=Contract, status_code=201, deprecated=True)
+async def fulfill_accounting_contract(request: Request) -> Contract:
+    from aiuditor_service.accounting import authenticated_commit, apply_commit
     require_grant_write(role_from_request(request))
-    tenant = require_paid_checkout(request)
-    rail = os.getenv("AIUDITOR_PAID_CHECKOUT_RAIL", "usdc")
-    if rail not in {"stripe", "usdc"}:
-        raise HTTPException(status_code=503, detail="Paid checkout rail is misconfigured")
-    row = fulfill_checkout_contract(_contracts(request), tenant, body, rail=rail)
-    await get_tenant_event_publisher().publish(
-        tenant_id=tenant, event_type=CONTRACT_FULFILLED_V1, payload=row.to_event_payload()
-    )
+    event = await authenticated_commit(request)
+    row = apply_commit(_contracts(request), event)
+    await publish_contract(get_tenant_event_publisher(), tenant_id=event.tenant_id,
+                           event_type=CONTRACT_FULFILLED_V1, contract=row)
     return row
 
 
@@ -967,6 +957,7 @@ async def get_catalog_service(request: Request, service_id: uuid.UUID) -> Catalo
     return row
 
 
+@router.post("/catalog/{service_id}/allocate/accounting", response_model=AccountingAllocation, status_code=201)
 @router.post(
     "/catalog/{service_id}/allocate",
     response_model=ServiceAllocation,
@@ -1394,7 +1385,7 @@ async def file_violation_route(
 @router.post(
     "/contracts/{contract_id}/evaluate",
     response_model=list[ContractViolation],
-    summary="Evaluate term, cert-fail, deny budget, and host unpaid.",
+    summary="Evaluate term, cert-fail, deny budget, and settlement overdue.",
 )
 async def evaluate_contract_route(
     request: Request, contract_id: uuid.UUID
@@ -1433,7 +1424,11 @@ async def evaluate_contract_route(
         if row.lease_id is not None
         else 0
     )
+    from aiuditor_service.accounting import settlement_overdue
     kind = evaluate_kind(row, host=host, lease=lease, denied=denied)
+    if kind is None and lease is not None and lease.status in {"active", "starting"}:
+        overdue = await settlement_overdue(row)
+        kind = evaluate_kind(row, host=host, lease=lease, denied=denied, settlement_overdue=overdue)
     if kind is None:
         return existing
     filed, _updated = put_violation(

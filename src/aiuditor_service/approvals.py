@@ -92,19 +92,6 @@ def require_program_reader(request: Request) -> uuid.UUID:
     return require_hold_actor(request)
 
 
-def require_paid_checkout(request: Request) -> uuid.UUID:
-    token = os.environ.get("AIUDITOR_PAID_CHECKOUT_TOKEN", "")
-    if len(token) < 32 or not request_has_internal_token(request, token):
-        raise HTTPException(401, "Paid checkout credential required")
-    try:
-        tenant = uuid.UUID(os.environ.get("AIUDITOR_PAID_CHECKOUT_TENANT_ID", ""))
-    except ValueError:
-        raise HTTPException(503, "Paid checkout tenant unavailable") from None
-    if request.headers.get("X-Tenant-ID") != str(tenant):
-        raise HTTPException(403, "Paid checkout tenant mismatch")
-    request.state.tenant_id = tenant
-    return tenant
-
 
 def require_internal_actor(request: Request) -> uuid.UUID:
     """Door consume only. A named human resolves; they do not consume."""

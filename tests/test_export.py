@@ -93,7 +93,8 @@ def test_grant_export_is_lock_fields_only():
     dumped = payload.model_dump(mode="json")
     assert dumped["tenant_id"] == str(tenant)
     assert len(dumped["contracts"]) == 1
-    assert dumped["contracts"][0]["rail"] == "stripe"
+    assert "rail" not in dumped["contracts"][0]
+    assert dumped["contracts"][0]["accounting_backend"] == "internal"
     assert dumped["violations"][0]["kind"] == "term"
     assert dumped["approvals"][0]["who"] == "renter-key"
     keys = _walk_keys(dumped)
