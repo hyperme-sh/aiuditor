@@ -95,7 +95,7 @@ def declaration():
             "class_id": "agx-large",
             "backend": "cuda-jetson",
             "runtime": "nvidia",
-            "runtime_image_digest": "ghcr.io/fyberlabs/hypermesh-llama@sha256:"
+            "runtime_image_digest": "registry.example.com/runtime/model@sha256:"
             + "c" * 64,
             "configuration": configuration,
             "configuration_sha256": canonical_hash(configuration),
