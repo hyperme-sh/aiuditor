@@ -36,7 +36,6 @@ _DEFAULT_ACTION = {
     ViolationKind.ABUSE: ViolationAction.STOP,
 }
 
-_UNPAID_SELL = frozenset({"paused", "off"})
 
 
 def _now(clock: datetime | None) -> datetime:
@@ -56,15 +55,6 @@ def deny_count(approvals: ApprovalStore, tenant_id: uuid.UUID, lease_id: uuid.UU
     )
 
 
-def host_unpaid(host: HostView | None) -> bool:
-    if host is None:
-        return False
-    if host.schedule_hold:
-        return True
-    sell = (host.sell_state or "").strip().lower()
-    return sell in _UNPAID_SELL
-
-
 def cert_failed(host: HostView | None) -> bool:
     if host is None:
         return False
@@ -79,6 +69,7 @@ def evaluate_kind(
     host: HostView | None = None,
     lease: LeaseView | None = None,
     denied: int = 0,
+    settlement_overdue: bool = False,
 ) -> ViolationKind | None:
     clock = _now(now)
     until = contract.until
@@ -90,7 +81,7 @@ def evaluate_kind(
         return ViolationKind.CERT_FAIL
     if denied >= DENY_BUDGET:
         return ViolationKind.POLICY_DENY
-    if host_unpaid(host) and lease is not None and lease.status in {"active", "starting"}:
+    if settlement_overdue and lease is not None and lease.status in {"active", "starting"}:
         return ViolationKind.ABUSE
     return None
 

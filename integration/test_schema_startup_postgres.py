@@ -276,3 +276,28 @@ def test_explicit_runtime_verification_uses_fresh_owner_and_no_metadata_writes(i
             if state in ('set_role', 'inherit_owner', 'mixed_owner', 'admin_owner'):db.execute(text(f'DROP ROLE IF EXISTS "{extra}"'))
             if state == 'mixed_owner':db.execute(text(f'DROP ROLE IF EXISTS "{bridge}"'))
         admin.dispose()
+
+
+def test_accounting_upgrade_preserves_legacy_grant(isolated_owner_db):
+    url = isolated_owner_db
+    provision_owner(url, revision='aiuditor_0062_routing_policy')
+    tenant, contract = uuid.uuid4(), uuid.uuid4()
+    engine = create_engine(url)
+    try:
+        with engine.begin() as db:
+            db.execute(text('INSERT INTO tenants(id,name,is_active) VALUES(:id,:name,true)'),
+                       dict(id=tenant,name=str(tenant)))
+            db.execute(text("""INSERT INTO aiuditor_contracts
+                (id,tenant_id,parties,meters,rail,until,status,created_at)
+                VALUES (:id,:tenant,'[]','[]','stripe',now()+interval '2 hours','signed',now())"""),
+                dict(id=contract,tenant=tenant))
+            before = dict(db.execute(text('SELECT * FROM aiuditor_contracts WHERE id=:id'),dict(id=contract)).mappings().one())
+        schema_startup.upgrade_schema(url)
+        schema_startup.upgrade_schema(url)
+        with engine.connect() as db:
+            after = dict(db.execute(text('SELECT * FROM aiuditor_contracts WHERE id=:id'),dict(id=contract)).mappings().one())
+        assert {key:after[key] for key in before} == before
+        assert after['accounting_backend'] == 'http'
+        assert after['accounting_ref'] is None and after['accounting_commit_id'] is None
+    finally:
+        engine.dispose()

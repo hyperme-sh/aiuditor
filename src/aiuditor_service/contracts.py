@@ -1,6 +1,6 @@
 """AIuditor Contract. Spine §D only. Not a handoff package.
 
-parties, meters, rail, until, dispute tip. 1.x rail is Stripe.
+Parties, meters, accounting binding, expiry and dispute information.
 Prompt bodies are not stored. Tables + RLS are Alembic 0025. Puts write
 through PersistSession (SQL when DATABASE_URL is real).
 """
@@ -31,7 +31,7 @@ LEASE_ALREADY_BOUND = "lease already cites a contract"
 CONTRACT_UNTIL_PAST = "until must be in the future"
 CONTRACT_PARTIES = "at least two parties with a role and subject are required"
 CONTRACT_METER = "meters must be a non-empty subset of the spine E vocabulary"
-CONTRACT_RAIL = "1.x rail is stripe"
+CONTRACT_RAIL = "Legacy rail does not match the requested contract"
 CONTRACT_PARTY_ROLE = "party role must be renter, host, auditor, or billing"
 CHECKOUT_SIGNER = "checkout"
 
@@ -43,7 +43,7 @@ SPINE_METERS = frozenset(
         "capacity_block",
     }
 )
-SPINE_RAIL = "stripe"
+SPINE_RAIL = None  # Compatibility keyword default; new contracts are provider-neutral.
 PARTY_ROLES = frozenset({"renter", "host", "auditor", "billing"})
 
 
@@ -97,7 +97,7 @@ def _put_contract(
     body: ContractCreate,
     *,
     now: datetime | None = None,
-    expected_rail: str = SPINE_RAIL,
+    expected_rail: str | None = None,
 ) -> Contract:
     clock = _now(now)
     until = body.until
@@ -105,15 +105,19 @@ def _put_contract(
         until = until.replace(tzinfo=UTC)
     if until <= clock:
         raise HTTPException(status_code=400, detail=CONTRACT_UNTIL_PAST)
-    rail = (body.rail or SPINE_RAIL).strip().lower()
-    if rail != expected_rail:
+    rail = body.rail
+    if expected_rail is not None and rail != expected_rail:
         raise HTTPException(status_code=400, detail=CONTRACT_RAIL)
+    from aiuditor_service.accounting import selected_backend
+    backend = body.accounting_backend if "accounting_backend" in body.model_fields_set else selected_backend()
     row = Contract(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         parties=_parties(body.parties),
         meters=_meters(body.meters),
         rail=rail,
+        accounting_backend=backend,
+        accounting_ref=body.accounting_ref,
         until=until,
         dispute_tip=_safe_text(body.dispute_tip),
         connection_id=body.connection_id,
@@ -183,7 +187,7 @@ def _bind_contract(
 def _checkout_matches(row: Contract, body: ContractFulfill, clock: datetime, rail: str) -> None:
     wanted = {("renter", body.renter_subject), ("host", body.host_subject)}
     actual = {(party.role, party.subject) for party in row.parties if party.role in {"renter", "host"}}
-    if wanted != actual or set(row.meters) != set(_meters(body.meters)) or row.rail != rail:
+    if wanted != actual or set(row.meters) != set(_meters(body.meters)) or (rail is not None and row.rail != rail):
         raise HTTPException(409, "Checkout contract does not match lease authority")
     if row.status is not ContractStatus.SIGNED:
         raise HTTPException(409, CONTRACT_NOT_SIGNED)

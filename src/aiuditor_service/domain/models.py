@@ -8,11 +8,12 @@ uploaded-model admission verdicts.
 from __future__ import annotations
 
 from aiuditor_service.routing_contracts import RoutingPolicy
+from aiuditor_service.accounting_contracts import AccountingBinding
 
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Self
+from typing import Self, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, model_validator, computed_field
@@ -325,12 +326,11 @@ class ContractParty(BaseModel):
     subject: str = Field(..., min_length=1, max_length=256)
 
 
-class ContractCreate(BaseModel):
+class ContractCreate(AccountingBinding):
     """Contract terms and accounting compatibility fields. No prompt body."""
 
     parties: list[ContractParty] = Field(..., min_length=2, max_length=8)
     meters: list[str] = Field(..., min_length=1, max_length=8)
-    rail: str = Field(default="stripe", max_length=32)
     until: datetime
     dispute_tip: str | None = Field(default=None, max_length=120)
     connection_id: uuid.UUID | None = None
@@ -360,7 +360,42 @@ class ContractFulfill(BaseModel):
     connection_id: uuid.UUID | None = None
 
 
-class Contract(BaseModel):
+class Contract(AccountingBinding):
+    """Portable grant object. Not a handoff package. Not fyber.auditor."""
+
+    accounting_commit_id: uuid.UUID | None = None
+    accounting_commit_hash: str | None = None
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    parties: list[ContractParty]
+    meters: list[str]
+    until: datetime
+    dispute_tip: str | None = None
+    connection_id: uuid.UUID | None = None
+    lease_id: uuid.UUID | None = None
+    status: ContractStatus
+    signed_by: str | None = None
+    created_at: datetime
+    signed_at: datetime | None = None
+
+    def to_event_payload(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "tenant_id": str(self.tenant_id),
+            "parties": [party.model_dump() for party in self.parties],
+            "meters": list(self.meters),
+            "accounting_backend": self.accounting_backend,
+            "accounting_ref": self.accounting_ref,
+            "until": self.until.isoformat(),
+            "dispute_tip": self.dispute_tip,
+            "connection_id": str(self.connection_id) if self.connection_id else None,
+            "lease_id": str(self.lease_id) if self.lease_id else None,
+            "status": self.status.value,
+            "signed_by": self.signed_by,
+        }
+
+
+class LegacyContractEvent(BaseModel):
     """Portable grant object. Not a handoff package. Not fyber.auditor."""
 
     id: uuid.UUID
@@ -704,13 +739,12 @@ class CrawlRunResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
-class ContractGrant(BaseModel):
+class ContractGrant(AccountingBinding):
     """Signed grant a sibling product may cite. Not a TURN/oracle/payment row."""
 
     id: uuid.UUID
     tenant_id: uuid.UUID
     status: ContractStatus
-    rail: str
     meters: list[str]
     until: datetime
     writer: str
@@ -724,6 +758,8 @@ class ContractGrant(BaseModel):
             tenant_id=row.tenant_id,
             status=row.status,
             rail=row.rail,
+            accounting_backend=row.accounting_backend,
+            accounting_ref=row.accounting_ref,
             meters=list(row.meters),
             until=row.until,
             writer=writer,
@@ -820,9 +856,9 @@ class ServiceAllocation(BaseModel):
     lease_id: uuid.UUID | None = None
     purpose: str = "lease"
     exp: datetime | None = None
-    # Set when this grant opened a new lease: the pending USDC payment the
-    # renter settles before the lease starts. Pay it in USDC, or with
-    # POST /api/v1/payments/usdc/lease-payments/{id}/test-credit where offered.
+    funding_state: Literal["pending", "funded"] = "pending"
+    accounting_ref: str | None = None
+    # Deprecated v1 allocation fields; neutral clients use AccountingAllocation.
     billing_record_id: uuid.UUID | None = None
     payment_amount_atoms: int | None = None
     payment_test_credit_available: bool = False
@@ -836,3 +872,21 @@ class ServiceAllocation(BaseModel):
             "lease_id": str(self.lease_id) if self.lease_id else None,
             "purpose": self.purpose,
         }
+
+
+class AccountingContract(Contract):
+    """Provider-neutral projection; stored legacy data is preserved privately."""
+    rail: str | None = Field(default=None, exclude=True)
+    accounting_commit_hash: str | None = Field(default=None, exclude=True)
+
+
+class AccountingAllocation(BaseModel):
+    service_id: uuid.UUID
+    contract: AccountingContract
+    connection_id: uuid.UUID
+    backend: ServiceBackend
+    lease_id: uuid.UUID | None = None
+    purpose: str = 'lease'
+    exp: datetime | None = None
+    funding_state: Literal['pending', 'funded']
+    accounting_ref: str | None = None

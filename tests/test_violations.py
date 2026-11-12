@@ -72,7 +72,7 @@ def test_term_until_is_refund():
     )
 
 
-def test_cert_fail_and_deny_budget_and_unpaid():
+def test_cert_fail_and_deny_budget_and_settlement_overdue():
     tenant = uuid.uuid4()
     store = ContractStore()
     row = _signed(store, tenant)
@@ -110,6 +110,7 @@ def test_cert_fail_and_deny_budget_and_unpaid():
                 schedule_hold=True,
             ),
             lease=lease,
+            settlement_overdue=True,
         )
         is ViolationKind.ABUSE
     )

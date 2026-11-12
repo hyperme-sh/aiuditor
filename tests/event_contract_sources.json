@@ -50,25 +50,25 @@
     },
     "aiuditor.contract.bound.v1": {
       "method": "to_event_payload",
-      "model": "Contract",
+      "model": "LegacyContractEvent",
       "module": "aiuditor_service.domain.models",
       "owner": "aiuditor"
     },
     "aiuditor.contract.created.v1": {
       "method": "to_event_payload",
-      "model": "Contract",
+      "model": "LegacyContractEvent",
       "module": "aiuditor_service.domain.models",
       "owner": "aiuditor"
     },
     "aiuditor.contract.fulfilled.v1": {
       "method": "to_event_payload",
-      "model": "Contract",
+      "model": "LegacyContractEvent",
       "module": "aiuditor_service.domain.models",
       "owner": "aiuditor"
     },
     "aiuditor.contract.signed.v1": {
       "method": "to_event_payload",
-      "model": "Contract",
+      "model": "LegacyContractEvent",
       "module": "aiuditor_service.domain.models",
       "owner": "aiuditor"
     },
@@ -99,6 +99,30 @@
     "aiuditor.suite.member.recorded.v1": {
       "method": "to_event_payload",
       "model": "SuiteMember",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.contract.bound.v2": {
+      "method": "to_event_payload",
+      "model": "Contract",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.contract.created.v2": {
+      "method": "to_event_payload",
+      "model": "Contract",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.contract.fulfilled.v2": {
+      "method": "to_event_payload",
+      "model": "Contract",
+      "module": "aiuditor_service.domain.models",
+      "owner": "aiuditor"
+    },
+    "aiuditor.contract.signed.v2": {
+      "method": "to_event_payload",
+      "model": "Contract",
       "module": "aiuditor_service.domain.models",
       "owner": "aiuditor"
     }

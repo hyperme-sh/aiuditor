@@ -53,7 +53,7 @@ def _draft(**overrides) -> ContractCreate:
     return ContractCreate(**body)
 
 
-def test_unknown_meter_and_rail_are_refused():
+def test_unknown_meter_is_refused_and_legacy_binding_remains_readable():
     store = ContractStore()
     tenant = uuid.uuid4()
     with pytest.raises(HTTPException) as meter:
@@ -63,9 +63,9 @@ def test_unknown_meter_and_rail_are_refused():
             _draft(meters=["tokens"]),
         )
     assert meter.value.detail == CONTRACT_METER
-    with pytest.raises(HTTPException) as rail:
-        put_contract(store, tenant, _draft(rail="usdc"))
-    assert rail.value.detail == CONTRACT_RAIL
+    legacy = put_contract(store, tenant, _draft(rail="usdc"))
+    assert legacy.accounting_backend == "http"
+    assert legacy.rail == "usdc"
 
 
 def test_until_in_the_past_is_refused():
@@ -155,7 +155,8 @@ def test_checkout_auto_signs_and_binds_a_lease():
     assert row.status is ContractStatus.SIGNED
     assert row.signed_by == CHECKOUT_SIGNER
     assert row.lease_id == lease
-    assert row.rail == "stripe"
+    assert row.accounting_backend == "internal"
+    assert row.rail is None
     assert "wall_time" in row.meters
     assert row.until == datetime(2026, 9, 20, 2, tzinfo=UTC)
 
@@ -253,7 +254,7 @@ async def test_internal_can_fulfill_checkout_contract(
     assert body["status"] == "signed"
     assert body["signed_by"] == CHECKOUT_SIGNER
     assert body["lease_id"] == str(lease)
-    assert CONTRACT_FULFILLED_V1 in [e["event_type"] for e in event_sink]
+    assert "aiuditor.contract.fulfilled.v2" in [e["event_type"] for e in event_sink]
 
 
 @pytest.mark.asyncio
@@ -509,19 +510,10 @@ def test_named_contract_cannot_authorize_a_longer_reserved_window():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rail", ["stripe", "usdc"])
-async def test_paid_checkout_scope_and_rail(http_client, tenant_a, internal_token, monkeypatch, event_sink, rail):
-    monkeypatch.setenv("AIUDITOR_PAID_CHECKOUT_RAIL", rail)
-    key = 'paid-checkout-only-' + 'a' * 32
-    monkeypatch.setenv('AIUDITOR_PAID_CHECKOUT_TOKEN', key)
-    monkeypatch.setenv('AIUDITOR_PAID_CHECKOUT_TENANT_ID', str(tenant_a))
-    path = '/api/v1/aiuditor/contracts/paid/fulfill'
+async def test_static_paid_checkout_token_no_longer_authorizes_fulfillment(http_client, tenant_a, monkeypatch):
+    monkeypatch.setenv('AIUDITOR_PAID_CHECKOUT_TOKEN', 'legacy-paid-' + 'a'*32)
+    monkeypatch.setenv('AIUDITOR_ACCOUNTING_CALLBACK_KEY', 'b'*32)
     body = dict(lease_id=str(uuid.uuid4()), reserved_hours=1, renter_subject='renter', host_subject='host')
-    headers = {'X-Tenant-ID': str(tenant_a), 'X-Internal-Token': key}
-    assert (await http_client.post(path, headers=headers | {'X-Internal-Token':internal_token}, json=body)).status_code == 401
-    assert (await http_client.post(path, headers=headers | {'X-Tenant-ID':str(uuid.uuid4())}, json=body)).status_code == 403
-    first = await http_client.post(path, headers=headers, json=body)
-    assert first.status_code == 201, first.text
-    assert first.json()['rail'] == rail
-    assert (await http_client.post(path, headers=headers, json=body)).json()['id'] == first.json()['id']
-    assert (await http_client.post('/api/v1/aiuditor/contracts/fulfill',headers=headers,json=body)).status_code == 401
+    response = await http_client.post('/api/v1/aiuditor/contracts/paid/fulfill', json=body,
+        headers={'X-Tenant-ID':str(tenant_a),'X-Internal-Token':'legacy-paid-' + 'a'*32})
+    assert response.status_code == 401
