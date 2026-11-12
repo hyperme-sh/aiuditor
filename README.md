@@ -28,6 +28,13 @@ unavailable; a successful empty query still reconciles deleted rows.
 See [the accounting interface](docs/accounting-interface.md) for signed commits,
 backend settlement capabilities and the neutral allocation response.
 
+## Runtime audit rules
+
+The package includes a public audit-rule baseline and supports tenant-private
+overlays outside the image. See [rule learning](docs/rule-learning.md) for the
+reviewed prompt-log/dream feedback contract, offline reward learning, validation
+and explicit private activation. Raw prompts never belong in policy records.
+
 ## Development
 
 Use Python 3.13 and uv 0.11.26. All pinned source dependencies are public;
@@ -232,8 +239,7 @@ existing authenticated tenant-session `operator:program` authority.
 Merged main builds publish `ghcr.io/hyperme-sh/aiuditor/runtime:test`. This moving
 TEST channel tracks the latest validated main build; consumers do not pin a
 version or digest. The image reports its source revision for diagnostics.
-PR checks are read-only. Jobs use debrunner while private and automatically use
-GitHub-hosted runners when the repository becomes public. Only the merged-main container workflow
+PR checks are read-only. All jobs use GitHub-hosted runners. Only the merged-main container workflow
 can push to GHCR. It verifies the built image and skips superseded source heads.
 No Actions artifacts, package bundles or test prereleases are published. Package
 checks use temporary wheel/source-archive files that are removed after validation.
