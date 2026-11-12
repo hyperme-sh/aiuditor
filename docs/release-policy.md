@@ -1,58 +1,50 @@
 # Release policy
 
-This policy applies to public and private distributions of AIuditor. The package
-version is declared in `pyproject.toml`; `release-policy.json` identifies the
-component, release line and version files. The current configured line is `0.1`.
-Do not infer the service version from another component or deployment channel.
-Patch releases must preserve accepted API contracts.
+AIuditor is distributed as a GHCR container under Apache-2.0. LICENSE and NOTICE
+ship in the runtime image. The source package version remains declared in
+`pyproject.toml`; this change does not advance it or authorize a stable release.
 
-## Validation and provenance
-
-Package CI checks source, a fresh installed wheel outside the checkout, and a
-wheel rebuilt from the source archive. Published artifacts must be the exact
-validated bytes. Record their checksums and source revision; never replace
-artifacts already published under the same version.
+## Validation and TEST distribution
 
 PR unit and contract checks and clean review determine issue completion. Full
-integration checks remain in scheduled CI; failures become new issues rather
-than holding implemented issues open. Package validation and development builds
-must work without a prior stable release.
+integration remains in scheduled CI; failures become new issues rather than
+holding implemented issues open. Development checks require no prior release.
 
-## Automated release admission
+PR checks use read-only permissions. All jobs use debrunner while the repository
+is private and automatically select GitHub-hosted runners when it becomes public. Merged main builds validate
+source/package contracts and the runtime container, then publish the moving
+`ghcr.io/hyperme-sh/aiuditor/runtime:test` channel. Only that main workflow has
+registry write permission. The publication step verifies the tested image and
+current main revision before updating TEST. Source revision and image identity
+are diagnostic checks, not pins imposed on deployed services or their peers.
 
-The existing workflow checks `release-policy.json` and compares release
-candidates with an independently selected stable baseline. Before an authorized
-stable publication:
+Running TEST services follow the moving channel with patch-compatible contracts.
+Do not require matching peer builds or manual digest updates. No package archives,
+Actions artifacts, bundle releases or test prereleases are published. Temporary
+wheel/source-archive builds remain part of package validation and are discarded.
 
-1. Verify the accepted stable bundle at `releases/accepted/release.json` and its
-   immutable artifact references. `SPANOPTICON_RELEASE_BASELINE_SHA` selects the
-   trusted baseline commit; candidate data cannot select its own baseline.
-2. Generate `releases/candidate/release.json` from the validated artifacts. Its
-   component, configured line, package version and requested tag must agree.
-3. Pass the existing automated compatibility and artifact checks. A missing or
-   invalid stable baseline refuses publication; first-release bootstrap is a
-   separately authorized operation, not permission to fabricate a baseline.
-4. Publish only the admitted artifacts for that exact source revision and tag.
+## Production and authority
 
-A development build or test prerelease is not an accepted stable baseline.
-Actions artifacts have finite retention; an unavailable artifact must be rebuilt
-and validated before a later release. A green build does not establish deployment
-or production acceptance.
+A successful build or TEST publication is not deployment or production acceptance.
+Production promotion, stable tags/releases and package-version changes require
+explicit maintainer authorization for the specific target and action. There is
+no automatic stable publication workflow. Historical tags and release records
+remain intact; do not overwrite them or treat a TEST image as a stable baseline.
 
-## Publication authority
+Do not add required reviewers, branch protections, environment approvals or other
+human approval prerequisites unless explicitly requested. Automated checks and
+advisory reviews are welcome. Maintainer authorization to perform a publication
+is distinct from adding GitHub approval settings.
 
-Keep package-version changes, manual tags, manual releases and production
-promotion explicitly authorized for their specific targets. Already configured
-automatic test publication retains its existing authorization. It does not grant
-authority to move a stable tag, change package versions or promote production.
+Public contributor documentation describes these contracts and workflows. Private
+deployment topology and business plans belong in private operator documentation.
 
-Publication jobs use only the permissions they need and remain isolated from
-application-code execution. They verify source identity and checksums before
-publishing validated bytes. Do not introduce required reviewers, branch
-protections, environment approvals or other human approval prerequisites unless
-explicitly requested. Maintainer authorization for an operation is distinct from
-adding GitHub approval settings.
+## Public source transition
 
-Public contributor documentation describes these contracts and workflows.
-Private deployment channels, infrastructure topology and business release plans
-belong in the private operator documentation, not in this repository's policy.
+`public-source.yml` scans the committed source and a disposable single-root-commit
+copy with checksum-verified gitleaks, including dependency wheel archives. The
+copy is deleted after scanning; it is not uploaded or published. This preserves
+AGENTS.md, this policy, license notices and technical compatibility provenance.
+Changing repository visibility or replacing existing history remains a distinct
+operation against an explicitly selected repository; the cleanup workflow does
+neither. Private operational documentation remains in the operator repository.

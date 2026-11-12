@@ -54,7 +54,7 @@ Its frozen owner baseline remains byte-identical. The pinned shared database
 package supplies generic helpers, not this service's new migration resources. Reconcile any existing monorepo database separately;
 never stamp an unknown revision to force adoption of the standalone chain.
 Container, deployed RLS/witness behavior, hydration and consumer cutover remain
-functional acceptance checks. No image or live deployment is published here.
+functional acceptance checks. The GHCR TEST image is built separately from deployment.
 
 Set `AIUDITOR_SCHEMA_STARTUP=verify` when a separate owner migration operation
 has already installed the exact image revision. This mode performs only a
@@ -121,23 +121,16 @@ to restore classified-human approval requirements. Do not enable it in productio
 
 ## Release channels
 
-Main validation retains its exact qualified files in Actions artifacts. It does
-not create GitHub releases or tags. Historical `test-<commit>` prereleases remain
-qualification evidence and do not establish an accepted stable release.
-
-Stable publication requires an explicit `vMAJOR.MINOR.PATCH` tag, the exact
-successful main validation artifact, compatible declared contracts and an actual
-immutable stable baseline. The publisher independently verifies that evidence;
-successful caller jobs alone cannot establish acceptance. Missing evidence and
-first-stable bootstrap remain closed. Package qualification, coordinated consumer
-acceptance and runtime deployment remain separate.
+Merged main publishes the moving GHCR `runtime:test` container. No Actions
+artifacts, package releases or test tags are published. Production promotion
+requires explicit authorization for its target. Historical releases stay intact.
 
 ## Standalone runtime image
 
 Build the installed production dependency graph from this repository's lock:
 
 ```sh
-docker build --secret id=dependency_read_token,env=DEPENDENCY_READ_TOKEN \
+docker build \
   --build-arg SOURCE_SHA="$(git rev-parse HEAD)" \
   --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" -t aiuditor:local .
 ```
@@ -146,15 +139,12 @@ The runtime runs as UID/GID 65532, contains installed distributions rather than
 source checkouts, and receives no dependency credential. The startup command
 applies the installed owner schema and marketplace tenancy provisioning before
 starting the service. Supply runtime database and service configuration separately.
-The build imports the application with networking disabled; same-repository PRs
-and main run the package/PostgreSQL suite and build/import the runtime image.
-Fork PRs receive no dependency credential. Successful main pushes retain the tested image and publish it without rebuilding
-as `ghcr.io/hyperme-sh/aiuditor/runtime:test-<commit>`. The isolated hosted
-publisher never checks out or executes application code and receives no private
-dependency or deployment credential. Deployments must select the resulting
-registry digest. Existing test tags cannot be overwritten by reruns. This test
-channel is not stable promotion or live acceptance. Existing-database adoption must independently
-qualify schema compatibility; startup's newer-revision skip is insufficient.
+The build imports the application with networking disabled. PRs run package and
+owner-contract checks without registry write access. Main builds check the runtime
+container and push the same image to `ghcr.io/hyperme-sh/aiuditor/runtime:test`.
+Deployments follow this moving channel without version or digest pins. No stable
+promotion is implied. Existing-database adoption still requires schema compatibility.
+
 
 ### Owner-scoped schema startup
 
@@ -207,12 +197,8 @@ the effective uv graph; it does not establish portable installer resolution of
 conflicting transitive database pins without that override.
 Explicit private extras and unrecognized conditional pins fail closed.
 
-The read-only pull-request workflow retains tested wheels, source archives and
-an artifact-derived runtime inventory as Actions artifacts. It does not publish
-releases. These are preparation evidence, not an accepted synchronized dependency
-baseline: package version alignment, dependency adoption and comparison against
-a qualified prior baseline remain separate work. Existing owner test boundaries
-and live/provider qualification requirements continue to apply.
+The read-only pull-request workflow discards temporary package checks after
+validation. It uploads no distribution files and publishes no releases.
 
 Pull requests validate source and installed package forms using verified
 public dependency-wheel fixtures. Main builds use the pinned public source
@@ -241,15 +227,16 @@ seed endpoint initializes only empty default classes and preserves any existing
 operator-managed workload and pack. Qualification program changes require the
 existing authenticated tenant-session `operator:program` authority.
 
-### CI artifact retention
+### Container distribution
 
-PR preparation archives and temporary main image-transfer archives expire after
-one day. Main package archives expire after seven days. Published registry
-images and explicitly published release assets have separate retention; these
-CI settings do not delete them. Preserve source revisions, artifact digests and
-validation results in the run/PR evidence. A release needing an expired package
-archive must requalify its exact source; it must not silently rebuild or accept
-a different artifact.
+Merged main builds publish `ghcr.io/hyperme-sh/aiuditor/runtime:test`. This moving
+TEST channel tracks the latest validated main build; consumers do not pin a
+version or digest. The image reports its source revision for diagnostics.
+PR checks are read-only. Jobs use debrunner while private and automatically use
+GitHub-hosted runners when the repository becomes public. Only the merged-main container workflow
+can push to GHCR. It verifies the built image and skips superseded source heads.
+No Actions artifacts, package bundles or test prereleases are published. Package
+checks use temporary wheel/source-archive files that are removed after validation.
 
 ### Allocating an existing host connection
 
@@ -284,10 +271,8 @@ original hostname succeeds through the pinned socket, and a trusted certificate
 for another hostname is refused before sending HTTP headers. This is transport
 qualification, not live provider acceptance or deployment.
 
-Runtime publication verifies the tested image's source revision and digest.
-Package artifacts are retained for a limited time; publication checks their
-identity and availability before use. Build completion does not imply deployment
-or stable-release acceptance. Operator-specific deployment procedures are
+Runtime publication checks the built image and moving channel. Build completion
+does not imply deployment or production acceptance. Operator procedures are
 maintained separately from this contributor documentation.
 
 Signed class-envelope reports commit their immutable receipt, envelope and an
@@ -299,3 +284,8 @@ delivered. Ambiguous stored events refuses reconciliation. This path uses the
 owned outbox even when another publisher transport is configured; the existing
 owner relay handles delivery. It does not repair fixture topology or authorize
 another run's measurement.
+
+## License
+
+AIuditor is distributed under Apache-2.0; see LICENSE and NOTICE. Dependencies
+retain their own licenses. Agent guidance and release policy remain in this repo.

@@ -50,16 +50,18 @@ Agent instructions are not access controls for credentials shared with humans.
 
 Keep validation permissions read-only unless a specific job needs more. Use
 pinned actions and public dependencies without dependency-read credentials.
-Preserve the currently configured runner policy: private repositories use their
-approved private runner pool; public repositories use hosted runners. Never let
+Use `[self-hosted, linux, x64, debrunner]` while this repository is private.
+Select GitHub-hosted `ubuntu-24.04` automatically when it becomes public, including
+PR, preparation and publication jobs. Never let
 untrusted pull-request code receive publication or deployment credentials.
 
-Keep privileged publication isolated from application-code execution. A publisher
-must verify the exact tested artifact, source revision and digest; it must not
-check out or execute the application or install its dependencies. Preserve
-existing automated release-admission checks for the exact tag and commit.
+Pull requests run read-only checks without registry credentials. Only merged main
+builds publish the moving GHCR test container. Expose the registry token only to
+the publication step, after validation; that step must not execute application
+code. Never use pull_request_target to run contributor code with write access.
+Do not upload package archives, publish bundle releases, or pin running services.
 
-Use exact versions and digests for downloadable bundles and artifact provenance.
+Record the built image identity and source revision for diagnostics.
 Running test services follow their moving test channel without manual version or
 digest pins, and peer services remain patch-compatible. Production follows its
 explicit promotion policy. Deployment configuration and private operator details

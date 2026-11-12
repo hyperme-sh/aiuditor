@@ -5,7 +5,7 @@ permissions:
   contents: read
 jobs:
   package:
-    runs-on: [self-hosted, linux, x64, debrunner]
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "linux", "x64", "debrunner"]') || 'ubuntu-24.04' }}
     timeout-minutes: 25
     services:
       postgres:
@@ -28,28 +28,18 @@ jobs:
           version: '0.11.26'
           python-version: '3.13'
       - name: Qualify source, wheel and rebuilt source archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          output=$(mktemp -d "$RUNNER_TEMP/prepared-package.XXXXXX")
-          export RELEASE_ARTIFACT_DIR="$output/dist"
-          export PREPARATION_EVIDENCE_DIR="$output/evidence"
-          echo "PREPARED_OUTPUT=$output" >> "$GITHUB_ENV"
-          bash scripts/check-package.sh --fixtures
+        run: bash scripts/check-package.sh --fixtures
       - name: Qualify owner PostgreSQL and HTTP contracts
         env:
           TEST_DATABASE_URL: postgresql+psycopg://postgres:package-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
         run: bash scripts/check-postgres.sh --fixtures
-      - name: Verify local qualification outputs before optional PR retention
+      - name: Check container publication conditions
+        run: python3 scripts/test-image-publication.py
+      - name: Build and check container without registry credentials
         run: |
-          test -s "$PREPARED_OUTPUT"/dist/*.whl
-          test -s "$PREPARED_OUTPUT"/dist/*.tar.gz
-      - name: Retain tested preparation bytes
-        continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: prepared-dist
-          path: ${{ env.PREPARED_OUTPUT }}/*
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
+          set -euo pipefail
+          image="aiuditor:pr-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          trap 'docker image rm "$image" >/dev/null 2>&1 || true' EXIT
+          docker build --build-arg SOURCE_SHA="$GITHUB_SHA" -t "$image" .
+          docker run --rm --network none --entrypoint /app/.venv/bin/python "$image" \
+            -c 'from aiuditor_service.app import app; assert app.openapi()["paths"]'
