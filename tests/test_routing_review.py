@@ -112,3 +112,11 @@ async def test_http_review_requires_internal_credential(http_client, tenant_a, m
     response=await http_client.post('/api/v1/aiuditor/review', json=body,
         headers={'X-Tenant-ID':str(uuid.uuid4()),'X-Internal-Token':'r'*32})
     assert response.status_code == 403
+
+
+def test_absent_routing_policy_binds_as_sql_null():
+    from sqlalchemy.dialects.postgresql import dialect
+    from aiuditor_service.models import AiuditorPolicy
+    bind = AiuditorPolicy.__table__.c.routing_policy.type.bind_processor(dialect())
+    assert bind(None) is None
+    assert json.loads(bind({'allow_external_reroute':False})) == {'allow_external_reroute':False}
