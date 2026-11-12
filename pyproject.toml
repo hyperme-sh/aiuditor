@@ -7,6 +7,8 @@ name = "aiuditor-service"
 version = "0.1.0"
 requires-python = ">=3.13"
 description = "AIuditor policy, approval and model admission service"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "controlplane-legacy-auth-bridge @ git+https://github.com/hyperme-sh/controlplane-identity.git@8b137e958c0084abe56c1c71c145b6e6bc22783c#subdirectory=compatibility",
     "httpx>=0.28.0",
@@ -32,7 +34,7 @@ dev = [
 packages = ["src/aiuditor_service"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/tests_artifacts", "/tests_tools", "/src", "/tests", "/scripts", "/docs", "/integration", "/migrations", "/edge-routes.json", "/pyproject.toml", "/uv.lock", "/README.md"]
+include = ["/LICENSE", "/NOTICE", "/AGENTS.md", "/tests_artifacts", "/tests_tools", "/src", "/tests", "/scripts", "/docs", "/integration", "/migrations", "/edge-routes.json", "/pyproject.toml", "/uv.lock", "/README.md"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

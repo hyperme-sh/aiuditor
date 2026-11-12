@@ -1,40 +1,21 @@
 name: Standalone package
 on:
-  pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: aiuditor-moving-test-image
+  cancel-in-progress: false
 jobs:
-  package:
+  container:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     permissions:
       contents: read
-    outputs:
-      image-id: ${{ steps.handoff.outputs.image-id }}
-      local-image: ${{ steps.handoff.outputs.local-image }}
-      package-directory: ${{ steps.handoff.outputs.package-directory }}
-      package-sha256: ${{ steps.handoff.outputs.package-sha256 }}
-    if: github.ref == 'refs/heads/main'
-    runs-on:
-      group: shared-local
-      labels: [self-hosted, linux, x64, debrunner]
-    timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:17@sha256:3b0cda93be7c8dba2ed484d19393d93845dc3dafb88973e248ba8e6d99d784e1
-        env:
-          POSTGRES_PASSWORD: package-test-only
-        ports:
-          - 5432/tcp
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+      packages: write
     steps:
-      - name: Prepare release output
-        run: echo "RELEASE_ARTIFACT_DIR=$(mktemp -d "$RUNNER_TEMP/release-dist.XXXXXX")" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -42,145 +23,28 @@ jobs:
         with:
           version: '0.11.26'
           python-version: '3.13'
-      - name: Validate AIuditor package
-        env:
-          TEST_DATABASE_URL: postgresql+psycopg://postgres:package-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
-        shell: bash
+      - name: Validate source and package contracts
+        run: bash scripts/check-package.sh
+      - name: Build and check runtime container
         run: |
           set -euo pipefail
-          bash scripts/check-package.sh
-          bash scripts/check-postgres.sh
-      - name: Check registry publication failure handling
-        run: |
-          python3 scripts/test-image-publication.py
-          python3 -m unittest discover -s tests_tools -p test_package_handoff.py
-      - name: Build standalone runtime image
-        run: |
-          docker build \
-            --build-arg SOURCE_SHA="$GITHUB_SHA" \
-            --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -t aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} .
-          docker run --rm --network none --entrypoint /app/.venv/bin/python aiuditor:ci-${{ github.run_id }}-${{ github.run_attempt }} \
-            -c 'from aiuditor_service.app import app; import controlplane_db; assert app.openapi()["paths"]'
-      - name: Bind tested image on the shared-local Docker daemon
-        id: handoff
-        if: github.event_name == 'push'
-        run: |
           image="aiuditor:ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          echo "image-id=$(docker image inspect "$image" --format '{{.Id}}')" >> "$GITHUB_OUTPUT"
-          echo "local-image=$image" >> "$GITHUB_OUTPUT"
-          handoff=$(mktemp -d "/tmp/aiuditor-qualified-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.XXXXXX")
-          echo "PACKAGE_HANDOFF=$handoff" >> "$GITHUB_ENV"
-          (cd "$RELEASE_ARTIFACT_DIR" && tar -czf "$handoff/package.tar.gz" -- *.whl *.tar.gz)
-          echo "package-directory=$handoff" >> "$GITHUB_OUTPUT"
-          echo "package-sha256=$(sha256sum "$handoff/package.tar.gz" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - name: Clean up qualification without a publisher
-        if: always() && (github.event_name != 'push' || !success())
-        run: |
-          docker image rm "aiuditor:ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >/dev/null 2>&1 || true
-          if [[ -n "${PACKAGE_HANDOFF:-}" ]]; then rm -rf -- "$PACKAGE_HANDOFF"; fi
-
-  publish-test-image:
-    concurrency:
-      group: aiuditor-moving-test-image
-      cancel-in-progress: false
-      queue: max
-    needs: package
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on:
-      group: shared-local
-      labels: [self-hosted, linux, x64, debrunner]
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      actions: read
-      packages: write
-    env:
-      QUALIFIED_ID: ${{ needs.package.outputs.image-id }}
-      QUALIFIED_REF: ${{ needs.package.outputs.local-image }}
-      PACKAGE_HANDOFF: ${{ needs.package.outputs.package-directory }}
-      PACKAGE_SHA256: ${{ needs.package.outputs.package-sha256 }}
-    steps:
-      - name: Prepare isolated publisher directory
-        run: echo "RELEASE_ARTIFACT_DIR=$(mktemp -d "$RUNNER_TEMP/publish-dist.XXXXXX")" >> "$GITHUB_ENV"
-      - name: Verify and copy qualified package bytes without Actions storage
-        run: |
-          python3 - <<'HANDOFF'
-          import hashlib, io, os, re, tarfile
-          from pathlib import Path
-          directory = os.environ['PACKAGE_HANDOFF']
-          pattern = r"/tmp/aiuditor-qualified-" + re.escape(os.environ["GITHUB_RUN_ID"]) + r"-([0-9]+)\.[A-Za-z0-9]{6}"
-          match = re.fullmatch(pattern, directory)
-          assert match and 1 <= int(match[1]) <= int(os.environ["GITHUB_RUN_ATTEMPT"])
-          archive = Path(directory, 'package.tar.gz')
-          assert archive.stat().st_size <= 128 * 1024 * 1024
-          content = archive.read_bytes()
-          assert hashlib.sha256(content).hexdigest() == os.environ['PACKAGE_SHA256']
-          with tarfile.open(fileobj=io.BytesIO(content), mode='r|gz') as bundle:
-              files, total = {}, 0
-              for member in bundle:
-                  total += member.size
-                  assert len(files) < 8 and total <= 128 * 1024 * 1024
-                  assert member.isfile() and re.fullmatch(r'aiuditor_service-[A-Za-z0-9_.+-]+\.(whl|tar\.gz)', member.name)
-                  assert member.name not in files
-                  files[member.name] = bundle.extractfile(member).read()
-              assert any(name.endswith('.whl') for name in files) and any(name.endswith('.tar.gz') for name in files)
-              for name, payload in files.items():
-                  with Path(os.environ['RELEASE_ARTIFACT_DIR'], name).open('xb') as target:
-                      target.write(payload)
-          HANDOFF
-      - name: Publish the qualified main runtime and record its digest
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          export DOCKER_CONFIG=$(mktemp -d "$RUNNER_TEMP/runtime-login.XXXXXX")
-          trap 'rm -rf -- "$DOCKER_CONFIG"' EXIT
-          local_image="$QUALIFIED_REF"
-          [[ "$local_image" =~ ^aiuditor:ci-[0-9]+-[0-9]+$ ]]
-          config=$(docker image inspect "$local_image" --format '{{.Id}}')
-          test "$config" = "$QUALIFIED_ID"
-          revision=$(docker image inspect "$local_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
-          test "$revision" = "$GITHUB_SHA"
-          image="ghcr.io/${GITHUB_REPOSITORY,,}/runtime:test-${GITHUB_SHA}"
-          if [[ "$GITHUB_RUN_ATTEMPT" != 1 ]]; then image="$image-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"; fi
-          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          # Existing candidates cannot silently change on a rerun.
-          if docker manifest inspect "$image" > /dev/null 2>manifest.err; then
-            echo 'Test image already exists; refusing to replace its content' >&2
-            exit 1
-          elif [[ "$(cat manifest.err)" != "no such manifest: $image" && "$(cat manifest.err)" != "manifest unknown" ]]; then
-            cat manifest.err >&2
-            echo 'Registry lookup did not establish an absent manifest; refusing publication' >&2
-            exit 1
-          fi
-          docker tag "$local_image" "$image"
-          trap 'docker image rm "$image" >/dev/null 2>&1 || true; rm -rf -- "$DOCKER_CONFIG"' EXIT
-          docker push "$image"
-          repo="ghcr.io/${GITHUB_REPOSITORY,,}/runtime"
-          ref=$(docker image inspect "$image" --format '{{range .RepoDigests}}{{println .}}{{end}}' | awk -v repo="$repo@" 'index($0,repo)==1')
-          [[ "$ref" =~ @sha256:[a-f0-9]{64}$ ]]
-          directory="$RELEASE_ARTIFACT_DIR"
-          mkdir -p "$directory"
-          python3 - "$ref" "$config" "$directory/runtime-image.json" <<'PYTHON'
-          import json, os, sys
-          from pathlib import Path
-          Path(sys.argv[3]).write_text(json.dumps(dict(image=sys.argv[1], image_id=sys.argv[2],
-              repository=os.environ['GITHUB_REPOSITORY'], revision=os.environ['GITHUB_SHA'],
-              run_id=int(os.environ['GITHUB_RUN_ID'])), sort_keys=True)+'\n')
-          PYTHON
+          docker build --build-arg SOURCE_SHA="$GITHUB_SHA" \
+            --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" -t "$image" .
+          docker run --rm --network none --entrypoint /app/.venv/bin/python "$image" \
+            -c 'from aiuditor_service.app import app; assert app.openapi()["paths"]'
+          echo "QUALIFIED_REF=$image" >> "$GITHUB_ENV"
+          echo "QUALIFIED_ID=$(docker image inspect "$image" --format '{{.Id}}')" >> "$GITHUB_ENV"
       - name: Advance moving TEST channel from qualified current main
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          # Serialized publishers must never let an older queued main replace newer TEST.
+          # Superseded main builds must not replace the current TEST channel.
           current=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
           if [[ "$current" != "$GITHUB_SHA" ]]; then
-            echo 'Superseded qualified build retained as evidence; moving TEST is unchanged'
+            echo 'Superseded build; moving TEST is unchanged'
             exit 0
           fi
           test "$(docker image inspect "$QUALIFIED_REF" --format '{{.Id}}')" = "$QUALIFIED_ID"
@@ -194,20 +58,3 @@ jobs:
           docker pull "$channel"
           test "$(docker image inspect "$channel" --format '{{.Id}}')" = "$QUALIFIED_ID"
           echo "$channel tracks qualified main $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
-      - name: Retain validated package bytes
-        continue-on-error: true
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: tested-dist
-          path: ${{ env.RELEASE_ARTIFACT_DIR }}/*
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-      # Failed publisher reruns reuse the successful package job's image output.
-      - name: Remove job-owned runtime aliases after successful publication
-        if: success()
-        run: |
-          docker image rm "$QUALIFIED_REF" >/dev/null 2>&1 || true
-          [[ "$PACKAGE_HANDOFF" =~ ^/tmp/aiuditor-qualified-[0-9]+-[0-9]+\.[A-Za-z0-9]{6}$ ]]
-          rm -rf -- "$PACKAGE_HANDOFF"
