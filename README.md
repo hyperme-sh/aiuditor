@@ -48,12 +48,11 @@ and a rebuilt source distribution. Wheel runtime bytes must match source.
 Upstreams are mocked and persistence is in-memory. The shared marketplace setting
 check uses installed dependencies instead of searching neighboring source trees.
 
-`integration/` qualifies PostgreSQL using this service's installed, immutable
-`controlplane-db` dependency. Set `TEST_DATABASE_URL` to a disposable administrative
-PostgreSQL database and run `bash scripts/check-postgres.sh`. The fixture uses the
-standalone owner runner; it never searches or imports the retiring monorepo.
-The main workflow automatically qualifies package forms and PostgreSQL contracts
-using public dependencies. No human approval gate is introduced.
+`integration/` qualifies PostgreSQL through the registered `aiuditor-installed`
+central nightly adapter against main. Infra provisions and removes the disposable
+PostgreSQL server; the existing owner harness provisions its isolated schema and
+records per-case results. PRs run unit/contract checks and the scoped container
+startup check. Do not run or dispatch the full suite manually.
 
 The canonical AIuditor migration bundle ships in the runtime wheel under
 `aiuditor_service/migration_bundle`; `migrations/aiuditor` retains review copies.
