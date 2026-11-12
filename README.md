@@ -211,35 +211,11 @@ baseline: package version alignment, dependency adoption and comparison against
 a qualified prior baseline remain separate work. Existing owner test boundaries
 and live/provider qualification requirements continue to apply.
 
-Pull requests run the complete package suite using verified dependency wheel
-fixtures on disposable hosted workers without private credentials. Main checks
-retain the shared runner and use a short-lived App token restricted to their
-dependency repositories. The App key is available only to main. Fixture checks
-preserve exact source provenance and do not constitute stable release acceptance.
-## Test qualification and stable acceptance
-
-GitHub `test-<commit>` prereleases are development snapshots. Their embedded
-package version does not reserve a stable version. Artifact and consumer evidence
-belongs under `releases/qualification`. Owning-package and artifact validation
-remain separate from stable release admission. Future test receipts must carry
-an explicit non-stable classification.
-
-`releases/accepted` and `SPANOPTICON_RELEASE_BASELINE_SHA` are reserved for an
-actual immutable stable GitHub release. The pinned shared guard verifies the live
-release channel, stable tag source and asset digests; a test snapshot cannot
-become accepted through a provenance label. No stable baseline is recorded until
-that release exists. Stable publication remains closed without a valid baseline;
-first stable bootstrap and coordinated release qualification remain separate.
-No stable version, approval prerequisite or deployment is introduced here.
-
-### Actions qualification and stable publication
-
-Main merges and workflow completion do not publish GitHub test releases. Exact
-qualification files remain in Actions artifacts with finite retention. The pinned
-publisher independently verifies a real immutable stable baseline and refuses
-qualification snapshots, even if a caller job reports success. Existing valid
-stable records are retained; no release, version change, deployment or human
-approval prerequisite is introduced by this correction.
+Pull requests validate source and installed package forms using verified
+public dependency-wheel fixtures. Main builds use the pinned public source
+dependencies without dependency-read credentials. See the retained
+[release policy](docs/release-policy.md) for compatibility, artifact provenance,
+and publication authority, and [AGENTS.md](AGENTS.md) for contributor guidance.
 
 ### Replacing a class's qualification model
 
@@ -305,17 +281,11 @@ original hostname succeeds through the pinned socket, and a trusted certificate
 for another hostname is refused before sending HTTP headers. This is transport
 qualification, not live provider acceptance or deployment.
 
-Main runtime publication does not transfer Docker archives through Actions.
-Validation and the isolated publisher use the existing `shared-local` runner
-group, verify the exact Docker image configuration and source label, and push
-those already tested bytes to the registry. A short-lived local package archive
-is bound by its SHA-256 job output; the publisher checks file types, names,
-size bounds and digest without checking out or executing application code.
-Successful publication removes its job-owned image alias and local archive;
-failed publishers retain them for retry. Optional one-day `tested-dist` retention
-can fail without blocking runtime publication. If the quota prevents retention,
-versioned test-bundle publication explicitly skips; deployment remains on its
-previous reviewed bundle until one is available. Stable release paths are unchanged.
+Runtime publication verifies the tested image's source revision and digest.
+Package artifacts are retained for a limited time; publication checks their
+identity and availability before use. Build completion does not imply deployment
+or stable-release acceptance. Operator-specific deployment procedures are
+maintained separately from this contributor documentation.
 
 Signed class-envelope reports commit their immutable receipt, envelope and an
 owner-local event obligation in one transaction. Event identity and occurrence

@@ -1,66 +1,58 @@
-# Release compatibility
+# Release policy
 
-This component targets the shared **0.24.x** release line. Components share major
-and minor versions; patch numbers advance independently and must preserve their
-accepted API contracts. Existing package versions are retained until a qualified
-release is prepared; installing this workflow does not qualify those versions.
+This policy applies to public and private distributions of AIuditor. The package
+version is declared in `pyproject.toml`; `release-policy.json` identifies the
+component, release line and version files. The current configured line is `0.1`.
+Do not infer the service version from another component or deployment channel.
+Patch releases must preserve accepted API contracts.
 
-`release-policy.json` identifies the owner and every owning package version file.
-The pinned Spanopticon workflow checks this configuration on pull requests.
-Version changes or a `releases/candidate/release.json` submission also require
-release admission. Every tag push and manual release request requires admission.
-A configuration-only result is not a release compatibility result.
+## Validation and provenance
 
-Before attempting a release:
+Package CI checks source, a fresh installed wheel outside the checkout, and a
+wheel rebuilt from the source archive. Published artifacts must be the exact
+validated bytes. Record their checksums and source revision; never replace
+artifacts already published under the same version.
 
-1. Produce a real accepted bundle at `releases/accepted/release.json`, with its
-   contract files and immutable artifact references. Set the repository variable
-   `SPANOPTICON_RELEASE_BASELINE_SHA` to its full 40-character commit SHA. The first
-   baseline needs automated artifact/consumer qualification and provenance;
-   examples and invented digests are not accepted release evidence.
-2. Generate the candidate bundle at `releases/candidate/release.json` from the
-   release artifacts. It must contain exactly this component, use line `0.24`,
-   and match every declared owning package version and the requested tag/version.
-3. Run admission against the trusted baseline. Patch contracts must remain
-   unchanged; changing a published artifact at the same version is rejected.
-   Verify artifact provenance and downstream consumer behavior separately.
-4. Make successful admission and artifact/consumer validation automated
-   prerequisites of the publisher for the exact release. Select the accepted
-   baseline independently of candidate data and retain the validation evidence.
-   This is pipeline validation, not a branch protection or human approval rule.
+PR unit and contract checks and clean review determine issue completion. Full
+integration checks remain in scheduled CI; failures become new issues rather
+than holding implemented issues open. Package validation and development builds
+must work without a prior stable release.
 
-Missing baselines fail closed. This workflow neither publishes nor deploys and
-does not enable repository Actions, grant private dependency access, or prove
-that a declared artifact exists. See the [Spanopticon release policy](https://github.com/hyperme-sh/spanopticon/blob/main/docs/releases.md)
-for the manifest format and compatibility rules.
+## Automated release admission
 
-Do not add required reviewers, branch protections, approval rulesets, environment
-approvals, CODEOWNERS approval requirements, or release/deployment approval gates
-unless the user explicitly requests that specific change. This includes production
-releases. Automated tests and advisory reviews are welcome; human approval
-prerequisites are not. GitHub plan upgrades are not release-adoption prerequisites.
+The existing workflow checks `release-policy.json` and compares release
+candidates with an independently selected stable baseline. Before an authorized
+stable publication:
 
-## Test qualification and stable acceptance
+1. Verify the accepted stable bundle at `releases/accepted/release.json` and its
+   immutable artifact references. `SPANOPTICON_RELEASE_BASELINE_SHA` selects the
+   trusted baseline commit; candidate data cannot select its own baseline.
+2. Generate `releases/candidate/release.json` from the validated artifacts. Its
+   component, configured line, package version and requested tag must agree.
+3. Pass the existing automated compatibility and artifact checks. A missing or
+   invalid stable baseline refuses publication; first-release bootstrap is a
+   separately authorized operation, not permission to fabricate a baseline.
+4. Publish only the admitted artifacts for that exact source revision and tag.
 
-GitHub `test-<commit>` prereleases are development snapshots. Their embedded
-package version does not reserve a stable version. Artifact and consumer evidence
-belongs under `releases/qualification`. Owning-package and artifact validation
-remain separate from stable release admission. Future test receipts must carry
-an explicit non-stable classification.
+A development build or test prerelease is not an accepted stable baseline.
+Actions artifacts have finite retention; an unavailable artifact must be rebuilt
+and validated before a later release. A green build does not establish deployment
+or production acceptance.
 
-`releases/accepted` and `SPANOPTICON_RELEASE_BASELINE_SHA` are reserved for an
-actual immutable stable GitHub release. The pinned shared guard verifies the live
-release channel, stable tag source and asset digests; a test snapshot cannot
-become accepted through a provenance label. No stable baseline is recorded until
-that release exists. Stable publication remains closed without a valid baseline;
-first stable bootstrap and coordinated release qualification remain separate.
-No stable version, approval prerequisite or deployment is introduced here.
+## Publication authority
 
-### Actions qualification and stable publication
+Keep package-version changes, manual tags, manual releases and production
+promotion explicitly authorized for their specific targets. Already configured
+automatic test publication retains its existing authorization. It does not grant
+authority to move a stable tag, change package versions or promote production.
 
-Main merges and workflow completion do not publish GitHub test releases. Exact
-qualification files remain in Actions artifacts with finite retention. The pinned
-publisher independently verifies a real immutable stable baseline and refuses
-qualification snapshots, even if a caller job reports success. Existing valid
-stable records are retained; no release, version change, deployment or human
-approval prerequisite is introduced by this correction.
+Publication jobs use only the permissions they need and remain isolated from
+application-code execution. They verify source identity and checksums before
+publishing validated bytes. Do not introduce required reviewers, branch
+protections, environment approvals or other human approval prerequisites unless
+explicitly requested. Maintainer authorization for an operation is distinct from
+adding GitHub approval settings.
+
+Public contributor documentation describes these contracts and workflows.
+Private deployment channels, infrastructure topology and business release plans
+belong in the private operator documentation, not in this repository's policy.
