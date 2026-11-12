@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "audience": "public",
+  "revision": 1,
+  "rules": [
+    {"id": "credential-exfiltration", "prompt_class": "credential_exfiltration", "action": "deny"},
+    {"id": "authorization-bypass", "prompt_class": "authorization_bypass", "action": "deny"},
+    {"id": "destructive-action-review", "prompt_class": "destructive_action", "action": "hold"},
+    {"id": "personal-data-export-review", "prompt_class": "personal_data_export", "action": "hold"}
+  ]
+}

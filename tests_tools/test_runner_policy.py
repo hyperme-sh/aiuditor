@@ -12,13 +12,13 @@ def test_repository_runner_policy():
 
 
 @pytest.mark.parametrize('selector', [
-    '[self-hosted, linux, x64, debrunner]', 'ubuntu-24.04',
-    policy.SELECTOR.replace('private &&', 'private ||'),
-    policy.SELECTOR.replace('repository.private', 'repository.fork'),
+    '[self-hosted, linux, x64, debrunner]', 'ubuntu-latest',
+    "${{ github.event.repository.private && 'self-hosted' || 'ubuntu-24.04' }}",
+    'self-hosted',
 ])
 def test_unconditional_or_wrong_visibility_runners_are_refused(tmp_path, selector):
     directory = tmp_path / '.github/workflows'
     directory.mkdir(parents=True)
     (directory / 'ci.yml').write_text('jobs:\n  check:\n    runs-on: ' + selector + '\n')
-    with pytest.raises(ValueError, match='visibility'):
+    with pytest.raises(ValueError, match='public runner'):
         policy.check(tmp_path)

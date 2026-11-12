@@ -23,7 +23,11 @@ def review(store, tenant, envelope):
         prompt_class=envelope.routing.job_class,
         connection_id=envelope.connection_id)
     rules = policy.routing_policy if policy and policy.routing_policy else RoutingPolicy()
-    if policy is None or policy.disposition != PolicyDisposition.ALLOW:
+    from aiuditor_service.rules import constraints
+    pack_actions = constraints(tenant, purpose=envelope.purpose, prompt_class=envelope.routing.job_class)
+    if pack_actions & {'deny', 'hold'}:
+        verdict = ReviewVerdict(action='deny', reason='Audit rules deny this request or require operator review')
+    elif policy is None or policy.disposition != PolicyDisposition.ALLOW:
         verdict = ReviewVerdict(action='deny', reason='An explicit allow policy is required')
     else:
         candidates = [c for c in envelope.candidates if c.provider not in rules.avoid_providers]
@@ -32,6 +36,8 @@ def review(store, tenant, envelope):
                 candidates = [c for c in candidates if matches(c, rules.route.allow_models)]
             else:
                 candidates = [c for c in candidates if not matches(c, rules.route.deny_models)]
+        if 'local_only' in pack_actions:
+            candidates = [c for c in candidates if c.locality == 'local']
         if envelope.event == 'upstream_refusal' and not rules.allow_external_reroute:
             candidates = [c for c in candidates if c.locality == 'local' or c.provider == 'hypermesh']
         if not candidates:
