@@ -115,8 +115,10 @@ async def test_http_review_requires_internal_credential(http_client, tenant_a, m
 
 
 def test_absent_routing_policy_binds_as_sql_null():
-    from sqlalchemy.dialects.postgresql import dialect
+    from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
     from aiuditor_service.models import AiuditorPolicy
-    bind = AiuditorPolicy.__table__.c.routing_policy.type.bind_processor(dialect())
+    dialect = PGDialect_psycopg(dbapi=__import__("psycopg"))
+    kind = AiuditorPolicy.__table__.c.routing_policy.type.dialect_impl(dialect)
+    bind = kind.bind_processor(dialect)
     assert bind(None) is None
-    assert json.loads(bind({'allow_external_reroute':False})) == {'allow_external_reroute':False}
+    assert bind({'allow_external_reroute':False}).obj == {'allow_external_reroute':False}
