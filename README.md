@@ -232,7 +232,8 @@ existing authenticated tenant-session `operator:program` authority.
 Merged main builds publish `ghcr.io/hyperme-sh/aiuditor/runtime:test`. This moving
 TEST channel tracks the latest validated main build; consumers do not pin a
 version or digest. The image reports its source revision for diagnostics.
-GitHub-hosted PR checks are read-only. Only the merged-main container workflow
+PR checks are read-only. Jobs use debrunner while private and automatically use
+GitHub-hosted runners when the repository becomes public. Only the merged-main container workflow
 can push to GHCR. It verifies the built image and skips superseded source heads.
 No Actions artifacts, package bundles or test prereleases are published. Package
 checks use temporary wheel/source-archive files that are removed after validation.

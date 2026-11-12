@@ -10,7 +10,8 @@ PR unit and contract checks and clean review determine issue completion. Full
 integration remains in scheduled CI; failures become new issues rather than
 holding implemented issues open. Development checks require no prior release.
 
-GitHub-hosted PR checks use read-only permissions. Merged main builds validate
+PR checks use read-only permissions. All jobs use debrunner while the repository
+is private and automatically select GitHub-hosted runners when it becomes public. Merged main builds validate
 source/package contracts and the runtime container, then publish the moving
 `ghcr.io/hyperme-sh/aiuditor/runtime:test` channel. Only that main workflow has
 registry write permission. The publication step verifies the tested image and

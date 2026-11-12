@@ -50,8 +50,9 @@ Agent instructions are not access controls for credentials shared with humans.
 
 Keep validation permissions read-only unless a specific job needs more. Use
 pinned actions and public dependencies without dependency-read credentials.
-This repository uses GitHub-hosted runners for public distribution, including
-preparation and publication. Do not route pull requests to private runners. Never let
+Use `[self-hosted, linux, x64, debrunner]` while this repository is private.
+Select GitHub-hosted `ubuntu-24.04` automatically when it becomes public, including
+PR, preparation and publication jobs. Never let
 untrusted pull-request code receive publication or deployment credentials.
 
 Pull requests run read-only checks without registry credentials. Only merged main

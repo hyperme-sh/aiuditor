@@ -13,11 +13,12 @@ mkdir "$scratch/tool" "$scratch/source"
 tar -xzf "$scratch/$name" -C "$scratch/tool" gitleaks
 git archive HEAD | tar -xf - -C "$scratch/source"
 for required in AGENTS.md docs/release-policy.md LICENSE NOTICE; do test -s "$scratch/source/$required"; done
-if rg -n 'self-hosted|debrunner|shared-local|upload-artifact|download-artifact' "$scratch/source/.github/workflows"; then
-  echo 'Public CI must use hosted runners and container-only distribution' >&2
+if rg -n 'shared-local|upload-artifact|download-artifact' "$scratch/source/.github/workflows"; then
+  echo 'CI must use visibility-based runners and container-only distribution' >&2
   exit 1
 fi
 "$scratch/tool/gitleaks" dir "$scratch/source" --redact --no-banner --max-archive-depth 3 --ignore-gitleaks-allow
+python3 "$scratch/source/scripts/check-runner-policy.py" "$scratch/source"
 # Fresh history exists only in this disposable directory. Never reset or push refs.
 git -C "$scratch/source" init --quiet --initial-branch=main
 git -C "$scratch/source" add --force .
