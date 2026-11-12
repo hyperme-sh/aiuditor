@@ -21,6 +21,8 @@ def runtime_image(value, *, legacy=False):
             or len(set(repositories)) != len(repositories)):
         raise ValueError('Runtime repository policy is unavailable')
     for repository in repositories:
+        reference(repository + ":test", repository)
+    for repository in repositories:
         try:
             return reference(value, repository)
         except ValueError:

@@ -72,6 +72,14 @@ def test_independent_host_report_shapes_normalize_to_same_contract():
 
 
 def test_shared_source_binding():
-    source = json.loads((Path(__file__).parents[1]/'scripts/service-channels-source.json').read_text())
+    source = json.loads(Path(__file__).with_name('service-channels-source.json').read_text())
     for path in (Path(service_channels.__file__), Path(__file__).with_name('service-reference-vectors.json')):
         assert hashlib.sha256(path.read_bytes()).hexdigest() == source['sha256'][path.name]
+
+
+@pytest.mark.parametrize('policy', ['[]', '{}', '[null]', '["bad"]',
+    '["'+REPOSITORY+'", "bad"]', '["'+REPOSITORY+'", "'+REPOSITORY+'"]'])
+def test_invalid_repository_policy_fails_closed(monkeypatch, policy):
+    monkeypatch.setenv('AIUDITOR_RUNTIME_IMAGE_REPOSITORIES', policy)
+    with pytest.raises(ValidationError):
+        AdmissionTarget.model_validate(target(runtime_image=REPOSITORY+':test'))
