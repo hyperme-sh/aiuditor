@@ -49,14 +49,14 @@ def _score(
     return score
 
 
-def evaluate_policy(
+def select_policy(
     store: PolicyStore,
     tenant_id: uuid.UUID,
     *,
     purpose: str,
     prompt_class: str | None = None,
     connection_id: uuid.UUID | None = None,
-) -> PolicyDisposition | None:
+) -> ApprovalPolicy | None:
     """Return the winning disposition, or None when no rule matches."""
 
     best: ApprovalPolicy | None = None
@@ -71,6 +71,11 @@ def evaluate_policy(
         if score > best_score:
             best = row
             best_score = score
+    return best
+
+
+def evaluate_policy(store, tenant_id, **selectors):
+    best = select_policy(store, tenant_id, **selectors)
     return best.disposition if best is not None else None
 
 
@@ -107,6 +112,7 @@ def put_policy(
         prompt_class=prompt_class,
         connection_id=body.connection_id,
         disposition=body.disposition,
+        routing_policy=body.routing_policy,
         created_at=clock,
     )
     store.put(row)

@@ -1450,3 +1450,13 @@ async def evaluate_contract_route(
         payload=filed.to_event_payload(),
     )
     return _violations(request).list_for(tenant_id, contract_id=contract_id)
+
+
+from aiuditor_service.routing_contracts import ReviewEnvelope, ReviewVerdict
+from aiuditor_service.routing_review import review as review_routing, require_reviewer
+
+
+@router.post('/review', response_model=ReviewVerdict, response_model_exclude_none=True)
+async def review_conductor(request: Request, body: ReviewEnvelope) -> ReviewVerdict:
+    tenant = require_reviewer(request)
+    return review_routing(_policies(request), tenant, body)

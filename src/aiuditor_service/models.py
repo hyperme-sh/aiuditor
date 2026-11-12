@@ -95,6 +95,7 @@ class AiuditorPolicy(Base):
     purpose: Mapped[str] = mapped_column(String(32), nullable=False)
     prompt_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
     connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    routing_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     disposition: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
