@@ -1,8 +1,8 @@
 # AIuditor contributor and agent guidance
 
 Read README.md and [the release policy](docs/release-policy.md) before changing
-code, build configuration, or publication workflows. Keep this file in public
-source distributions as contributor guidance.
+code, build configuration, or publication workflows. Keep this file in the public
+repository as contributor guidance.
 
 ## Service boundaries
 
