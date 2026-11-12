@@ -101,6 +101,7 @@ _ALLOWED = {
         "consumed_at",
     },
     "policies": {
+        "routing_policy",
         "id",
         "tenant_id",
         "purpose",
@@ -246,6 +247,8 @@ def sql_row(table: str, payload: dict[str, Any]) -> dict[str, Any]:
     if table == "contracts":
         data["parties"] = _plain(data.get("parties") or [])
         data["meters"] = list(data.get("meters") or [])
+    if table == "policies" and data.get("routing_policy") is not None:
+        data["routing_policy"] = _plain(data["routing_policy"])
     if table == "catalog":
         data["meters"] = list(data.get("meters") or [])
     for key in (

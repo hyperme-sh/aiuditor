@@ -7,6 +7,8 @@ uploaded-model admission verdicts.
 
 from __future__ import annotations
 
+from aiuditor_service.routing_contracts import RoutingPolicy
+
 import uuid
 from datetime import datetime
 from enum import StrEnum
@@ -236,6 +238,7 @@ class ApprovalPolicyCreate(BaseModel):
     prompt_class: str | None = Field(default=None, max_length=64)
     connection_id: uuid.UUID | None = None
     disposition: PolicyDisposition
+    routing_policy: RoutingPolicy | None = None
 
 
 class ApprovalPolicy(BaseModel):
@@ -247,6 +250,7 @@ class ApprovalPolicy(BaseModel):
     prompt_class: str | None = None
     connection_id: uuid.UUID | None = None
     disposition: PolicyDisposition
+    routing_policy: RoutingPolicy | None = None
     created_at: datetime
 
     def to_event_payload(self) -> dict[str, object]:
