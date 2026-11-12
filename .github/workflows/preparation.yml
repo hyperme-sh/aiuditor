@@ -37,6 +37,9 @@ jobs:
         run: python3 scripts/test-image-publication.py
       - name: Build and check container without registry credentials
         run: |
-          docker build --build-arg SOURCE_SHA="$GITHUB_SHA" -t aiuditor:pr .
-          docker run --rm --network none --entrypoint /app/.venv/bin/python aiuditor:pr \
+          set -euo pipefail
+          image="aiuditor:pr-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          trap 'docker image rm "$image" >/dev/null 2>&1 || true' EXIT
+          docker build --build-arg SOURCE_SHA="$GITHUB_SHA" -t "$image" .
+          docker run --rm --network none --entrypoint /app/.venv/bin/python "$image" \
             -c 'from aiuditor_service.app import app; assert app.openapi()["paths"]'

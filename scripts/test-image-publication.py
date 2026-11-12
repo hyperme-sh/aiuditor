@@ -8,7 +8,7 @@ source = (root / '.github/workflows/package.yml').read_text()
 # Execute the actual channel step: stale queued builds cannot publish, and a
 # source/config mismatch cannot advance even when its commit is current main.
 start = source.index('          current=$(gh api')
-end = len(source)
+end = source.index('      - name: Remove job-local container tag', start)
 channel_block = source[start:end]
 channel_fake = r'''
 gh() { printf '%s\n' "$LATEST_HEAD"; }
