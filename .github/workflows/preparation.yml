@@ -35,3 +35,8 @@ jobs:
         run: bash scripts/check-postgres.sh --fixtures
       - name: Check container publication conditions
         run: python3 scripts/test-image-publication.py
+      - name: Build and check container without registry credentials
+        run: |
+          docker build --build-arg SOURCE_SHA="$GITHUB_SHA" -t aiuditor:pr .
+          docker run --rm --network none --entrypoint /app/.venv/bin/python aiuditor:pr \
+            -c 'from aiuditor_service.app import app; assert app.openapi()["paths"]'

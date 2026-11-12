@@ -60,7 +60,7 @@ the publication step, after validation; that step must not execute application
 code. Never use pull_request_target to run contributor code with write access.
 Do not upload package archives, publish bundle releases, or pin running services.
 
-Use exact versions and digests for downloadable bundles and artifact provenance.
+Record the built image identity and source revision for diagnostics.
 Running test services follow their moving test channel without manual version or
 digest pins, and peer services remain patch-compatible. Production follows its
 explicit promotion policy. Deployment configuration and private operator details

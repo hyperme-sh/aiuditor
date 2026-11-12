@@ -20,7 +20,8 @@ fi
 "$scratch/tool/gitleaks" dir "$scratch/source" --redact --no-banner --max-archive-depth 3 --ignore-gitleaks-allow
 # Fresh history exists only in this disposable directory. Never reset or push refs.
 git -C "$scratch/source" init --quiet --initial-branch=main
-git -C "$scratch/source" add .
+git -C "$scratch/source" add --force .
+test "$(git -C "$scratch/source" write-tree)" = "$(git rev-parse HEAD^{tree})"
 git -C "$scratch/source" -c user.name='AIuditor maintainers' -c user.email='maintainers@example.invalid' \
   -c core.hooksPath=/dev/null commit --quiet -m 'Initial public source snapshot'
 test "$(git -C "$scratch/source" rev-list --count HEAD)" = 1
