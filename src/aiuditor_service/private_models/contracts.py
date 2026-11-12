@@ -5,7 +5,9 @@ import json
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from aiuditor_service.runtime_images import normalize_runtime_image, runtime_image
 
 SHA256 = r"^[0-9a-f]{64}$"
 
@@ -31,9 +33,7 @@ class AdmissionTarget(BaseModel):
     class_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
     backend: Literal["cuda-jetson"]
     runtime: Literal["nvidia"]
-    runtime_image_digest: str = Field(
-        max_length=256, pattern=r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$"
-    )
+    runtime_image_digest: str = Field(max_length=256)
     configuration: ModelConfiguration
     configuration_sha256: str = Field(pattern=SHA256)
     manifest_sha256: str = Field(pattern=SHA256)
@@ -41,6 +41,16 @@ class AdmissionTarget(BaseModel):
     file_sha256: str = Field(pattern=SHA256)
     size_bytes: int = Field(gt=0, le=50_000_000_000, strict=True)
     license: str = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def image_shape(cls, value):
+        return normalize_runtime_image(value)
+
+    @field_validator("runtime_image_digest")
+    @classmethod
+    def image_reference(cls, value):
+        return runtime_image(value, legacy=True)
 
     @model_validator(mode="after")
     def reviewed_configuration(self):
@@ -72,6 +82,11 @@ class SandboxEvidence(BaseModel):
     egress_reason: str | None = Field(
         default=None, max_length=64, pattern=r"^[a-z0-9_]+$"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def image_shape(cls, value):
+        return normalize_runtime_image(value)
 
 
 class Verdict(BaseModel):

@@ -288,3 +288,27 @@ async def test_password_authenticated_nonhuman_cannot_resolve_admission(plane, a
     actor, _ = await human(maker, tenant, account_type=account_type)
     response = await client.get("/api/v1/aiuditor/private-model-admissions", headers=actor)
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize('image_field', ['runtime_image', 'runtime_image_digest'])
+async def test_audchannel_preserves_host_report_and_tenant_refusal(plane, monkeypatch, image_field):
+    client, _, tenant, service = plane
+    repository = 'registry.example.com/runtime/model'
+    monkeypatch.setenv('AIUDITOR_RUNTIME_IMAGE_REPOSITORIES', '["'+repository+'"]')
+    body = declaration()
+    del body['target']['runtime_image_digest']
+    body['target'][image_field] = repository + ':test'
+    created = await client.post(INTERNAL, headers=service, json=body)
+    assert created.status_code == 200
+    accepted = created.json()
+    assert accepted['target']['runtime_image_digest'] == repository + ':test'
+    canonical = {**body, 'target': accepted['target']}
+    report = evidence(canonical)
+    path = f"{INTERNAL}/{body['admission_id']}/sandbox"
+    assert (await client.post(path, headers=service, json=report)).status_code == 200
+    newer = dict(report)
+    newer['runtime_image'] = newer.pop('runtime_image_digest')
+    replay = await client.post(path, headers=service, json=newer)
+    assert replay.status_code == 200 and replay.json()['status'] == 'hold'
+    other = {**service, 'X-Tenant-ID': str(uuid.uuid4())}
+    assert (await client.post(path, headers=other, json=newer)).status_code == 404
