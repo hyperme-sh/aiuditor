@@ -36,8 +36,6 @@ def review(store, tenant, envelope):
                 candidates = [c for c in candidates if matches(c, rules.route.allow_models)]
             else:
                 candidates = [c for c in candidates if not matches(c, rules.route.deny_models)]
-        if 'local_only' in pack_actions:
-            candidates = [c for c in candidates if c.locality == 'local']
         if envelope.event == 'upstream_refusal' and not rules.allow_external_reroute:
             candidates = [c for c in candidates if c.locality == 'local' or c.provider == 'hypermesh']
         if not candidates:

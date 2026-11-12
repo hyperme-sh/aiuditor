@@ -47,3 +47,8 @@ AGENTS.md, this policy, license notices and technical compatibility provenance.
 Changing repository visibility or replacing existing history remains a distinct
 operation against an explicitly selected repository; the cleanup workflow does
 neither. Private operational documentation remains in the operator repository.
+
+The existing GHCR runtime package is public. Subsequent pushes of `runtime:test`
+remain in that public package; creating a differently named package requires its
+own visibility configuration. CI checks anonymous manifest access after each
+publication, independently of its authenticated publisher credentials.

@@ -65,3 +65,10 @@ Running test services follow their moving test channel without manual version or
 digest pins, and peer services remain patch-compatible. Production follows its
 explicit promotion policy. Deployment configuration and private operator details
 are maintained separately from this public contributor guidance.
+
+## Runtime ownership
+
+AIuditor owns audit, safety and RBAC only. Conductor owns model routing and cost.
+Orchestrator owns host-market pricing and timing. AIuditor may return access
+constraints to conductor, but it does not select or optimize the route. Learned
+rules and rewards must remain within audit/safety/RBAC.

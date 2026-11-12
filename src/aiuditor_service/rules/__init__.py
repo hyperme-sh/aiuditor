@@ -13,7 +13,7 @@ class Rule(BaseModel):
     id: str = Field(pattern=r'^[a-z0-9][a-z0-9_.-]{0,63}$')
     prompt_class: str = Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
     purpose: Literal['renter', 'ir', 'service'] | None = None
-    action: Literal['hold', 'deny', 'local_only']
+    action: Literal['hold', 'deny']
     review_sha256: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
 
 

@@ -17,6 +17,7 @@ from . import Rule, RulePack
 
 class Feedback(BaseModel):
     model_config = ConfigDict(extra='forbid')
+    objective: Literal['audit_safety_rbac']
     review_id: uuid.UUID
     tenant_id: uuid.UUID
     # Stable source grouping keeps repeated reviews of one trace out of both splits.
@@ -24,7 +25,7 @@ class Feedback(BaseModel):
     source: Literal['prompt_log', 'dream']
     purpose: Literal['renter', 'ir', 'service']
     prompt_class: str = Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
-    action: Literal['hold', 'deny', 'local_only']
+    action: Literal['hold', 'deny']
     reward: float = Field(ge=-1, le=1, allow_inf_nan=False)
     propensity: float = Field(ge=0.01, le=1, allow_inf_nan=False)
     split: Literal['train', 'validation']
