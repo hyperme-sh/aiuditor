@@ -4,9 +4,9 @@ AIuditor's `/review` applies three layers: packaged public rules, a tenant-priva
 rule file when configured, and the existing tenant policy. Rules restrict the
 existing policy; they cannot create an allow grant, bypass authentication, disable
 human authority or introduce models outside the tenant's permitted candidates.
-A matching deny or hold refuses routing. Hold currently returns a review-required
-deny; it does not fabricate an inbox approval. `local_only` removes every remote
-candidate, including remote mesh candidates. Multiple layers intersect.
+A matching deny or hold refuses authorization. Hold currently returns a
+review-required deny; it does not fabricate an inbox approval. Multiple audit
+layers intersect. AIuditor does not select models or optimize routing.
 
 The open-source baseline is `aiuditor_service/rules/public.json`: credential
 exfiltration and authorization bypass are denied; destructive actions and personal
@@ -24,7 +24,7 @@ and checkout. Each verified tenant loads `<tenant UUID>.json`, with this shape:
   "tenant_id": "00000000-0000-4000-8000-000000000001",
   "revision": 1,
   "rules": [
-    {"id": "local-private-work", "prompt_class": "private_operation", "action": "local_only"}
+    {"id": "private-access-review", "prompt_class": "private_operation", "action": "hold"}
   ]
 }
 ```
@@ -43,13 +43,14 @@ prompt-log trace or dream observation into a body-free feedback record:
 
 ```json
 {
+  "objective": "audit_safety_rbac",
   "review_id": "00000000-0000-4000-8000-000000000002",
   "tenant_id": "00000000-0000-4000-8000-000000000001",
   "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "source": "prompt_log",
   "purpose": "service",
   "prompt_class": "private_operation",
-  "action": "local_only",
+  "action": "hold",
   "reward": 1.0,
   "propensity": 1.0,
   "split": "validation"
@@ -102,8 +103,9 @@ never writes public rules, Git history, repository permissions or production
 configuration by itself. Public promotion is an explicitly authored, sanitized
 source change with synthetic tests; never copy private review outputs into a PR.
 
-No live exploration or automatic runtime self-modification is enabled. Quality,
-cost, safety and usefulness rewards must be specified by the operator for the
-chosen context. Initial actions are hold, deny and local-only routing; more
-expressive routing/optimization actions require separate consumer contracts and
-regression checks before they can be trained or activated.
+No live exploration or automatic runtime self-modification is enabled. Rewards describe audit/safety/RBAC correctness: correct enforcement, false
+allows, false denials and unnecessary holds. Feedback must explicitly declare
+`objective=audit_safety_rbac`; other objectives are rejected. The only learned
+actions are hold and deny. Conductor owns model routing and cost. Orchestrator
+owns host-market pricing and timing. Those objectives and actions must never be
+trained or activated through AIuditor.

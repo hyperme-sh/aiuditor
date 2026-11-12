@@ -295,3 +295,10 @@ another run's measurement.
 
 AIuditor is distributed under Apache-2.0; see LICENSE and NOTICE. Dependencies
 retain their own licenses. Agent guidance and release policy remain in this repo.
+
+## Runtime ownership
+
+AIuditor owns audit, safety and RBAC only. Conductor owns model routing and cost.
+Orchestrator owns host-market pricing and timing. AIuditor may return access
+constraints to conductor, but it does not select or optimize the route. Learned
+rules and rewards must remain within audit/safety/RBAC.

@@ -13,7 +13,7 @@ def feedback(tenant, *, validation=10, reward=1, action='hold'):
     rows=[]
     for split,count in [('train',4),('validation',validation)]:
         for i in range(count):
-            rows.append(Feedback(review_id=uuid.uuid4(),tenant_id=tenant,
+            rows.append(Feedback(objective='audit_safety_rbac',review_id=uuid.uuid4(),tenant_id=tenant,
                 source_sha256=hashlib.sha256(f'{split}:{i}'.encode()).hexdigest(),
                 source='dream' if split=='train' else 'prompt_log',
                 purpose='service',prompt_class='private_operation',action=action,
@@ -34,9 +34,9 @@ def test_private_rules_are_scoped_additive_and_configuration_failure_is_closed(t
         constraints(tenant,purpose='service',prompt_class='anything')
     assert absent.value.status_code==503
     pack=RulePack(audience='private',tenant_id=tenant,revision=1,rules=[
-        dict(id='local-business',prompt_class='private_operation',action='local_only')])
+        dict(id='local-business',prompt_class='private_operation',action='hold')])
     (tmp_path/f'{tenant}.json').write_text(pack.model_dump_json())
-    assert constraints(tenant,purpose='service',prompt_class='private_operation')=={'local_only'}
+    assert constraints(tenant,purpose='service',prompt_class='private_operation')=={'hold'}
     assert constraints(tenant,purpose='service',prompt_class='authorization_bypass')=={'deny'}
     (tmp_path/f'{tenant}.json').write_text(pack.model_copy(update={'tenant_id':uuid.uuid4()}).model_dump_json())
     with pytest.raises(HTTPException): constraints(tenant,purpose='service',prompt_class='anything')
@@ -44,7 +44,7 @@ def test_private_rules_are_scoped_additive_and_configuration_failure_is_closed(t
 
 def test_feedback_cannot_carry_bodies_or_rewards_outside_the_contract():
     row=feedback(uuid.uuid4())[0].model_dump()
-    for change in [dict(prompt='private text'),dict(reward=float('nan')),dict(propensity=0),dict(action='allow')]:
+    for change in [dict(prompt='private text'),dict(reward=float('nan')),dict(propensity=0),dict(action='allow'),dict(action='local_only'),dict(objective='routing_cost'),dict(objective='market_pricing')]:
         with pytest.raises(ValidationError): Feedback.model_validate(dict(row,**change))
 
 
@@ -80,11 +80,11 @@ def test_runtime_pack_constraints_intersect_tenant_policy(tmp_path,monkeypatch):
     from aiuditor_service.routing_review import review
     store,tenant,_=policy({'allow_external_reroute':True})
     pack=RulePack(audience='private',tenant_id=tenant,revision=1,rules=[
-        dict(id='private-local',prompt_class='parse',action='local_only')])
+        dict(id='private-local',prompt_class='parse',action='hold')])
     (tmp_path/f'{tenant}.json').write_text(pack.model_dump_json())
     monkeypatch.setenv('AIUDITOR_PRIVATE_RULES_DIR',str(tmp_path))
     verdict=review(store,tenant,envelope())
-    assert [s.model_id for s in verdict.route.allow_models]==['local-small']
+    assert verdict.action=='deny' and verdict.route is None
     pack=pack.model_copy(update={'rules':[]})
     (tmp_path/f'{tenant}.json').write_text(pack.model_dump_json())
     env=envelope();env.routing.job_class='authorization_bypass'
