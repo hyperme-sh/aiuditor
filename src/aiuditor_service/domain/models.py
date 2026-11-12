@@ -326,7 +326,7 @@ class ContractParty(BaseModel):
 
 
 class ContractCreate(BaseModel):
-    """Spine §D fields only. 1.x rail is Stripe. No prompt body."""
+    """Contract terms and accounting compatibility fields. No prompt body."""
 
     parties: list[ContractParty] = Field(..., min_length=2, max_length=8)
     meters: list[str] = Field(..., min_length=1, max_length=8)

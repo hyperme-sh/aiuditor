@@ -1,7 +1,7 @@
 """Violation machine for a signed Contract. Not an on-chain court.
 
 Kinds: term, cert-fail, policy-deny, abuse. Actions: suspend, stop, refund.
-Dispute reads cert + audit logs. Handoff stays out of Phase 5.
+Dispute reads certification and audit logs.
 """
 
 from __future__ import annotations

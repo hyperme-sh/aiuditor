@@ -4,10 +4,8 @@ WORKDIR /app
 ENV UV_HTTP_TIMEOUT=120
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml uv.lock ./
-COPY scripts/dependency-command.py scripts/dependency-command.py
 COPY src src
-RUN --mount=type=secret,id=dependency_read_token,required=true \
-    python3 scripts/dependency-command.py uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable
 RUN --network=none .venv/bin/python -c "import aiuditor_service.app"
 FROM python:3.13-slim-bookworm@sha256:281d39ff02e3b389401586134ff9e6572954687822a58055ec07a60ded4e0b7f
 WORKDIR /app

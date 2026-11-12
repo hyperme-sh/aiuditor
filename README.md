@@ -27,8 +27,8 @@ unavailable; a successful empty query still reconciles deleted rows.
 
 ## Development
 
-Use Python 3.13 and uv 0.11.26 with read access to the seven pinned private
-repositories named in `.github/workflows/package.yml`.
+Use Python 3.13 and uv 0.11.26. All pinned source dependencies are public;
+package and container builds require no dependency-read credential.
 
     uv sync --frozen
     bash scripts/check-package.sh
@@ -43,7 +43,7 @@ check uses installed dependencies instead of searching neighboring source trees.
 PostgreSQL database and run `bash scripts/check-postgres.sh`. The fixture uses the
 standalone owner runner; it never searches or imports the retiring monorepo.
 The main workflow automatically qualifies package forms and PostgreSQL contracts
-with a scoped dependency-read credential. No human approval gate is introduced.
+using public dependencies. No human approval gate is introduced.
 
 The canonical AIuditor migration bundle ships in the runtime wheel under
 `aiuditor_service/migration_bundle`; `migrations/aiuditor` retains review copies.
