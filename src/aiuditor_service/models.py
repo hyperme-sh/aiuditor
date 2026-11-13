@@ -52,6 +52,7 @@ class AiuditorConnection(Base):
     device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     endpoint: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     credential_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    pending_auditor_grant: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     lease_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -238,6 +239,7 @@ class AiuditorSuiteMember(Base):
         ),
     )
 
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default='0')
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False

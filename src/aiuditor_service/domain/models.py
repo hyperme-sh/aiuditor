@@ -89,6 +89,7 @@ class Connection(BaseModel):
     device_id: uuid.UUID | None = None
     endpoint: str | None = None
     credential_ref: str | None = None
+    pending_auditor_grant: dict[str, str | None] | None = Field(default=None, exclude=True, repr=False)
     lease_id: uuid.UUID | None = None
     status: ConnectionStatus
     created_at: datetime
@@ -560,6 +561,7 @@ class SuiteMember(BaseModel):
     class_id: str
     catalog_id: str
     pack_id: str
+    revision: int = Field(default=0, ge=0)
     created_at: datetime
 
     def to_event_payload(self) -> dict[str, object]:

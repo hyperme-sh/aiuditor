@@ -178,3 +178,21 @@ async def test_unknown_or_broken_config_never_falls_back_to_internal(monkeypatch
     monkeypatch.delenv('ACCOUNTING_URL',raising=False)
     with pytest.raises(HTTPException) as error: await settlement_overdue(row)
     assert error.value.status_code==503
+
+
+async def test_callback_replay_after_suspension_keeps_one_fulfillment_event(http_client,tenant_a,app,monkeypatch):
+    setup_callback(monkeypatch,tenant_a)
+    committed=event(tenant_a)
+    raw,headers=signed(committed)
+    path='/api/v1/aiuditor/contracts/accounting/committed'
+    first=await http_client.post(path,content=raw,headers=headers)
+    assert first.status_code==201
+    store=app.state.contract_store
+    row=store.get(tenant_a,uuid.UUID(first.json()['id']))
+    store.put(row.model_copy(update={'status':ContractStatus.SUSPENDED}))
+    before=store.persist.snapshot()['service_outbox']
+    replay=await http_client.post(path,content=raw,headers=headers)
+    assert replay.status_code==201 and replay.json()['status']=='suspended'
+    assert store.persist.snapshot()['service_outbox']==before
+    events=list(before[str(tenant_a)].values())
+    assert len(events)==1 and events[0]['payload']['status']=='signed'

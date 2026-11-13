@@ -301,3 +301,38 @@ AIuditor owns audit, safety and RBAC only. Conductor owns model routing and cost
 Orchestrator owns host-market pricing and timing. AIuditor may return access
 constraints to conductor, but it does not select or optimize the route. Learned
 rules and rewards must remain within audit/safety/RBAC.
+
+## Atomic owner events
+
+Event-producing API operations use the owner's SQL transaction for their business
+writes and outbox inserts. Store reads, deletes, approval consumption and nested
+program/contract writes join that transaction. No service path chooses a shared
+log or Service Bus publisher. The existing owner migration chain already supplies
+the outbox and tenant registry; no coordinated peer upgrade is required.
+
+Event identity is derived from service, tenant, event type and canonical domain
+facts, plus the persisted revision for mutable suite membership. Restoring an
+earlier suite configuration emits a new transition; retrying that revision does
+not. An additive owner migration initializes existing members at revision zero.
+Rewriting the same fact deduplicates; a new object or changed domain fact
+is a distinct event. This does not add a new HTTP request-idempotency contract.
+The lab-report path retains its existing atomic writer. Violation filing commits
+the violation and event before attempting external enforcement, preserving pending
+work when that peer is unavailable. Admission submission and its event likewise
+commit before lab dispatch, and a named verdict and its event commit before
+retryable catalog promotion. Catalog allocation commits signed authority before
+requesting a remote lease; the returned binding and event commit together. A failed
+event write leaves the signed contract available to reconcile the issued lease.
+Auditor ticket metadata is retained before binding so an outbox failure retries
+the same issued ticket; this internal metadata is excluded from API responses.
+SQL pool checkout uses a separate bounded executor so waiters cannot starve route
+workers; cancellation returns the connection. Events never become authorization decisions.
+
+Memory persistence stages operation-local changes and checks conflicting writes
+before committing them; a failed operation cannot erase another request's rows.
+The optional test event sink observes only committed events.
+
+Infra's scheduled adapter registers 80 SQL cases across the 20 other producers
+and one auditor ticket recovery case,
+covering commit, forced rollback, failed outbox insertion and event retry. These
+cases live under `nightly/`; ordinary PR checks remain unit and contract checks.

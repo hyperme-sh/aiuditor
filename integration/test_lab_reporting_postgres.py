@@ -86,10 +86,9 @@ async def test_purpose_route_owns_real_tenant_transaction(reporter_db,monkeypatc
     monkeypatch.setenv('AIUDITOR_LAB_REPORT_KEY',KEY)
     def forbidden():raise AssertionError('Lab authority fell back to generic credential middleware')
     monkeypatch.setattr(middleware,'get_session_maker',forbidden)
-    events=[]
-    class Publisher:
-        async def publish(self,**kwargs):events.append(kwargs)
-    monkeypatch.setattr(routes,'get_tenant_event_publisher',lambda:Publisher())
+    async def forbidden_publication(*args, **kwargs):
+        raise AssertionError('Lab report must use its existing atomic outbox writer')
+    monkeypatch.setattr(routes,'publish_owned_event',forbidden_publication)
     app=FastAPI();app.state.aiuditor_role=AiuditorRole.GLOBAL
     app.state.envelope_store=EnvelopeStore(persist=SqlPersistSession(sessionmaker(engine)))
     app.add_middleware(middleware.AiuditorServiceDbMiddleware)
@@ -100,7 +99,6 @@ async def test_purpose_route_owns_real_tenant_transaction(reporter_db,monkeypatc
         assert first.status_code==201,first.text
         replay=await client.post('/api/v1/aiuditor/envelopes',**signed(value))
         assert replay.status_code==201 and replay.json()==first.json()
-    assert events==[]  # No separately committed publication after the HTTP write.
     with engine.begin() as db:
         db.execute(text("SELECT set_config('app.current_tenant_id',:tid,true)"),{'tid':str(tid)})
         durable=db.execute(text('SELECT id,envelope FROM service_outbox WHERE tenant_id=:tid'),{'tid':tid}).all()

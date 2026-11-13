@@ -71,6 +71,7 @@ _BANNED = ("credential", "prompt", "ticket", "messages", "hmac")
 
 _ALLOWED = {
     "connections": {
+        "pending_auditor_grant",
         "control_plane_id",
         "id",
         "tenant_id",
@@ -165,6 +166,7 @@ _ALLOWED = {
         "lab_job_id", "lab_device_id", "lab_origin", "binding_sha256", "report_sha256", "measured_at",
     },
     "suite_members": {
+        "revision",
         "id",
         "tenant_id",
         "class_id",
@@ -232,6 +234,8 @@ def _plain(value: object) -> object:
 
 def dump_for_persist(obj: Any) -> dict[str, Any]:
     data = obj.model_dump()
+    if isinstance(obj, Connection):
+        data["pending_auditor_grant"] = obj.pending_auditor_grant
     for banned in _BANNED:
         data.pop(banned, None)
     return data
@@ -299,6 +303,15 @@ class PersistSession(Protocol):
 
 class MemoryPersistSession:
     """In-process row store. A new store on the same session reloads rows."""
+
+    @property
+    def rows(self):
+        from aiuditor_service.atomic_events import memory_rows
+        return memory_rows(self, self._rows)
+
+    @rows.setter
+    def rows(self, value):
+        self._rows = value
 
     def accept_lab_report(self, report, now):
         from aiuditor_service.lab_reporting import persist_report
@@ -484,6 +497,16 @@ def _sql_hydrate_tenant_gucs(session) -> list[str]:
 class SqlPersistSession:
     """Write-through SQLAlchemy persist. Sets RLS GUC per tenant on each write."""
 
+    @contextmanager
+    def write_session(self):
+        scoped = _SCOPE.get()
+        if scoped is not None:
+            with scoped.begin_nested():
+                yield scoped
+        else:
+            with self._session_factory() as session, session.begin():
+                yield session
+
     def accept_lab_report(self, report, now):
         from aiuditor_service.lab_reporting import persist_report
         return persist_report(self, report, now)
@@ -507,13 +530,12 @@ class SqlPersistSession:
         from sqlalchemy import text
         from sqlalchemy.dialects.postgresql import insert
         model = _sql_models()["envelopes"]
-        with self._session_factory() as session:
+        with self.write_session() as session:
             session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"),
                             {"tid": str(payload["tenant_id"])})
             inserted = session.execute(insert(model).values(**sql_row("envelopes", payload))
                 .on_conflict_do_nothing(constraint="uq_aiuditor_envelope_class_catalog")
                 .returning(model.id)).scalar_one_or_none()
-            session.commit()
             return inserted is not None
 
     def ping(self) -> None:
@@ -549,7 +571,7 @@ class SqlPersistSession:
                         memory.upsert(table, row.tenant_id, row.id, payload)
 
     @contextmanager
-    def candidate_scope(self):
+    def candidate_scope(self, *, connection=None):
         """One transaction per crawl candidate. Each upsert is a savepoint.
 
         Do not share this session across tasks. The context var is task-local.
@@ -557,7 +579,11 @@ class SqlPersistSession:
         candidate back and the next candidate opens a new transaction.
         """
 
-        with self._session_factory() as session:
+        if _SCOPE.get() is not None:
+            yield
+            return
+        session = self._session_factory(bind=connection) if connection is not None else self._session_factory()
+        with session:
             token = _SCOPE.set(session)
             try:
                 yield
@@ -624,7 +650,7 @@ class SqlPersistSession:
         from sqlalchemy.exc import SQLAlchemyError
         model = _sql_models()["approvals"]
         try:
-            with self._session_factory() as session:
+            with self.write_session() as session:
                 session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(tenant_id)})
                 result = session.execute(update(model).where(
                     model.tenant_id == tenant_id, model.id == approval_id,
@@ -632,7 +658,6 @@ class SqlPersistSession:
                     model.consumed_at.is_(None), model.expires_at > now,
                 ).values(consumed_at=now))
                 claimed = result.rowcount == 1
-                session.commit()
                 return claimed
         except SQLAlchemyError as exc:
             raise PersistUnavailable("Approval consumption unavailable") from exc
@@ -658,7 +683,7 @@ class SqlPersistSession:
             model = _sql_models()[table]
             memory = MemoryPersistSession()
             scoped = _SCOPE.get()
-            if table in {"contracts", "violations"} and scoped is not None:
+            if scoped is not None:
                 scoped.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(tenant_id)})
                 rows = scoped.execute(select(model).where(model.tenant_id == tenant_id)).scalars().all()
                 for row in rows:
@@ -747,7 +772,7 @@ class SqlPersistSession:
         from sqlalchemy import text
 
         model = _sql_models()[table]
-        with self._session_factory() as session:
+        with self.write_session() as session:
             session.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, true)"),
                 {"tid": str(tenant_id)},
@@ -755,7 +780,6 @@ class SqlPersistSession:
             row = session.get(model, _parse_uuid(key))
             if row is not None:
                 session.delete(row)
-                session.commit()
 
 
 def resolve_persist(
