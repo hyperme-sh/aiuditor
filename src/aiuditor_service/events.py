@@ -28,5 +28,9 @@ async def publish_contract(request, *, tenant_id, event_type, contract):
     else:
         event_type = event_type.removesuffix('.v1') + '.v2'
         payload = contract.to_event_payload()
+    if event_type.startswith('aiuditor.contract.fulfilled.'):
+        # A signed accounting callback can replay after later suspension. Its
+        # original fulfillment fact does not become a new suspended event.
+        payload['status'] = 'signed'
     from aiuditor_service.atomic_events import publish_owned_event
     return await publish_owned_event(request,tenant_id=tenant_id, event_type=event_type, payload=payload)
