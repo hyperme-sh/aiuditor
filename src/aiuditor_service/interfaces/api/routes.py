@@ -976,7 +976,6 @@ async def get_catalog_service(request: Request, service_id: uuid.UUID) -> Catalo
     status_code=status.HTTP_201_CREATED,
     summary="Pick a live connection, sign a Contract, and offer the host ticket.",
 )
-@atomic_events
 async def allocate_catalog_service(
     request: Request, service_id: uuid.UUID, body: ServiceAllocate
 ) -> ServiceAllocation:
@@ -989,6 +988,11 @@ async def allocate_catalog_service(
     plane = getattr(request.app.state, "plane_hop", None)
     if lookup is None or plane is None:
         raise HTTPException(status_code=503, detail=PLANE_HOP_FAILED)
+    async def publish_allocation(allocation):
+        async with operation(request.app.state.aiuditor_persist):
+            await publish_owned_event(request, tenant_id=tenant_id,
+                event_type=CATALOG_SERVICE_ALLOCATED_V1,
+                payload=allocation.to_event_payload())
     try:
         allocation = await allocate_service(
             _catalog(request),
@@ -1001,14 +1005,10 @@ async def allocate_catalog_service(
             plane=plane,
             signed_by=signed_by,
             headers=_forward_headers(request),
+            on_allocated=publish_allocation,
         )
     except HostLookupUnavailable as exc:
         raise _plane_error(exc) from exc
-    await publish_owned_event(request,
-        tenant_id=tenant_id,
-        event_type=CATALOG_SERVICE_ALLOCATED_V1,
-        payload=allocation.to_event_payload(),
-    )
     return allocation
 
 
@@ -1074,7 +1074,7 @@ async def record_suite_member(
     await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=SUITE_MEMBER_RECORDED_V1,
-        payload=row.to_event_payload(),
+        payload=row.to_event_payload(), event_revision=row.revision,
     )
     return row
 
@@ -1090,7 +1090,7 @@ async def replace_class_suite_member(request: Request, member_id: uuid.UUID,
     row = replace_suite_member(_suite(request), tenant_id, member_id, body)
     await publish_owned_event(request,
         tenant_id=tenant_id, event_type=SUITE_MEMBER_RECORDED_V1,
-        payload=row.to_event_payload(),
+        payload=row.to_event_payload(), event_revision=row.revision,
     )
     return row
 
@@ -1111,7 +1111,7 @@ async def seed_suite(request: Request) -> list[SuiteMember]:
         await publish_owned_event(request,
             tenant_id=tenant_id,
             event_type=SUITE_MEMBER_RECORDED_V1,
-            payload=row.to_event_payload(),
+            payload=row.to_event_payload(), event_revision=row.revision,
         )
     return rows
 

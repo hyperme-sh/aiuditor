@@ -2,6 +2,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import wraps
 import hashlib
@@ -13,6 +14,8 @@ from controlplane_events.envelope import ControlPlaneEventEnvelope
 from controlplane_events.contracts import validate_event_envelope
 from controlplane_events.publisher import refuse_forbidden_payload
 from aiuditor_service.persist import MemoryPersistSession, SqlPersistSession, _SCOPE
+
+_CHECKOUT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='aiuditor-db-checkout')
 
 _CURRENT = ContextVar('aiuditor_event_operation', default=None)
 _MEMORY_ROWS = ContextVar('aiuditor_operation_rows', default=None)
@@ -53,7 +56,7 @@ async def sql_operation(persist):
     # Checkout can wait for another operation that is awaiting a peer. Blocking
     # the event loop here would prevent that peer call from releasing its slot.
     engine = persist._session_factory.kw['bind']
-    pending = asyncio.create_task(asyncio.to_thread(engine.connect))
+    pending = asyncio.get_running_loop().run_in_executor(_CHECKOUT_EXECUTOR, engine.connect)
     try:
         connection = await asyncio.shield(pending)
     except asyncio.CancelledError:
@@ -119,7 +122,7 @@ def atomic_events(function):
     return wrapped
 
 
-async def publish_owned_event(request, *, tenant_id, event_type, payload):
+async def publish_owned_event(request, *, tenant_id, event_type, payload, event_revision=0):
     state = _CURRENT.get()
     persist = request.app.state.aiuditor_persist
     if state is None or state['persist'] is not persist:
@@ -128,6 +131,8 @@ async def publish_owned_event(request, *, tenant_id, event_type, payload):
     refuse_forbidden_payload(payload)
     canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False)
     identity = f'aiuditor:{tenant_id}:{event_type}:{hashlib.sha256(canonical.encode()).hexdigest()}'
+    if event_revision:
+        identity += f':revision:{event_revision}'
     event_id = uuid.uuid5(uuid.NAMESPACE_URL, identity)
     envelope = ControlPlaneEventEnvelope(service='aiuditor', tenant_id=tenant_id,
         event_type=event_type, payload=payload, correlation_id=str(event_id))

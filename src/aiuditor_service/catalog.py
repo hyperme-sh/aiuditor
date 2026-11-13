@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import HTTPException
 
 from aiuditor_service.approvals import _safe_text
+from aiuditor_service.atomic_events import operation
 from aiuditor_service.contracts import (
     LEASE_ALREADY_BOUND,
     SPINE_METERS,
@@ -227,6 +228,7 @@ async def allocate_service(
     signed_by: str,
     headers: dict[str, str] | None = None,
     now: datetime | None = None,
+    on_allocated=None,
 ) -> ServiceAllocation:
     service = catalog.get(tenant_id, service_id)
     if service is None:
@@ -252,38 +254,43 @@ async def allocate_service(
             raise HTTPException(status_code=409, detail=LEASE_IS_AUDITOR)
     clock = _now(now)
     hours = max(1, min(int(body.reserved_hours), 24 * 30))
-    draft = put_contract(
-        contracts,
-        tenant_id,
-        ContractCreate(
-            parties=[
-                ContractParty(role="renter", subject=renter),
-                ContractParty(role="host", subject=_host_subject(row)),
-            ],
-            meters=list(service.meters),
-            rail=SPINE_RAIL,
-            until=clock + timedelta(hours=hours),
-            connection_id=row.id,
-        ),
-        now=clock,
-    )
-    signed = sign_contract(contracts, tenant_id, draft.id, signed_by=signed_by, now=clock)
-    lease_id = row.lease_id
-    purpose = "lease"
-    offered = None
-    if service.backend is ServiceBackend.PROVIDER:
-        if row.status is not ConnectionStatus.READY:
-            row = row.model_copy(update={"status": ConnectionStatus.READY})
-            connections.put(row)
-        return ServiceAllocation(
-            service_id=service.id,
-            contract=signed,
-            connection_id=row.id,
-            backend=service.backend,
-            purpose=purpose,
-            exp=signed.until,
+    # Commit signed authority before any remote lease is issued.
+    async with operation(contracts.persist):
+        draft = put_contract(
+            contracts,
+            tenant_id,
+            ContractCreate(
+                parties=[
+                    ContractParty(role="renter", subject=renter),
+                    ContractParty(role="host", subject=_host_subject(row)),
+                ],
+                meters=list(service.meters),
+                rail=SPINE_RAIL,
+                until=clock + timedelta(hours=hours),
+                connection_id=row.id,
+            ),
+            now=clock,
         )
+        signed = sign_contract(contracts, tenant_id, draft.id, signed_by=signed_by, now=clock)
+        lease_id = row.lease_id
+        purpose = "lease"
+        offered = None
+        if service.backend is ServiceBackend.PROVIDER:
+            if row.status is not ConnectionStatus.READY:
+                row = row.model_copy(update={"status": ConnectionStatus.READY})
+                connections.put(row)
+            allocation = ServiceAllocation(
+                service_id=service.id,
+                contract=signed,
+                connection_id=row.id,
+                backend=service.backend,
+                purpose=purpose,
+                exp=signed.until,
+            )
 
+            if on_allocated is not None:
+                await on_allocated(allocation)
+            return allocation
     if row.device_id is None:
         raise HTTPException(status_code=409, detail=NO_LIVE_CONNECTION)
     if lease_id is not None:
@@ -307,30 +314,34 @@ async def allocate_service(
         )
         lease_id = offered.lease_id
         purpose = offered.purpose
-    current = contracts.get(tenant_id, signed.id) or signed
-    if current.lease_id is None:
-        current = bind_contract(
-            contracts, tenant_id, signed.id, ContractBind(lease_id=lease_id)
+    async with operation(contracts.persist):
+        current = contracts.get(tenant_id, signed.id) or signed
+        if current.lease_id is None:
+            current = bind_contract(
+                contracts, tenant_id, signed.id, ContractBind(lease_id=lease_id)
+            )
+        elif current.lease_id != lease_id:
+            raise HTTPException(status_code=409, detail=LEASE_ALREADY_BOUND)
+        assigned = row.model_copy(
+            update={"lease_id": lease_id, "status": ConnectionStatus.READY}
         )
-    elif current.lease_id != lease_id:
-        raise HTTPException(status_code=409, detail=LEASE_ALREADY_BOUND)
-    assigned = row.model_copy(
-        update={"lease_id": lease_id, "status": ConnectionStatus.READY}
-    )
-    connections.put(assigned)
-    return ServiceAllocation(
-        service_id=service.id,
-        contract=current,
-        connection_id=assigned.id,
-        backend=service.backend,
-        lease_id=lease_id,
-        purpose=purpose,
-        exp=current.until,
-        funding_state=offered.funding_state if offered else "pending",
-        accounting_ref=offered.accounting_ref if offered else None,
-        billing_record_id=offered.billing_record_id if offered else None,
-        payment_amount_atoms=offered.payment_amount_atoms if offered else None,
-        payment_test_credit_available=(
-            offered.payment_test_credit_available if offered else False
-        ),
-    )
+        connections.put(assigned)
+        allocation = ServiceAllocation(
+            service_id=service.id,
+            contract=current,
+            connection_id=assigned.id,
+            backend=service.backend,
+            lease_id=lease_id,
+            purpose=purpose,
+            exp=current.until,
+            funding_state=offered.funding_state if offered else "pending",
+            accounting_ref=offered.accounting_ref if offered else None,
+            billing_record_id=offered.billing_record_id if offered else None,
+            payment_amount_atoms=offered.payment_amount_atoms if offered else None,
+            payment_test_credit_available=(
+                offered.payment_test_credit_available if offered else False
+            ),
+        )
+        if on_allocated is not None:
+            await on_allocated(allocation)
+        return allocation

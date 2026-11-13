@@ -238,6 +238,7 @@ class AiuditorSuiteMember(Base):
         ),
     )
 
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default='0')
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False

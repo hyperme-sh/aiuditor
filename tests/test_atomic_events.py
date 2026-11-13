@@ -58,7 +58,7 @@ def test_production_has_no_detached_or_shared_publisher():
             if isinstance(node,ast.AsyncFunctionDef) and any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name)
                 and n.func.id in ('publish_owned_event','publish_contract') for n in ast.walk(node)):
                 found.add(node.name)
-    assert found==PRODUCERS|{'publish_contract'}
+    assert found==PRODUCERS|{'publish_contract','publish_allocation'}
 
 
 @pytest.mark.parametrize('outcome',['commit','rollback','insert_failure','retry'])
@@ -199,3 +199,76 @@ async def test_promotion_failure_retains_verdict_and_one_event_for_retry(monkeyp
     assert retried.resolved_by=='original-human' and retried.resolved_at==accepted.resolved_at
     assert persist.snapshot()['service_outbox']==before
     assert len(before[str(tenant)])==1
+
+
+async def test_suite_restoration_emits_a_new_transition_but_retry_does_not(monkeypatch):
+    from aiuditor_service.domain.models import SuiteMemberCreate, SuiteMemberReplace
+    persist,request=owner();tenant=uuid.uuid4()
+    monkeypatch.setattr(routes,'require_auditor_actor',lambda request:tenant)
+    monkeypatch.setattr(routes,'_require_operator_program',lambda *a,**k:None)
+    first=await routes.record_suite_member(request,SuiteMemberCreate(class_id='agx-large',catalog_id='model-a',pack_id='pack-v1'))
+    for old,new in [('model-a','model-b'),('model-b','model-a')]:
+        body=SuiteMemberReplace(class_id=first.class_id,catalog_id=new,pack_id='pack-v1',expected_catalog_id=old,expected_pack_id='pack-v1')
+        row=await routes.replace_class_suite_member(request,first.id,body)
+    assert row.revision==2
+    assert len(persist.rows['service_outbox'][str(tenant)])==3
+    replay=await routes.replace_class_suite_member(request,first.id,body)
+    assert replay.revision==2 and len(persist.rows['service_outbox'][str(tenant)])==3
+
+
+async def test_pool_waiters_cannot_starve_route_workers(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import contextmanager
+    from threading import Semaphore
+    slot=Semaphore(1)
+    def connect():
+        assert slot.acquire(timeout=2)
+        return SimpleNamespace(close=slot.release)
+    factory=Mock();factory.kw={'bind':SimpleNamespace(connect=connect)}
+    persist=SqlPersistSession(factory)
+    @contextmanager
+    def scope(*,connection):yield
+    monkeypatch.setattr(persist,'candidate_scope',scope)
+    loop=asyncio.get_running_loop();original=loop._default_executor
+    executor=ThreadPoolExecutor(max_workers=2)
+    loop.set_default_executor(executor)
+    async def request():
+        async with atomic.operation(persist):
+            await asyncio.sleep(.02)
+            assert await asyncio.to_thread(lambda:True)
+    try:await asyncio.wait_for(asyncio.gather(*(request() for _ in range(3))),1)
+    finally:
+        loop._default_executor=original
+        executor.shutdown(wait=True)
+
+
+async def test_issued_lease_keeps_signed_authority_when_allocation_event_fails(monkeypatch):
+    from datetime import UTC,datetime
+    from unittest.mock import AsyncMock
+    from aiuditor_service import catalog
+    from aiuditor_service.domain.models import Connection,ServiceCreate,ServiceAllocate
+    from aiuditor_service.hypermesh import FakePlaneHop,FakeHostLookup
+    persist,request=owner();stores=new_stores(persist);tenant=uuid.uuid4()
+    connection=Connection(id=uuid.uuid4(),tenant_id=tenant,kind='host',purpose='lease',
+        device_id=uuid.uuid4(),status='ready',created_at=datetime.now(UTC))
+    stores.connection_store.put(connection)
+    service=catalog.put_service(stores.catalog_store,stores.connection_store,tenant,
+        ServiceCreate(title='Class allocation',backend='hypermesh_class',class_id='agx-large'))
+    monkeypatch.setattr(catalog,'pick_live_connection',AsyncMock(return_value=connection))
+    plane=FakePlaneHop();original=plane.offer_lease
+    async def offer(*args,**kwargs):
+        assert atomic._CURRENT.get() is None
+        signed=stores.contract_store.get(tenant,kwargs['contract_id'])
+        assert signed is not None and signed.connection_id==connection.id
+        return await original(*args,**kwargs)
+    monkeypatch.setattr(plane,'offer_lease',offer)
+    async def fail(allocation):raise RuntimeError('outbox unavailable')
+    with pytest.raises(RuntimeError,match='outbox unavailable'):
+        await catalog.allocate_service(stores.catalog_store,stores.connection_store,stores.contract_store,
+            tenant,service.id,ServiceAllocate(renter="fixture-renter"),lookup=FakeHostLookup(),plane=plane,
+            signed_by=str(uuid.uuid4()),on_allocated=fail)
+    assert len(plane.leases)==1
+    issued=next(iter(plane.leases.values()))
+    authority=stores.contract_store.get(tenant,issued.contract_id)
+    assert authority is not None and authority.connection_id==connection.id
+    assert not persist.rows.get('service_outbox')

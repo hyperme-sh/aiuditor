@@ -311,14 +311,20 @@ log or Service Bus publisher. The existing owner migration chain already supplie
 the outbox and tenant registry; no coordinated peer upgrade is required.
 
 Event identity is derived from service, tenant, event type and canonical domain
-facts. Rewriting the same fact deduplicates; a new object or changed domain fact
+facts, plus the persisted revision for mutable suite membership. Restoring an
+earlier suite configuration emits a new transition; retrying that revision does
+not. An additive owner migration initializes existing members at revision zero.
+Rewriting the same fact deduplicates; a new object or changed domain fact
 is a distinct event. This does not add a new HTTP request-idempotency contract.
 The lab-report path retains its existing atomic writer. Violation filing commits
 the violation and event before attempting external enforcement, preserving pending
 work when that peer is unavailable. Admission submission and its event likewise
 commit before lab dispatch, and a named verdict and its event commit before
-retryable catalog promotion. Waiting for a SQL pool slot does not block the event
-loop; cancellation returns the connection. Events never become authorization decisions.
+retryable catalog promotion. Catalog allocation commits signed authority before
+requesting a remote lease; the returned binding and event commit together. A failed
+event write leaves the signed contract available to reconcile the issued lease.
+SQL pool checkout uses a separate bounded executor so waiters cannot starve route
+workers; cancellation returns the connection. Events never become authorization decisions.
 
 Memory persistence stages operation-local changes and checks conflicting writes
 before committing them; a failed operation cannot erase another request's rows.

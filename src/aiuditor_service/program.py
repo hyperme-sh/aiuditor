@@ -203,7 +203,7 @@ def replace_suite_member(store: SuiteStore, tenant_id: uuid.UUID, member_id: uui
         duplicate = store.for_class_catalog(tenant_id, body.class_id, body.catalog_id)
         if duplicate is not None and duplicate.id != member_id:
             raise HTTPException(409, "Catalog is already a member of this class suite")
-        return store.put(current.model_copy(update={"catalog_id":body.catalog_id,"pack_id":body.pack_id}))
+        return store.put(current.model_copy(update={"catalog_id":body.catalog_id,"pack_id":body.pack_id,"revision":current.revision+1}))
 
 
 def seed_core_suite(

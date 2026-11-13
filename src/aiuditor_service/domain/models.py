@@ -560,6 +560,7 @@ class SuiteMember(BaseModel):
     class_id: str
     catalog_id: str
     pack_id: str
+    revision: int = Field(default=0, ge=0)
     created_at: datetime
 
     def to_event_payload(self) -> dict[str, object]:

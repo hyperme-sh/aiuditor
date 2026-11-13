@@ -165,6 +165,7 @@ _ALLOWED = {
         "lab_job_id", "lab_device_id", "lab_origin", "binding_sha256", "report_sha256", "measured_at",
     },
     "suite_members": {
+        "revision",
         "id",
         "tenant_id",
         "class_id",
