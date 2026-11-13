@@ -1,4 +1,5 @@
 """Owner transactions for derivative events and their business writes."""
+import asyncio
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from copy import deepcopy
@@ -11,7 +12,7 @@ import uuid
 from controlplane_events.envelope import ControlPlaneEventEnvelope
 from controlplane_events.contracts import validate_event_envelope
 from controlplane_events.publisher import refuse_forbidden_payload
-from aiuditor_service.persist import MemoryPersistSession, _SCOPE
+from aiuditor_service.persist import MemoryPersistSession, SqlPersistSession, _SCOPE
 
 _CURRENT = ContextVar('aiuditor_event_operation', default=None)
 _MEMORY_ROWS = ContextVar('aiuditor_operation_rows', default=None)
@@ -48,6 +49,29 @@ def _commit_memory(persist, before, after):
 
 
 @asynccontextmanager
+async def sql_operation(persist):
+    # Checkout can wait for another operation that is awaiting a peer. Blocking
+    # the event loop here would prevent that peer call from releasing its slot.
+    engine = persist._session_factory.kw['bind']
+    pending = asyncio.create_task(asyncio.to_thread(engine.connect))
+    try:
+        connection = await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        try:
+            connection = await pending
+        except Exception:
+            pass
+        else:
+            await asyncio.to_thread(connection.close)
+        raise
+    try:
+        with persist.candidate_scope(connection=connection):
+            yield
+    finally:
+        await asyncio.to_thread(connection.close)
+
+
+@asynccontextmanager
 async def operation(persist):
     current = _CURRENT.get()
     if current is not None:
@@ -70,8 +94,12 @@ async def operation(persist):
         else:
             if _SCOPE.get() is not None:
                 raise ValueError('Event operation must own its outer transaction')
-            with persist.candidate_scope():
-                yield
+            if isinstance(persist, SqlPersistSession):
+                async with sql_operation(persist):
+                    yield
+            else:
+                with persist.candidate_scope():
+                    yield
         sink = getattr(persist, 'event_sink', None)
         if sink is not None:
             sink.extend(state['events'])

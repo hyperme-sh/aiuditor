@@ -567,7 +567,7 @@ class SqlPersistSession:
                         memory.upsert(table, row.tenant_id, row.id, payload)
 
     @contextmanager
-    def candidate_scope(self):
+    def candidate_scope(self, *, connection=None):
         """One transaction per crawl candidate. Each upsert is a savepoint.
 
         Do not share this session across tasks. The context var is task-local.
@@ -578,7 +578,8 @@ class SqlPersistSession:
         if _SCOPE.get() is not None:
             yield
             return
-        with self._session_factory() as session:
+        session = self._session_factory(bind=connection) if connection is not None else self._session_factory()
+        with session:
             token = _SCOPE.set(session)
             try:
                 yield

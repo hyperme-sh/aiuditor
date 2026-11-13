@@ -1144,24 +1144,20 @@ async def get_suite_member(request: Request, member_id: uuid.UUID) -> SuiteMembe
     status_code=status.HTTP_201_CREATED,
     summary="Submit an uploaded model. Stays pending until a named verdict.",
 )
-@atomic_events
 async def create_admission(request: Request, body: AdmissionCreate) -> Admission:
     require_grant_write(role_from_request(request))
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     plane = getattr(request.app.state, "plane_hop", None)
-    row = await submit_admission_async(
-        _admissions(request),
-        tenant_id,
-        body,
-        plane=plane,
-        approvals=_approvals(request),
-    )
-    await publish_owned_event(request,
-        tenant_id=tenant_id,
-        event_type=ADMISSION_SUBMITTED_V1,
-        payload=row.to_event_payload(),
-    )
-    return row
+    async with operation(request.app.state.aiuditor_persist):
+        row = submit_admission(_admissions(request), tenant_id, body, run_pipeline=False)
+        await publish_owned_event(request, tenant_id=tenant_id,
+            event_type=ADMISSION_SUBMITTED_V1, payload=row.to_event_payload())
+    # The lab may call back while this hop is outstanding. Its admission and
+    # submitted event must already be committed and visible to that callback.
+    from aiuditor_service.admission import advance_admission_async
+    return await advance_admission_async(_admissions(request), tenant_id, row.id,
+        body=body, hold_for_human=bool(body.hold_for_human), plane=plane,
+        approvals=_approvals(request))
 
 
 @router.post("/admissions/{admission_id}/quarantine", response_model=Admission,
@@ -1229,26 +1225,22 @@ async def report_admission_sandbox(request: Request, admission_id: uuid.UUID) ->
     response_model=Admission,
     summary="Allow or deny an upload. LLM is never resolved_by.",
 )
-@atomic_events
 async def verdict_admission(
     request: Request, admission_id: uuid.UUID, body: AdmissionResolve
 ) -> Admission:
     require_grant_write(role_from_request(request))
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     plane = getattr(request.app.state, "plane_hop", None)
-    row = await resolve_admission_async(
-        _admissions(request),
-        tenant_id,
-        admission_id,
-        body,
-        resolved_by=await resolver_subject(request),
-        plane=plane,
-    )
-    await publish_owned_event(request,
-        tenant_id=tenant_id,
-        event_type=ADMISSION_RESOLVED_V1,
-        payload=row.to_event_payload(),
-    )
+    actor = await resolver_subject(request)
+    async with operation(request.app.state.aiuditor_persist):
+        row = await resolve_admission_async(_admissions(request), tenant_id,
+            admission_id, body, resolved_by=actor, plane=None)
+        await publish_owned_event(request, tenant_id=tenant_id,
+            event_type=ADMISSION_RESOLVED_V1, payload=row.to_event_payload())
+    if row.verdict.value == 'allow' and plane is not None:
+        # Promotion is a retryable peer action after the recorded decision.
+        return await resolve_admission_async(_admissions(request), tenant_id,
+            admission_id, body, resolved_by=actor, plane=plane)
     return row
 
 

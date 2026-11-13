@@ -153,7 +153,7 @@ def mutate_admission(persist, tenant_id, admission_id, apply):
             return row
     from sqlalchemy import select, text
     from aiuditor_service.models import AiuditorAdmission
-    with persist._session_factory() as session, session.begin():
+    with persist.write_session() as session:
         session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(tenant_id)})
         old = session.scalar(select(AiuditorAdmission).where(
             AiuditorAdmission.tenant_id == tenant_id, AiuditorAdmission.id == admission_id).with_for_update())

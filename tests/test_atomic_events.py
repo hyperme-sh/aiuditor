@@ -125,3 +125,77 @@ def test_scoped_sql_writes_do_not_open_or_commit_a_second_session():
         with persist.candidate_scope():assert _SCOPE.get() is session
     finally:_SCOPE.reset(token)
     factory.assert_not_called();session.commit.assert_not_called()
+
+
+@pytest.mark.parametrize('cancel',[False,True])
+async def test_sql_pool_wait_does_not_block_the_loop_or_leak_on_cancellation(monkeypatch,cancel):
+    from contextlib import contextmanager
+    from threading import Event
+    entered,release=Event(),Event()
+    connection=Mock()
+    def connect():
+        entered.set()
+        assert release.wait(3)
+        return connection
+    factory=Mock();factory.kw={'bind':SimpleNamespace(connect=connect)}
+    persist=SqlPersistSession(factory)
+    @contextmanager
+    def scope(*,connection):
+        yield
+    monkeypatch.setattr(persist,'candidate_scope',scope)
+    async def run():
+        async with atomic.operation(persist):pass
+    task=asyncio.create_task(run())
+    assert await asyncio.to_thread(entered.wait,2)
+    if cancel:task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    if cancel:
+        with pytest.raises(asyncio.CancelledError):await task
+    else:await task
+    connection.close.assert_called_once()
+
+
+async def test_admission_and_submitted_event_are_visible_before_lab_dispatch(monkeypatch):
+    from aiuditor_service.domain.models import AdmissionCreate
+    from aiuditor_service.hypermesh import FakePlaneHop
+    persist,request=owner();tenant=uuid.uuid4();plane=FakePlaneHop()
+    request.app.state.plane_hop=plane
+    monkeypatch.setattr(routes,'require_auditor_actor',lambda request:tenant)
+    original=plane.queue_lab_soak
+    async def queued(*args,**kwargs):
+        assert atomic._CURRENT.get() is None
+        assert str(kwargs['admission_id']) in persist.rows['admissions'][str(tenant)]
+        assert len(persist.rows['service_outbox'][str(tenant)])==1
+        return await original(*args,**kwargs)
+    monkeypatch.setattr(plane,'queue_lab_soak',queued)
+    row=await routes.create_admission(request,AdmissionCreate(file_hash='sha256:'+'ab'*32,
+        format='gguf',license='mit',intended_class='fixture-class',hold_for_human=False))
+    assert row.lab_assignment is not None
+
+
+async def test_promotion_failure_retains_verdict_and_one_event_for_retry(monkeypatch):
+    from unittest.mock import AsyncMock
+    from fastapi import HTTPException
+    from aiuditor_service.domain.models import AdmissionCreate,AdmissionResolve,AdmissionStatus,AdmissionVerdict
+    from aiuditor_service.hypermesh import FakePlaneHop
+    persist,request=owner();tenant=uuid.uuid4();plane=FakePlaneHop(promote_error='offline')
+    request.app.state.plane_hop=plane
+    monkeypatch.setattr(routes,'require_auditor_actor',lambda request:tenant)
+    monkeypatch.setattr(routes,'resolver_subject',AsyncMock(return_value='original-human'))
+    store=request.app.state.admission_store
+    row=routes.submit_admission(store,tenant,AdmissionCreate(file_hash='sha256:'+'ab'*32,
+        format='gguf',license='mit',intended_class='fixture-class'),run_pipeline=False)
+    store.put(row.model_copy(update={'status':AdmissionStatus.HOLD,'sandbox_soak_ok':True,'sandbox_egress_ok':True}))
+    body=AdmissionResolve(verdict='allow',reason='reviewed')
+    with pytest.raises(HTTPException) as error:await routes.verdict_admission(request,row.id,body)
+    assert error.value.status_code==502
+    accepted=store.get(tenant,row.id)
+    assert accepted.verdict is AdmissionVerdict.ALLOW
+    before=persist.snapshot()['service_outbox']
+    plane.promote_error=None
+    monkeypatch.setattr(routes,'resolver_subject',AsyncMock(return_value='retry-human'))
+    retried=await routes.verdict_admission(request,row.id,body)
+    assert retried.resolved_by=='original-human' and retried.resolved_at==accepted.resolved_at
+    assert persist.snapshot()['service_outbox']==before
+    assert len(before[str(tenant)])==1
