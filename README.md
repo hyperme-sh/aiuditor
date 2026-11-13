@@ -336,3 +336,6 @@ Infra's scheduled adapter registers 80 SQL cases across the 20 other producers
 and one auditor ticket recovery case,
 covering commit, forced rollback, failed outbox insertion and event retry. These
 cases live under `nightly/`; ordinary PR checks remain unit and contract checks.
+
+Enrolled-host tool policy and machine-signed review are documented in
+[host capabilities](docs/host-capabilities.md). This is separate from model routing.

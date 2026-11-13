@@ -24,6 +24,7 @@ from aiuditor_service.hypermesh import (
 )
 from aiuditor_service.interfaces.api.routes import router as aiuditor_router
 from aiuditor_service.machine_identity import router as machine_router
+from aiuditor_service.capability_routes import router as capability_router
 from aiuditor_service.private_models.routes import router as private_model_router
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
 from aiuditor_service.package import (
@@ -153,6 +154,18 @@ def create_app(
     app.state.aiuditor_role = resolved_role
     app.state.aiuditor_writer = writer_for(resolved_role)
 
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.exception_handlers import request_validation_exception_handler
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation(request: Request, ex: RequestValidationError):
+        if request.url.path.startswith("/api/v1/aiuditor/capabilities/"):
+            return JSONResponse(
+                status_code=422, content={"error": "Invalid capability request"},
+                headers={"Cache-Control": "no-store"},
+            )
+        return await request_validation_exception_handler(request, ex)
+
     @app.exception_handler(UnauthorizedException)
     async def _unauthorized(_: Request, ex: UnauthorizedException) -> JSONResponse:
         return JSONResponse(
@@ -203,6 +216,7 @@ def create_app(
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(version_router)
     app.include_router(machine_router, prefix="/api/v1")
+    app.include_router(capability_router, prefix="/api/v1")
     app.include_router(aiuditor_router, prefix="/api/v1")
     app.include_router(private_model_router, prefix="/api/v1")
     add_optional_service_cors(app, env_var="AIUDITOR_SERVICE_CORS_ORIGINS")
