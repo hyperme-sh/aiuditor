@@ -308,7 +308,7 @@ async def test_get_connection_waits_without_blocking_owner_holder(monkeypatch):
     monkeypatch.setattr(persist,'hydrate',lambda stores:None)
     stores=new_stores(persist);tenant=uuid.uuid4()
     request=Request({'type':'http','headers':[], 'app':SimpleNamespace(state=SimpleNamespace(**vars(stores),aiuditor_persist=persist))})
-    monkeypatch.setattr(routes,'require_hold_actor',lambda request:tenant)
+    monkeypatch.setattr(routes,'require_tenant_id',lambda request:tenant)
     async with atomic.operation(persist):
         task=asyncio.create_task(routes.get_connection(request,uuid.uuid4()),context=__import__('contextvars').Context())
         await asyncio.sleep(.03)
