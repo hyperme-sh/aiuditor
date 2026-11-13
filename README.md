@@ -323,6 +323,8 @@ commit before lab dispatch, and a named verdict and its event commit before
 retryable catalog promotion. Catalog allocation commits signed authority before
 requesting a remote lease; the returned binding and event commit together. A failed
 event write leaves the signed contract available to reconcile the issued lease.
+Auditor ticket metadata is retained before binding so an outbox failure retries
+the same issued ticket; this internal metadata is excluded from API responses.
 SQL pool checkout uses a separate bounded executor so waiters cannot starve route
 workers; cancellation returns the connection. Events never become authorization decisions.
 
@@ -330,6 +332,7 @@ Memory persistence stages operation-local changes and checks conflicting writes
 before committing them; a failed operation cannot erase another request's rows.
 The optional test event sink observes only committed events.
 
-Infra's scheduled adapter registers 80 SQL cases across the 20 other producers,
+Infra's scheduled adapter registers 80 SQL cases across the 20 other producers
+and one auditor ticket recovery case,
 covering commit, forced rollback, failed outbox insertion and event retry. These
 cases live under `nightly/`; ordinary PR checks remain unit and contract checks.

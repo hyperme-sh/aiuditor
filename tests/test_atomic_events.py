@@ -315,3 +315,32 @@ async def test_get_connection_waits_without_blocking_owner_holder(monkeypatch):
         assert not task.done()
     with pytest.raises(HTTPException) as error:await asyncio.wait_for(task,1)
     assert error.value.status_code==404
+
+
+async def test_auditor_ticket_retries_existing_issuance_after_outbox_failure(monkeypatch):
+    from datetime import UTC,datetime
+    from aiuditor_service.domain.models import Connection,ConnectionTicket
+    from aiuditor_service.hypermesh import FakePlaneHop
+    persist,request=owner();tenant=uuid.uuid4();plane=FakePlaneHop()
+    request.app.state.plane_hop=plane
+    monkeypatch.setattr(routes,'require_auditor_actor',lambda request:tenant)
+    store=request.app.state.connection_store
+    row=Connection(id=uuid.uuid4(),tenant_id=tenant,kind='host',purpose='auditor',
+        device_id=uuid.uuid4(),status='ready',created_at=datetime.now(UTC))
+    store.put(row)
+    original=routes.publish_owned_event
+    async def fail(*args,**kwargs):raise RuntimeError('outbox unavailable')
+    monkeypatch.setattr(routes,'publish_owned_event',fail)
+    with pytest.raises(RuntimeError,match='outbox unavailable'):
+        await routes.mint_connection_ticket(request,row.id,ConnectionTicket())
+    pending=store.get(tenant,row.id)
+    assert pending.lease_id is None and pending.pending_auditor_grant is not None
+    assert 'pending_auditor_grant' not in pending.model_dump()
+    assert len(plane.grants)==1 and not persist.rows.get('service_outbox')
+    # FakePlane refuses a second mint for the device; recovery must reuse it.
+    monkeypatch.setattr(routes,'publish_owned_event',original)
+    recovered=await routes.mint_connection_ticket(request,row.id,ConnectionTicket())
+    assert recovered.lease_id==plane.grants[row.device_id].lease_id
+    bound=store.get(tenant,row.id)
+    assert bound.lease_id==recovered.lease_id and bound.pending_auditor_grant is None
+    assert len(persist.rows['service_outbox'][str(tenant)])==1

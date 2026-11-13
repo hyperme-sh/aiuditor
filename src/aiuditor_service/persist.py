@@ -71,6 +71,7 @@ _BANNED = ("credential", "prompt", "ticket", "messages", "hmac")
 
 _ALLOWED = {
     "connections": {
+        "pending_auditor_grant",
         "control_plane_id",
         "id",
         "tenant_id",
@@ -233,6 +234,8 @@ def _plain(value: object) -> object:
 
 def dump_for_persist(obj: Any) -> dict[str, Any]:
     data = obj.model_dump()
+    if isinstance(obj, Connection):
+        data["pending_auditor_grant"] = obj.pending_auditor_grant
     for banned in _BANNED:
         data.pop(banned, None)
     return data

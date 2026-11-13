@@ -85,3 +85,28 @@ async def test_owner_transaction(producer,outcome,owner,monkeypatch):
             assert persist.snapshot()==after
     assert not outbox(engine,config['other_tenant_id'])
     for rows in persist.snapshot().values():assert not rows.get(config['other_tenant_id'])
+
+
+@pytest.mark.parametrize('producer',['mint_connection_ticket'])
+async def test_auditor_ticket_recovery(producer,owner,monkeypatch):
+    engine,persist,config,command,invoke,request=owner
+    original=routes.publish_owned_event
+    async def fail_after_insert(*args,**kwargs):
+        await original(*args,**kwargs)
+        raise RuntimeError('forced publication rollback')
+    monkeypatch.setattr(routes,'publish_owned_event',fail_after_insert)
+    with pytest.raises(RuntimeError,match='forced publication rollback'):await invoke()
+    import uuid
+    tenant=uuid.UUID(config['tenant_id']);connection=uuid.UUID(config['connection_id'])
+    store=request.app.state.connection_store
+    pending=store.get(tenant,connection)
+    assert pending.lease_id is None and pending.pending_auditor_grant is not None
+    assert 'pending_auditor_grant' not in pending.model_dump()
+    assert not outbox(engine,config['tenant_id'])
+    monkeypatch.setattr(routes,'publish_owned_event',original)
+    granted=await invoke()
+    bound=store.get(tenant,connection)
+    assert bound.lease_id==granted.lease_id and bound.pending_auditor_grant is None
+    assert len(request.app.state.plane_hop.grants)==1
+    assert len(outbox(engine,config['tenant_id']))==1
+    assert not outbox(engine,config['other_tenant_id'])

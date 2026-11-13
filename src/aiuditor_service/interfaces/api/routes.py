@@ -531,7 +531,8 @@ async def _bind_lease(
     taken = store.lease_for(row.tenant_id, lease_id)
     if taken is not None and taken.id != row.id:
         raise HTTPException(status_code=409, detail=LEASE_ALREADY_ASSIGNED)
-    bound = row.model_copy(update={"lease_id": lease_id, "status": ConnectionStatus.READY})
+    bound = row.model_copy(update={"lease_id": lease_id, "status": ConnectionStatus.READY,
+        "pending_auditor_grant": None})
     store.put(bound)
     await publish_owned_event(request,
         tenant_id=row.tenant_id,
@@ -601,17 +602,27 @@ async def mint_connection_ticket(
     plane = getattr(request.app.state, "plane_hop", None)
     if plane is None:
         raise HTTPException(status_code=503, detail=PLANE_HOP_FAILED)
-    try:
-        grant = await plane.mint_auditor_ticket(
-            tenant_id,
-            row.device_id,
-            reserved_hours=body.reserved_hours,
-            headers=_forward_headers(request),
-        )
-    except HostLookupUnavailable as exc:
-        raise _plane_error(exc) from exc
-    if grant.purpose != "ir":
-        raise HTTPException(status_code=409, detail="auditor ticket must be purpose=ir")
+    from aiuditor_service.hypermesh import IssuedGrant
+    if row.pending_auditor_grant is not None:
+        saved = row.pending_auditor_grant
+        grant = IssuedGrant(lease_id=uuid.UUID(saved['lease_id']),
+            device_id=uuid.UUID(saved['device_id']), purpose='ir', exp=saved['exp'])
+    else:
+        try:
+            grant = await plane.mint_auditor_ticket(
+                tenant_id, row.device_id, reserved_hours=body.reserved_hours,
+                headers=_forward_headers(request))
+        except HostLookupUnavailable as exc:
+            raise _plane_error(exc) from exc
+        if grant.purpose != "ir" or grant.device_id != row.device_id:
+            raise HTTPException(status_code=409, detail="auditor ticket must match purpose and device")
+        # Retain only issuance metadata before the independently retryable bind.
+        # No ticket blob or credential is stored or exposed through the API.
+        async with operation(request.app.state.aiuditor_persist):
+            row = _connection_or_404(request, tenant_id, connection_id)
+            row = row.model_copy(update={"pending_auditor_grant": {
+                'lease_id': str(grant.lease_id), 'device_id': str(grant.device_id), 'exp': grant.exp}})
+            _store(request).put(row)
     exp = None
     if grant.exp:
         try:

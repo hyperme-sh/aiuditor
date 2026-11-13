@@ -89,6 +89,7 @@ class Connection(BaseModel):
     device_id: uuid.UUID | None = None
     endpoint: str | None = None
     credential_ref: str | None = None
+    pending_auditor_grant: dict[str, str | None] | None = Field(default=None, exclude=True, repr=False)
     lease_id: uuid.UUID | None = None
     status: ConnectionStatus
     created_at: datetime
