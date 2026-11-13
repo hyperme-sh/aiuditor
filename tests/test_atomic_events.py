@@ -272,3 +272,46 @@ async def test_issued_lease_keeps_signed_authority_when_allocation_event_fails(m
     authority=stores.contract_store.get(tenant,issued.contract_id)
     assert authority is not None and authority.connection_id==connection.id
     assert not persist.rows.get('service_outbox')
+
+
+async def test_post_suite_pack_restoration_preserves_each_transition(monkeypatch):
+    from aiuditor_service.domain.models import SuiteMemberCreate
+    persist,request=owner();tenant=uuid.uuid4()
+    monkeypatch.setattr(routes,'require_auditor_actor',lambda request:tenant)
+    monkeypatch.setattr(routes,'_require_operator_program',lambda *a,**k:None)
+    for pack in ['pack-a','pack-b','pack-a','pack-a']:
+        row=await routes.record_suite_member(request,SuiteMemberCreate(class_id='agx-large',catalog_id='model-a',pack_id=pack))
+    assert row.revision==2 and len(persist.rows['service_outbox'][str(tenant)])==3
+
+
+async def test_get_connection_waits_without_blocking_owner_holder(monkeypatch):
+    from contextlib import contextmanager
+    from threading import Semaphore
+    from fastapi import HTTPException
+    slot=Semaphore(1)
+    def connect():
+        assert slot.acquire(timeout=2)
+        return SimpleNamespace(close=slot.release)
+    factory=Mock(side_effect=AssertionError('unscoped read checkout'))
+    factory.kw={'bind':SimpleNamespace(connect=connect)}
+    persist=SqlPersistSession(factory)
+    @contextmanager
+    def scope(*,connection):
+        token=_SCOPE.set(Mock())
+        try:yield
+        finally:_SCOPE.reset(token)
+    monkeypatch.setattr(persist,'candidate_scope',scope)
+    def load_rows(*args):
+        assert _SCOPE.get() is not None
+        return {}
+    monkeypatch.setattr(persist,'load_rows',load_rows)
+    monkeypatch.setattr(persist,'hydrate',lambda stores:None)
+    stores=new_stores(persist);tenant=uuid.uuid4()
+    request=Request({'type':'http','headers':[], 'app':SimpleNamespace(state=SimpleNamespace(**vars(stores),aiuditor_persist=persist))})
+    monkeypatch.setattr(routes,'require_hold_actor',lambda request:tenant)
+    async with atomic.operation(persist):
+        task=asyncio.create_task(routes.get_connection(request,uuid.uuid4()),context=__import__('contextvars').Context())
+        await asyncio.sleep(.03)
+        assert not task.done()
+    with pytest.raises(HTTPException) as error:await asyncio.wait_for(task,1)
+    assert error.value.status_code==404

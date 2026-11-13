@@ -355,6 +355,7 @@ async def get_meta(request: Request) -> AiuditorMeta:
     response_model=HydrateSnapshot,
     summary="Tenant snapshot a witness may pull. No prompt bodies or tickets.",
 )
+@atomic_events
 async def get_hydrate(request: Request) -> HydrateSnapshot:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return build_hydrate(
@@ -383,6 +384,7 @@ async def pull_hydrate(request: Request) -> HydrateSnapshot:
 
 
 @router.get("/connections", response_model=list[Connection])
+@atomic_events
 async def list_connections(request: Request) -> list[Connection]:
     tenant_id = await asyncio.to_thread(require_tenant_id, request)
     return _store(request).list_for(tenant_id)
@@ -398,6 +400,7 @@ async def list_connections(request: Request) -> list[Connection]:
         "replace POST /catalog/{service_id}/allocate (that call still binds one host)."
     ),
 )
+@atomic_events
 async def list_allowed(request: Request) -> AllowedSet:
     tenant_id = await asyncio.to_thread(require_tenant_id, request)
     hosts: list[AllowedHost] = []
@@ -489,6 +492,7 @@ async def create_connection(request: Request, body: ConnectionCreate) -> Connect
 
 
 @router.get("/connections/{connection_id}", response_model=Connection)
+@atomic_events
 async def get_connection(request: Request, connection_id: uuid.UUID) -> Connection:
     tenant_id = await asyncio.to_thread(require_tenant_id, request)
     row = _store(request).get(tenant_id, connection_id)
@@ -683,6 +687,7 @@ async def create_approval(request: Request, body: ApprovalCreate) -> Approval:
 
 
 @router.get("/approvals", response_model=list[Approval], summary="Operator inbox")
+@atomic_events
 async def list_approvals(
     request: Request,
     approval_status: str | None = Query(default=None, alias="status"),
@@ -702,6 +707,7 @@ async def list_approvals(
     response_model=Approval,
     summary="Door lookup for a lease + who",
 )
+@atomic_events
 async def latest_approval(
     request: Request,
     lease_id: uuid.UUID,
@@ -719,6 +725,7 @@ async def latest_approval(
 
 
 @router.get("/approvals/{approval_id}", response_model=Approval)
+@atomic_events
 async def get_approval(request: Request, approval_id: uuid.UUID) -> Approval:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     store = _approvals(request)
@@ -786,6 +793,7 @@ async def create_policy(request: Request, body: ApprovalPolicyCreate) -> Approva
 
 
 @router.get("/policies", response_model=list[ApprovalPolicy], summary="Org policy")
+@atomic_events
 async def list_policies(
     request: Request,
     purpose: str | None = Query(default=None),
@@ -829,6 +837,7 @@ async def create_contract(request: Request, body: ContractCreate) -> Contract:
     response_model=GrantExport,
     summary="Operator grant export. No prompt bodies. Not the grant SoT.",
 )
+@atomic_events
 async def export_grants(request: Request) -> GrantExport:
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     return build_grant_export(
@@ -840,12 +849,14 @@ async def export_grants(request: Request) -> GrantExport:
 
 
 @router.get("/contracts", response_model=list[Contract], summary="Tenant contracts")
+@atomic_events
 async def list_contracts(request: Request) -> list[Contract]:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return _contracts(request).list_for(tenant_id)
 
 
 @router.get("/contracts/{contract_id}", response_model=Contract)
+@atomic_events
 async def get_contract(request: Request, contract_id: uuid.UUID) -> Contract:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _contracts(request).get(tenant_id, contract_id)
@@ -859,6 +870,7 @@ async def get_contract(request: Request, contract_id: uuid.UUID) -> Contract:
     response_model=ContractGrant,
     summary="Signed spine §D grant a sibling product may cite. Not a catalog row.",
 )
+@atomic_events
 async def get_contract_grant(request: Request, contract_id: uuid.UUID) -> ContractGrant:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return ContractGrant.from_contract(
@@ -955,12 +967,14 @@ async def create_catalog_service(request: Request, body: ServiceCreate) -> Catal
 
 
 @router.get("/catalog", response_model=list[CatalogService], summary="Tenant service catalog")
+@atomic_events
 async def list_catalog_services(request: Request) -> list[CatalogService]:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     return _catalog(request).list_for(tenant_id)
 
 
 @router.get("/catalog/{service_id}", response_model=CatalogService)
+@atomic_events
 async def get_catalog_service(request: Request, service_id: uuid.UUID) -> CatalogService:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _catalog(request).get(tenant_id, service_id)
@@ -1040,6 +1054,7 @@ async def record_envelope(request: Request, body: "LabEnvelopeReport", response:
     response_model=list[ClassEnvelope],
     summary="Class envelopes for a tenant. Filter by class_id.",
 )
+@atomic_events
 async def list_envelopes(
     request: Request,
     class_id: str | None = Query(default=None),
@@ -1049,6 +1064,7 @@ async def list_envelopes(
 
 
 @router.get("/envelopes/{envelope_id}", response_model=ClassEnvelope)
+@atomic_events
 async def get_envelope(request: Request, envelope_id: uuid.UUID) -> ClassEnvelope:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _envelopes(request).get(tenant_id, envelope_id)
@@ -1121,6 +1137,7 @@ async def seed_suite(request: Request) -> list[SuiteMember]:
     response_model=list[SuiteMember],
     summary="Core cert suite membership. Compact-cert jobs read this list.",
 )
+@atomic_events
 async def list_suite_members(
     request: Request,
     class_id: str | None = Query(default=None),
@@ -1130,6 +1147,7 @@ async def list_suite_members(
 
 
 @router.get("/suite/{member_id}", response_model=SuiteMember)
+@atomic_events
 async def get_suite_member(request: Request, member_id: uuid.UUID) -> SuiteMember:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _suite(request).get(tenant_id, member_id)
@@ -1185,6 +1203,7 @@ async def retry_admission_quarantine(request: Request, admission_id: uuid.UUID,
     response_model=list[Admission],
     summary="Uploaded-model admissions. Filter by status or intended_class.",
 )
+@atomic_events
 async def list_admissions(
     request: Request,
     status_filter: str | None = Query(default=None, alias="status"),
@@ -1197,6 +1216,7 @@ async def list_admissions(
 
 
 @router.get("/admissions/{admission_id}", response_model=Admission)
+@atomic_events
 async def get_admission(request: Request, admission_id: uuid.UUID) -> Admission:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = _admissions(request).get(tenant_id, admission_id)
@@ -1300,6 +1320,7 @@ async def run_crawl(request: Request) -> CrawlRunResult:
     response_model=list[CrawlCandidate],
     summary="List crawl metadata candidates. Filter by class_id or status.",
 )
+@atomic_events
 async def list_crawl_candidates(
     request: Request,
     class_id: str | None = Query(default=None),
@@ -1316,6 +1337,7 @@ async def list_crawl_candidates(
     response_model=list[ContractViolation],
     summary="Tenant violations. Dispute reads cert + audit, not a court.",
 )
+@atomic_events
 async def list_tenant_violations(
     request: Request,
     contract_id: uuid.UUID | None = Query(default=None),
@@ -1331,6 +1353,7 @@ async def list_tenant_violations(
     response_model=list[ContractViolation],
     summary="Violations on a contract. Dispute reads cert + audit, not a court.",
 )
+@atomic_events
 async def list_violations(
     request: Request, contract_id: uuid.UUID
 ) -> list[ContractViolation]:

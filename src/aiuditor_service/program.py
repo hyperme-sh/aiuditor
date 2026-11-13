@@ -165,7 +165,8 @@ def _put_suite_member(
         raise HTTPException(status_code=400, detail=CATALOG_ID_REQUIRED)
     existing = store.for_class_catalog(tenant_id, class_id, catalog_id)
     if existing is not None:
-        row = existing.model_copy(update={"pack_id": pack_id})
+        row = existing.model_copy(update={"pack_id": pack_id,
+            "revision": existing.revision + int(existing.pack_id != pack_id)})
         store.put(row)
         return row
     row = SuiteMember(
