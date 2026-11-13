@@ -20,7 +20,7 @@ ADMISSION_SUBMITTED_V1 = "aiuditor.admission.submitted.v1"
 ADMISSION_RESOLVED_V1 = "aiuditor.admission.resolved.v1"
 
 
-async def publish_contract(publisher, *, tenant_id, event_type, contract):
+async def publish_contract(request, *, tenant_id, event_type, contract):
     """Legacy rail grants retain their v1 wire; neutral grants use v2."""
     from aiuditor_service.domain.models import LegacyContractEvent
     if contract.rail is not None:
@@ -28,4 +28,5 @@ async def publish_contract(publisher, *, tenant_id, event_type, contract):
     else:
         event_type = event_type.removesuffix('.v1') + '.v2'
         payload = contract.to_event_payload()
-    return await publisher.publish(tenant_id=tenant_id, event_type=event_type, payload=payload)
+    from aiuditor_service.atomic_events import publish_owned_event
+    return await publish_owned_event(request,tenant_id=tenant_id, event_type=event_type, payload=payload)

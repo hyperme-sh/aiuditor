@@ -11,11 +11,6 @@ from controlplane_api.exceptions import ForbiddenException, UnauthorizedExceptio
 from controlplane_api.logging import configure_logging
 from controlplane_api.utils import get_logger
 from controlplane_api.config import settings
-from api.infrastructure.messaging.tenant_event_publisher import (
-    install_tenant_event_publisher,
-    set_tenant_event_publisher,
-    shutdown_tenant_event_publisher,
-)
 from controlplane_tenancy.db_session import configure_session_maker
 from controlplane_api.service_cors import add_optional_service_cors
 from controlplane_api.health import router as health_router
@@ -108,29 +103,7 @@ def create_app(
             configure_session_maker(maker)
             app.state.async_engine = engine
 
-        if test_event_sink is not None:
-
-            class _ListSink:
-                async def publish(
-                    self,
-                    *,
-                    tenant_id,
-                    event_type: str,
-                    payload: dict,
-                    correlation_id: str | None = None,
-                ) -> None:
-                    test_event_sink.append(
-                        {
-                            "tenant_id": tenant_id,
-                            "event_type": event_type,
-                            "payload": payload,
-                            "correlation_id": correlation_id,
-                        }
-                    )
-
-            set_tenant_event_publisher(_ListSink())
-        else:
-            await install_tenant_event_publisher(service_name=svc_name)
+        persist.event_sink = test_event_sink
 
         program_stop = asyncio.Event()
         program_task = asyncio.create_task(run_program_bootstrap(app, stop=program_stop))
@@ -161,7 +134,6 @@ def create_app(
             await hydrate_task
         except asyncio.CancelledError:
             pass
-        await shutdown_tenant_event_publisher()
         if engine is not None:
             await engine.dispose()
 

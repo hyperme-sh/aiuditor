@@ -184,6 +184,10 @@ class _FakeSession:
     def delete(self, obj):
         self.calls.append(("delete", type(obj).__name__))
 
+    def begin(self):
+        from contextlib import nullcontext
+        return nullcontext()
+
     def commit(self):
         self.calls.append(("commit",))
 
@@ -263,6 +267,9 @@ async def test_http_put_is_503_when_persist_is_unavailable(
     from aiuditor_service.app import create_app
 
     class _Down:
+        def candidate_scope(self):
+            raise PersistUnavailable(PERSIST_UNAVAILABLE)
+
         def hydrate(self, stores) -> None:
             return None
 

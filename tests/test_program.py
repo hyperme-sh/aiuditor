@@ -220,10 +220,9 @@ async def test_program_http_and_hydrate(
     assert "'prompt':" not in dumped and '"prompt":' not in dumped
 
     types = {item["event_type"] for item in event_sink}
-    # Signed measurements persist their event in the owner transaction, not
-    # the separately committed publisher used by the remaining routes.
+    # All writers retain their derivative events in the owner transaction.
     durable = app.state.envelope_store.persist.rows["service_outbox"][str(tenant_a)]
-    assert [item["event_type"] for item in durable.values()] == [ENVELOPE_RECORDED_V1]
+    assert {item["event_type"] for item in durable.values()} == {ENVELOPE_RECORDED_V1, *types}
     assert SUITE_MEMBER_RECORDED_V1 in types
     assert ADMISSION_SUBMITTED_V1 in types
     assert ADMISSION_RESOLVED_V1 in types

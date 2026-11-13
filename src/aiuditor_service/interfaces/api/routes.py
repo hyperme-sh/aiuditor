@@ -19,7 +19,7 @@ import os
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
-from api.infrastructure.messaging.tenant_event_publisher import get_tenant_event_publisher
+from aiuditor_service.atomic_events import atomic_events, publish_owned_event, operation
 
 from aiuditor_service.approvals import (
     APPROVAL_NOT_FOUND,
@@ -443,6 +443,7 @@ async def _require_enrolled_host(request: Request, tenant_id: uuid.UUID, device_
 
 
 @router.post("/connections", response_model=Connection, status_code=status.HTTP_201_CREATED)
+@atomic_events
 async def create_connection(request: Request, body: ConnectionCreate) -> Connection:
     tenant_id = await asyncio.to_thread(require_tenant_id, request)
     plane = "local"
@@ -479,7 +480,7 @@ async def create_connection(request: Request, body: ConnectionCreate) -> Connect
         created_at=datetime.now(UTC),
     )
     _store(request).put(row)
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=CONNECTION_CREATED_V1,
         payload=row.to_event_payload(),
@@ -512,6 +513,7 @@ def _connection_or_404(request: Request, tenant_id: uuid.UUID, connection_id: uu
     return row
 
 
+@atomic_events
 async def _bind_lease(
     request: Request,
     row: Connection,
@@ -527,7 +529,7 @@ async def _bind_lease(
         raise HTTPException(status_code=409, detail=LEASE_ALREADY_ASSIGNED)
     bound = row.model_copy(update={"lease_id": lease_id, "status": ConnectionStatus.READY})
     store.put(bound)
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=row.tenant_id,
         event_type=CONNECTION_ASSIGNED_V1,
         payload=bound.to_event_payload(),
@@ -668,10 +670,11 @@ async def classify_connection(
         "No prompt body. Internal token (door) or AIuditor grant."
     ),
 )
+@atomic_events
 async def create_approval(request: Request, body: ApprovalCreate) -> Approval:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
     row = hold_approval(_approvals(request), tenant_id, body)
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=APPROVAL_HELD_V1,
         payload=row.to_event_payload(),
@@ -731,6 +734,7 @@ async def get_approval(request: Request, approval_id: uuid.UUID) -> Approval:
     response_model=Approval,
     summary="Allow-once, allow-session, or deny. LLM is never resolved_by.",
 )
+@atomic_events
 async def resolve_approval_route(
     request: Request, approval_id: uuid.UUID, body: ApprovalResolve
 ) -> Approval:
@@ -743,7 +747,7 @@ async def resolve_approval_route(
         decision=body.decision,
         resolved_by=resolved_by,
     )
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=APPROVAL_RESOLVED_V1,
         payload=row.to_event_payload(),
@@ -769,10 +773,11 @@ async def consume_approval(
     status_code=status.HTTP_201_CREATED,
     summary="Org allow/hold/deny. Default renter chat is unclassified.",
 )
+@atomic_events
 async def create_policy(request: Request, body: ApprovalPolicyCreate) -> ApprovalPolicy:
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = put_policy(_policies(request), tenant_id, body)
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=POLICY_CREATED_V1,
         payload=row.to_event_payload(),
@@ -790,12 +795,13 @@ async def list_policies(
 
 
 @router.delete("/policies/{policy_id}", status_code=status.HTTP_204_NO_CONTENT)
+@atomic_events
 async def delete_policy(request: Request, policy_id: uuid.UUID) -> None:
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = _policies(request).delete(tenant_id, policy_id)
     if row is None:
         raise HTTPException(status_code=404, detail=POLICY_NOT_FOUND)
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=POLICY_DELETED_V1,
         payload=row.to_event_payload(),
@@ -808,11 +814,12 @@ async def delete_policy(request: Request, policy_id: uuid.UUID) -> None:
     status_code=status.HTTP_201_CREATED,
     summary="Draft a contract with an opaque accounting binding.",
 )
+@atomic_events
 async def create_contract(request: Request, body: ContractCreate) -> Contract:
     require_grant_write(role_from_request(request))
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = put_contract(_contracts(request), tenant_id, body)
-    await publish_contract(get_tenant_event_publisher(), tenant_id=tenant_id,
+    await publish_contract(request, tenant_id=tenant_id,
                            event_type=CONTRACT_CREATED_V1, contract=row)
     return row
 
@@ -865,6 +872,7 @@ async def get_contract_grant(request: Request, contract_id: uuid.UUID) -> Contra
     response_model=Contract,
     summary="Named human signs. LLM is never signed_by.",
 )
+@atomic_events
 async def sign_contract_route(request: Request, contract_id: uuid.UUID) -> Contract:
     require_grant_write(role_from_request(request))
     signed_by = await require_contract_signer(request)
@@ -872,7 +880,7 @@ async def sign_contract_route(request: Request, contract_id: uuid.UUID) -> Contr
     row = sign_contract(
         _contracts(request), tenant_id, contract_id, signed_by=signed_by
     )
-    await publish_contract(get_tenant_event_publisher(), tenant_id=tenant_id,
+    await publish_contract(request, tenant_id=tenant_id,
                            event_type=CONTRACT_SIGNED_V1, contract=row)
     return row
 
@@ -882,13 +890,14 @@ async def sign_contract_route(request: Request, contract_id: uuid.UUID) -> Contr
     response_model=Contract,
     summary="Cite a Hypermesh lease. Does not mint a ticket.",
 )
+@atomic_events
 async def bind_contract_route(
     request: Request, contract_id: uuid.UUID, body: ContractBind
 ) -> Contract:
     require_grant_write(role_from_request(request))
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = bind_contract(_contracts(request), tenant_id, contract_id, body)
-    await publish_contract(get_tenant_event_publisher(), tenant_id=tenant_id,
+    await publish_contract(request, tenant_id=tenant_id,
                            event_type=CONTRACT_BOUND_V1, contract=row)
     return row
 
@@ -899,6 +908,7 @@ async def bind_contract_route(
     status_code=status.HTTP_201_CREATED,
     summary="Auto-sign a spine §D contract for Checkout. Internal only.",
 )
+@atomic_events
 async def fulfill_contract_route(
     request: Request, body: ContractFulfill
 ) -> Contract:
@@ -908,19 +918,20 @@ async def fulfill_contract_route(
     if selected_backend() == 'http' and body.contract_id is None:
         raise HTTPException(409, 'External accounting requires a signed commit callback')
     row = fulfill_checkout_contract(_contracts(request), tenant_id, body)
-    await publish_contract(get_tenant_event_publisher(), tenant_id=tenant_id,
+    await publish_contract(request, tenant_id=tenant_id,
                            event_type=CONTRACT_FULFILLED_V1, contract=row)
     return row
 
 
 @router.post("/contracts/accounting/committed", response_model=AccountingContract, status_code=201)
 @router.post("/contracts/paid/fulfill", response_model=Contract, status_code=201, deprecated=True)
+@atomic_events
 async def fulfill_accounting_contract(request: Request) -> Contract:
     from aiuditor_service.accounting import authenticated_commit, apply_commit
     require_grant_write(role_from_request(request))
     event = await authenticated_commit(request)
     row = apply_commit(_contracts(request), event)
-    await publish_contract(get_tenant_event_publisher(), tenant_id=event.tenant_id,
+    await publish_contract(request, tenant_id=event.tenant_id,
                            event_type=CONTRACT_FULFILLED_V1, contract=row)
     return row
 
@@ -931,10 +942,11 @@ async def fulfill_accounting_contract(request: Request) -> Contract:
     status_code=status.HTTP_201_CREATED,
     summary="Name a leasable backend. Not a Hypermesh class or catalog row.",
 )
+@atomic_events
 async def create_catalog_service(request: Request, body: ServiceCreate) -> CatalogService:
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = put_service(_catalog(request), _store(request), tenant_id, body)
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=CATALOG_SERVICE_CREATED_V1,
         payload=row.to_event_payload(),
@@ -964,6 +976,7 @@ async def get_catalog_service(request: Request, service_id: uuid.UUID) -> Catalo
     status_code=status.HTTP_201_CREATED,
     summary="Pick a live connection, sign a Contract, and offer the host ticket.",
 )
+@atomic_events
 async def allocate_catalog_service(
     request: Request, service_id: uuid.UUID, body: ServiceAllocate
 ) -> ServiceAllocation:
@@ -991,7 +1004,7 @@ async def allocate_catalog_service(
         )
     except HostLookupUnavailable as exc:
         raise _plane_error(exc) from exc
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=CATALOG_SERVICE_ALLOCATED_V1,
         payload=allocation.to_event_payload(),
@@ -1050,6 +1063,7 @@ async def get_envelope(request: Request, envelope_id: uuid.UUID) -> ClassEnvelop
     status_code=status.HTTP_201_CREATED,
     summary="Add a catalog/pack id to the compact host cert suite.",
 )
+@atomic_events
 async def record_suite_member(
     request: Request, body: SuiteMemberCreate
 ) -> SuiteMember:
@@ -1057,7 +1071,7 @@ async def record_suite_member(
     await asyncio.to_thread(_require_operator_program, request, allow_service_seed=False)
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     row = put_suite_member(_suite(request), tenant_id, body)
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=SUITE_MEMBER_RECORDED_V1,
         payload=row.to_event_payload(),
@@ -1067,13 +1081,14 @@ async def record_suite_member(
 
 @router.put("/suite/{member_id}", response_model=SuiteMember,
             summary="Replace a reviewed class-suite model with compare-and-set")
+@atomic_events
 async def replace_class_suite_member(request: Request, member_id: uuid.UUID,
                                      body: SuiteMemberReplace) -> SuiteMember:
     require_grant_write(role_from_request(request))
     _require_operator_program(request, allow_service_seed=False)
     tenant_id = require_auditor_actor(request)
     row = replace_suite_member(_suite(request), tenant_id, member_id, body)
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id, event_type=SUITE_MEMBER_RECORDED_V1,
         payload=row.to_event_payload(),
     )
@@ -1086,13 +1101,14 @@ async def replace_class_suite_member(request: Request, member_id: uuid.UUID,
     status_code=status.HTTP_201_CREATED,
     summary="Seed pack-v1 with the reviewed class-scoped 8B catalog entries.",
 )
+@atomic_events
 async def seed_suite(request: Request) -> list[SuiteMember]:
     require_grant_write(role_from_request(request))
     await asyncio.to_thread(_require_operator_program, request, allow_service_seed=True)
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
     rows = seed_core_suite(_suite(request), tenant_id)
     for row in rows:
-        await get_tenant_event_publisher().publish(
+        await publish_owned_event(request,
             tenant_id=tenant_id,
             event_type=SUITE_MEMBER_RECORDED_V1,
             payload=row.to_event_payload(),
@@ -1128,6 +1144,7 @@ async def get_suite_member(request: Request, member_id: uuid.UUID) -> SuiteMembe
     status_code=status.HTTP_201_CREATED,
     summary="Submit an uploaded model. Stays pending until a named verdict.",
 )
+@atomic_events
 async def create_admission(request: Request, body: AdmissionCreate) -> Admission:
     require_grant_write(role_from_request(request))
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
@@ -1139,7 +1156,7 @@ async def create_admission(request: Request, body: AdmissionCreate) -> Admission
         plane=plane,
         approvals=_approvals(request),
     )
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=ADMISSION_SUBMITTED_V1,
         payload=row.to_event_payload(),
@@ -1212,6 +1229,7 @@ async def report_admission_sandbox(request: Request, admission_id: uuid.UUID) ->
     response_model=Admission,
     summary="Allow or deny an upload. LLM is never resolved_by.",
 )
+@atomic_events
 async def verdict_admission(
     request: Request, admission_id: uuid.UUID, body: AdmissionResolve
 ) -> Admission:
@@ -1226,7 +1244,7 @@ async def verdict_admission(
         resolved_by=await resolver_subject(request),
         plane=plane,
     )
-    await get_tenant_event_publisher().publish(
+    await publish_owned_event(request,
         tenant_id=tenant_id,
         event_type=ADMISSION_RESOLVED_V1,
         payload=row.to_event_payload(),
@@ -1370,15 +1388,16 @@ async def file_violation_route(
 ) -> ContractViolation:
     require_grant_write(role_from_request(request))
     tenant_id = await asyncio.to_thread(require_auditor_actor, request)
-    filed, _updated = put_violation(
-        _violations(request), _contracts(request), tenant_id, contract_id, body
-    )
+    async with operation(request.app.state.aiuditor_persist):
+        filed, _updated = put_violation(
+            _violations(request), _contracts(request), tenant_id, contract_id, body
+        )
+        await publish_owned_event(request,
+            tenant_id=tenant_id,
+            event_type=CONTRACT_VIOLATED_V1,
+            payload=filed.to_event_payload(),
+        )
     await _apply_filed_violation(request, tenant_id, filed)
-    await get_tenant_event_publisher().publish(
-        tenant_id=tenant_id,
-        event_type=CONTRACT_VIOLATED_V1,
-        payload=filed.to_event_payload(),
-    )
     return _violations(request).for_tenant(tenant_id)[filed.id]
 
 
@@ -1431,19 +1450,20 @@ async def evaluate_contract_route(
         kind = evaluate_kind(row, host=host, lease=lease, denied=denied, settlement_overdue=overdue)
     if kind is None:
         return existing
-    filed, _updated = put_violation(
-        _violations(request),
-        _contracts(request),
-        tenant_id,
-        contract_id,
-        ContractViolationCreate(kind=kind),
-    )
+    async with operation(request.app.state.aiuditor_persist):
+        filed, _updated = put_violation(
+            _violations(request),
+            _contracts(request),
+            tenant_id,
+            contract_id,
+            ContractViolationCreate(kind=kind),
+        )
+        await publish_owned_event(request,
+            tenant_id=tenant_id,
+            event_type=CONTRACT_VIOLATED_V1,
+            payload=filed.to_event_payload(),
+        )
     await _apply_filed_violation(request, tenant_id, filed)
-    await get_tenant_event_publisher().publish(
-        tenant_id=tenant_id,
-        event_type=CONTRACT_VIOLATED_V1,
-        payload=filed.to_event_payload(),
-    )
     return _violations(request).list_for(tenant_id, contract_id=contract_id)
 
 
