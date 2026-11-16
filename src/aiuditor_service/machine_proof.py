@@ -77,11 +77,15 @@ def verified_proof(tid, p, now):
         public_key(p.next_public_key)
 
 
-def issue(state, tid, p, *, bind=False, now=None):
+def issue(state, tid, p, *, bind=False, now=None, client=False):
     """Pure state transition; caller must hold the registration row lock."""
     now = int(time.time()) if now is None else now
     verified_proof(tid, p, now)
     state = dict(state or {})
+    # Immutable policy selected by the attesting plane, never by an untrusted proof.
+    # The ordinary host/direct renewal paths cannot widen a client identity.
+    if state and bool(state.get("owner_attested_client", False)) != client:
+        raise HTTPException(403, "Machine enrollment policy does not match this operation")
     if not state:
         if not bind or p.next_public_key:
             raise HTTPException(401, "Machine identity not bound")
@@ -91,6 +95,8 @@ def issue(state, tid, p, *, bind=False, now=None):
             "nonces": [],
             "tokens": [],
         }
+    if client:
+        state["owner_attested_client"] = True
     current = hmac.compare_digest(state["public_key"], p.public_key)
     previous = (
         hmac.compare_digest(state.get("previous_key", ""), p.public_key)
@@ -146,8 +152,10 @@ def token_digest(secret):
     return hashlib.sha256(secret.encode()).hexdigest()
 
 
-def access_allowed(state, digest, now=None):
+def access_allowed(state, digest, now=None, *, client=False):
     now = time.time() if now is None else now
+    if bool((state or {}).get("owner_attested_client", False)) != client:
+        return False
     return any(
         hmac.compare_digest(v[0], digest) and v[1] > now
         for v in (state or {}).get("tokens", [])

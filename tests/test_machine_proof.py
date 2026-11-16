@@ -135,3 +135,30 @@ def test_rate_limit_does_not_evict_valid_replay_protection():
         mi.issue(state, tid, proof(key, tid), now=NOW)
     assert failure.value.status_code == 429
     assert len(state["nonces"]) == 128
+
+
+def test_client_policy_cannot_be_changed_by_rebind_rotation_or_host_renewal():
+    key, replacement = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    tid = uuid.uuid4()
+    first = proof(key, tid)
+    state, token = mi.issue({}, tid, first, bind=True, now=NOW, client=True)
+    digest = mi.token_digest(token["access_token"])[4:]
+    assert mi.access_allowed(state, digest, NOW, client=True)
+    assert not mi.access_allowed(state, digest, NOW)
+    for bind in (False, True):
+        fresh = proof(key, tid, device=first.device_id, request=first.request_id)
+        with pytest.raises(HTTPException, match="policy"):
+            mi.issue(state, tid, fresh, bind=bind, now=NOW)
+    rotation = proof(key, tid, device=first.device_id, request=first.request_id, next_key=replacement)
+    state, _ = mi.issue(state, tid, rotation, client=True, now=NOW)
+    assert state["owner_attested_client"] is True
+    retry = proof(key, tid, device=first.device_id, request=first.request_id, next_key=replacement)
+    state, _ = mi.issue(state, tid, retry, client=True, now=NOW)
+    with pytest.raises(HTTPException, match="already used"):
+        mi.issue(state, tid, retry, client=True, now=NOW)
+    assert not mi.access_allowed(state, digest, NOW + 600, client=True)
+    host = proof(key, tid)
+    host_state, host_token = mi.issue({}, tid, host, bind=True, now=NOW)
+    assert not mi.access_allowed(host_state, mi.token_digest(host_token["access_token"])[4:], NOW, client=True)
+    with pytest.raises(HTTPException, match="policy"):
+        mi.issue(host_state, tid, proof(key, tid), bind=True, client=True, now=NOW)
