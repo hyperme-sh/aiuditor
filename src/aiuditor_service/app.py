@@ -24,6 +24,7 @@ from aiuditor_service.hypermesh import (
 )
 from aiuditor_service.interfaces.api.routes import router as aiuditor_router
 from aiuditor_service.machine_identity import router as machine_router
+from aiuditor_service.phone_mesh import router as phone_mesh_router
 from aiuditor_service.capability_routes import router as capability_router
 from aiuditor_service.access_routes import router as access_router
 from aiuditor_service.private_models.routes import router as private_model_router
@@ -217,6 +218,7 @@ def create_app(
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(version_router)
     app.include_router(machine_router, prefix="/api/v1")
+    app.include_router(phone_mesh_router, prefix="/api/v1")
     app.include_router(capability_router, prefix="/api/v1")
     app.include_router(access_router, prefix="/api/v1")
     app.include_router(aiuditor_router, prefix="/api/v1")
