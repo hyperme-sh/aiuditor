@@ -52,3 +52,11 @@ class AccessPreviewTests(unittest.TestCase):
         with self.assertRaises(ValidationError):Preview.model_validate(raw)
         self.body.action.target='/project/../secret'
         with self.assertRaises(ValueError):self.result()
+
+    def test_consumer_context_can_only_shorten_expiry(self):
+        self.body.context_expires_at=105
+        self.assertEqual(self.result()['expires_at'],105)
+        self.body.context_expires_at=999
+        self.assertEqual(self.result()['expires_at'],110)
+        self.body.context_expires_at=100
+        with self.assertRaises(ValueError):self.result()

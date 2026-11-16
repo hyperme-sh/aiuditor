@@ -71,6 +71,7 @@ class TemplateRule(Strict):
 
 
 class Preview(Strict):
+    context_expires_at: float | None = Field(default=None,gt=0,allow_inf_nan=False)
     version: Literal[1]
     request_id: uuid.UUID
     tenant_id: uuid.UUID
@@ -122,6 +123,8 @@ def evaluate(body: Preview, fact: dict, policy: Policy, now=None):
             raise ValueError('Authenticated context mismatch')
     if fact.get('version')!=1 or not isinstance(fact.get('principal'),str) or not fact['principal'] or not now < fact.get('expires_at',0) <= now+11:
         raise ValueError('Authenticated context expired')
+    expiry=min(fact['expires_at'],body.context_expires_at) if body.context_expires_at is not None else fact['expires_at']
+    if expiry<=now:raise ValueError('Preview context expired')
     org=uuid.UUID(fact['organization_id'])
     action=body.action.normalized()
     if not body.project.startswith('/') or str(PurePosixPath(body.project))!=body.project or any(p in ('.','..') for p in body.project.split('/')):
@@ -155,4 +158,4 @@ def evaluate(body: Preview, fact: dict, policy: Policy, now=None):
         action=action.model_dump(mode='json'),project=body.project,decision=decision,permitted=permitted,
         reason=reason,limits=limits.model_dump(),policy_revision=str(policy.revision),
         learning_eligible=permitted and not any(r.no_always_allow for r in rules),
-        expires_at=fact['expires_at'])
+        expires_at=expiry)
