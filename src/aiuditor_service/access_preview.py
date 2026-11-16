@@ -159,3 +159,22 @@ def evaluate(body: Preview, fact: dict, policy: Policy, now=None):
         reason=reason,limits=limits.model_dump(),policy_revision=str(policy.revision),
         learning_eligible=permitted and not any(r.no_always_allow for r in rules),
         expires_at=expiry)
+
+
+class ReadReview(Preview):
+    expected_policy_revision: uuid.UUID | None = None
+
+
+def evaluate_read(body: ReadReview, fact: dict, policy: Policy, now=None):
+    """Review one exact read after the route obtains active machine context."""
+    action=body.action.normalized()
+    project=PurePosixPath(body.project)
+    if (action.operation!='read' or action.target!=body.action.target
+            or body.project=='/' or project not in PurePosixPath(action.target).parents):
+        raise ValueError('Exact file within selected project required')
+    result=evaluate(body,fact,policy,now=now)
+    result['preview_only']=False
+    if body.expected_policy_revision is not None and body.expected_policy_revision!=policy.revision:
+        result.update(permitted=False,learning_eligible=False,decision='prohibited',
+                      reason='Remembered policy revision changed')
+    return result
