@@ -106,7 +106,7 @@ def match(tid, plane, device):
     )
 
 
-async def exchange(request, body, response, bind, *, direct=False):
+async def exchange(request, body, response, bind, *, direct=False, client=False):
     if direct:
         import time
 
@@ -161,7 +161,7 @@ async def exchange(request, body, response, bind, *, direct=False):
             raise HTTPException(401, "Unknown machine registration")
         if row.revoked:
             raise HTTPException(410, "Machine authority revoked")
-        row.state, result = issue(row.state, tid, body, bind=bind)
+        row.state, result = issue(row.state, tid, body, bind=bind, client=client)
     return result
 
 
@@ -187,8 +187,7 @@ class Lookup(BaseModel):
     digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
-@router.post("/introspect")
-async def introspect(request: Request, body: Lookup, response: Response):
+async def inspect_identity(request, body, response, *, client=False):
     tid, plane = actor(request)
     response.headers["Cache-Control"] = "no-store"
     async with transaction(tid) as session:
@@ -199,7 +198,7 @@ async def introspect(request: Request, body: Lookup, response: Response):
             row
             and not row.revoked
             and row.request_id == body.request_id
-            and access_allowed(row.state, body.digest)
+            and access_allowed(row.state, body.digest, client=client)
         )
     return {"active": active, "bound": row is not None}
 
@@ -390,3 +389,29 @@ async def configuration(request: Request, response: Response):
         "authority_id": os.environ.get("AIUDITOR_ID", "local"),
         "control_plane_id": plane,
     }
+
+
+@router.post("/introspect")
+async def introspect(request: Request, body: Lookup, response: Response):
+    return await inspect_identity(request, body, response)
+
+
+@router.post("/client-bind")
+async def bind_client(request: Request, body: Proof, response: Response):
+    return await exchange(request, body, response, True, client=True)
+
+
+@router.post("/client-token")
+async def renew_client(request: Request, body: Proof, response: Response):
+    return await exchange(request, body, response, False, client=True)
+
+
+@router.post("/client-introspect")
+async def introspect_client(request: Request, body: Lookup, response: Response):
+    return await inspect_identity(request, body, response, client=True)
+
+
+@router.post("/client-configuration")
+async def client_configuration(request: Request, response: Response):
+    result = await configuration(request, response)
+    return {**result, "client_policy": "owner-attested-v1"}
