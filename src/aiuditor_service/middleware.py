@@ -25,7 +25,7 @@ class AiuditorServiceDbMiddleware(BaseHTTPMiddleware):
         # service credential cannot authenticate any other AIuditor endpoint.
         if request.url.path.startswith("/api/v1/aiuditor/internal/private-model-admissions"):
             return await call_next(request)
-        if request.method == "POST" and request.url.path == "/api/v1/aiuditor/capabilities/review":
+        if request.method == "POST" and request.url.path in {"/api/v1/aiuditor/capabilities/review", "/api/v1/aiuditor/access/preview"}:
             # The machine signature binds the tenant before this route opens
             # its transaction; policy edits still use normal interactive auth.
             return await call_next(request)
