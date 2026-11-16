@@ -21,6 +21,13 @@ class AiuditorServiceDbMiddleware(BaseHTTPMiddleware):
     """Sets app.current_tenant_id from the bound credential for RLS."""
 
     async def dispatch(self, request: Request, call_next):
+        if request.method == "POST" and request.url.path in {
+            "/api/v1/aiuditor/machine/client-mesh-grant",
+            "/api/v1/aiuditor/machine/client-mesh-introspect",
+        }:
+            # Authenticate the plane or dedicated gateway before opening the
+            # route-owned transaction and binding its tenant GUC.
+            return await call_next(request)
         # These purpose-authenticated routes own their transaction/GUC. Their
         # service credential cannot authenticate any other AIuditor endpoint.
         if request.url.path.startswith("/api/v1/aiuditor/internal/private-model-admissions"):
