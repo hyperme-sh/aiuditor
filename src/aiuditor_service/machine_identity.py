@@ -253,6 +253,25 @@ async def revoke(request: Request, body: Revoke, response: Response):
     return {"revoked": row is not None, "connections_disabled": disabled.rowcount}
 
 
+@router.post("/client-revoke")
+async def revoke_client(request: Request, body: Revoke, response: Response):
+    """Revoke only an owner-attested client; never touch host connections."""
+    tid, plane = actor(request)
+    response.headers["Cache-Control"] = "no-store"
+    if body.request_id is None:
+        raise HTTPException(400, "Client enrollment cross-check required")
+    async with transaction(tid) as session:
+        row = await session.scalar(select(AiuditorMachineIdentity)
+            .where(*match(tid, plane, body.device_id)).with_for_update())
+        if row is not None:
+            if (row.request_id != body.request_id
+                    or row.state.get("owner_attested_client") is not True):
+                raise HTTPException(404, "Client registration not found")
+            row.revoked = True
+            row.state = {**row.state, "tokens": [], "contracts": []}
+    return {"revoked": True}
+
+
 class ContractProof(Proof):
     contract_id: uuid.UUID
 

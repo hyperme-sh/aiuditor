@@ -53,3 +53,25 @@ async def test_client_routes_require_attestation_and_keep_policy(monkeypatch):
         await routes.renew_client('attested', fresh, Response())
     assert denied.value.status_code == 410
     assert calls
+
+
+@pytest.mark.asyncio
+async def test_client_revoke_cannot_disable_a_colliding_host(monkeypatch):
+    tid, device, request_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    row = SimpleNamespace(request_id=request_id, state={"tokens":["host-token"]}, revoked=False)
+    class Session:
+        async def scalar(self, *_): return row
+        async def execute(self, *_): raise AssertionError("Client revocation must not touch host connections")
+    @asynccontextmanager
+    async def transaction(_): yield Session()
+    monkeypatch.setattr(routes, 'transaction', transaction)
+    monkeypatch.setattr(routes, 'actor', lambda _: (tid, 'local'))
+    body = routes.Revoke(device_id=device, request_id=request_id)
+    with pytest.raises(HTTPException) as denied:
+        await routes.revoke_client(None, body, Response())
+    assert denied.value.status_code == 404
+    assert not row.revoked and row.state['tokens'] == ['host-token']
+    row.state['owner_attested_client'] = True
+    assert (await routes.revoke_client(None, body, Response()))['revoked']
+    assert row.revoked and row.state['tokens'] == []
+    assert (await routes.revoke_client(None, body, Response()))['revoked']
