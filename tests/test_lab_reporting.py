@@ -90,6 +90,16 @@ async def test_fresh_assigned_report_replay_and_cas(http_client,tenant_a,app):
     assert len(app.state.envelope_store.persist.rows["service_outbox"][str(tenant_a)])==2
 
 
+@pytest.mark.parametrize(("age", "status"), [(timedelta(days=6, hours=23), 201), (timedelta(days=7, minutes=1), 409)])
+async def test_qualification_publication_window(http_client, tenant_a, age, status):
+    measured_at = (datetime.now(UTC) - age).isoformat()
+    value = report(tenant_a, origin="qualification", measured_at=measured_at)
+    response = await http_client.post("/api/v1/aiuditor/envelopes/initial", **signed(value))
+    assert response.status_code == status, response.text
+    if status == 201:
+        assert datetime.fromisoformat(response.json()["measured_at"]) == datetime.fromisoformat(measured_at)
+
+
 @pytest.mark.parametrize("change",['stale','future','unauthorized_replace','tenant','missing_key','reused_key'])
 async def test_fail_closed_inputs(http_client,tenant_a,monkeypatch,change):
     value=report(tenant_a)

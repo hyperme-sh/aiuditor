@@ -27,8 +27,9 @@ The HTTP body is the version 1 report (tenant, origin, job/run UUID, device UUID
 binding SHA256, measured/issued UTC times, measurement, and create/replace intent).
 `X-Lab-Signature` is lowercase HMAC-SHA256 over the exact request bytes prefixed by
 `aiuditor.lab-envelope.v1\n`. `X-Tenant-ID` must equal the signed tenant. Authentication
-expires after five minutes; a newly accepted measurement must be at most 24 hours
-old. Refreshing authentication never refreshes observation time.
+expires after five minutes. Class qualification measurements may be published
+for up to seven days after observation. Compact Path B reports have a 24-hour
+publication window. Refreshing authentication never refreshes observation time.
 
 Create uses `/envelopes/initial` with `If-None-Match: *` or `/envelopes` in create
 mode. Replacement requires the signed expected revision and matching quoted

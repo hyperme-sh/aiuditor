@@ -17,6 +17,7 @@ from aiuditor_service.domain.models import ClassEnvelope, ClassEnvelopeCreate
 
 PURPOSE = b"aiuditor.lab-envelope.v1\n"
 MAX_AGE = timedelta(hours=24)
+QUALIFICATION_MAX_AGE = timedelta(days=7)
 
 
 class Measurement(ClassEnvelopeCreate):
@@ -91,7 +92,8 @@ async def authenticate(request: Request, report: LabEnvelopeReport):
 
 
 def _new_row(report, existing, now):
-    if report.measured_at > now + timedelta(seconds=30) or report.measured_at < now - MAX_AGE:
+    max_age = QUALIFICATION_MAX_AGE if report.origin == "qualification" else MAX_AGE
+    if report.measured_at > now + timedelta(seconds=30) or report.measured_at < now - max_age:
         raise HTTPException(409, "A fresh completed lab run is required")
     if report.mode == "create" and existing is not None:
         raise HTTPException(409, "Reference envelope already exists")
