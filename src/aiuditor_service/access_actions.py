@@ -82,14 +82,22 @@ def evaluate_action(body:ActionReview,fact:dict,policy:Policy,now=None):
         if args.content_bytes>action.limits.max_bytes:raise ValueError('Write exceeds byte limit')
     if isinstance(args,HTTPSArguments) and args.body_bytes>action.limits.max_bytes:
         raise ValueError('Request exceeds byte limit')
-    result=evaluate(body,fact,policy,now=now)
+    policy.validate_rules()
+    effective=policy.model_copy(deep=True)
+    for org in effective.organizations:
+        applicable=[]
+        for rule in org.rules:
+            if rule.operation==action.operation and rule.target==action.target:
+                if isinstance(args,HTTPSArguments):
+                    if rule.method is not None and rule.method!=args.method:continue
+                    if rule.effect in ('allow','advisory') and rule.method is None:continue
+                if isinstance(args,ServiceArguments):
+                    if rule.executable_sha256 is not None and rule.executable_sha256!=args.executable_sha256:continue
+                    if rule.effect in ('allow','advisory') and rule.executable_sha256 is None:continue
+            applicable.append(rule)
+        org.rules=applicable
+    result=evaluate(body,fact,effective,now=now)
     result['preview_only']=False
     if body.expected_policy_revision is not None and body.expected_policy_revision!=policy.revision:
         result.update(permitted=False,learning_eligible=False,decision='prohibited',reason='Remembered policy revision changed')
-    matching=[r for org in policy.organizations if str(org.tenant_id)==fact['tenant_id'] and str(org.organization_id)==fact['organization_id'] for r in org.rules if r.operation==action.operation and r.target==action.target and r.effect in ('allow','advisory')]
-    constrained=True
-    if isinstance(args,HTTPSArguments):constrained=bool(matching) and all(r.method==args.method for r in matching)
-    if isinstance(args,ServiceArguments):constrained=bool(matching) and all(r.executable_sha256==args.executable_sha256 for r in matching)
-    if result['permitted'] and not constrained:
-        result.update(permitted=False,learning_eligible=False,decision='prohibited',reason='Typed arguments exceed current policy')
     return result

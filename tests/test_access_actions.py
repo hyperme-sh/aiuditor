@@ -57,3 +57,13 @@ class TypedActionsTests(unittest.TestCase):
         body=self.network();raw=json.loads(body.action.arguments_json);raw['headers']={'Authorization':'secret'}
         body.action.arguments_json=json.dumps(raw);body.action.arguments_sha256=hashlib.sha256(body.action.arguments_json.encode()).hexdigest()
         with self.assertRaises(ValueError):self.review(body)
+
+    def test_alternative_methods_do_not_intersect_but_applicable_denies_win(self):
+        from copy import deepcopy
+        body=self.network();rules=self.f.policy_data['organizations'][0]['rules']
+        post=deepcopy(rules[0]);post['method']='POST';post['limits']['max_bytes']=1;rules.append(post)
+        self.assertTrue(self.review(body)['permitted'])
+        deny=deepcopy(post);deny['effect']='deny';rules.append(deny)
+        self.assertTrue(self.review(body)['permitted'])
+        deny['method']=None
+        self.assertFalse(self.review(body)['permitted'])
