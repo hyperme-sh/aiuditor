@@ -51,6 +51,7 @@ def review(body, fact, policy, now):
         else:
             request=ActionReview(**common);decision=evaluate_action(request,fact,policy,now)
         rules=[r for org in policy.organizations if str(org.organization_id)==fact['organization_id'] and org.tenant_id==body.tenant_id for r in org.rules if r.operation==record.action.operation and r.target==record.action.target]
+        protected_other_selector=any(r.dream_protected for r in rules)
         if isinstance(record.action,TypedAction):
             args=arguments(record.action)
             if isinstance(args,HTTPSArguments):rules=[r for r in rules if r.method in (None,args.method)]
@@ -67,6 +68,8 @@ def review(body, fact, policy, now):
             outcome.update(kind='expire',after=None,reason='Scoped allow expired')
         elif not decision['learning_eligible'] or (record.review_pending and not protected):
             outcome.update(kind='narrow',after=None,reason='Fresh per-use verification replaces reusable learning')
+            if protected_other_selector and not protected:
+                outcome.update(status='failed',after=outcome['before'],reason='Selector-specific narrowing is unsupported; protected alternative retained')
         results.append(outcome)
     return results
 

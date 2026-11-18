@@ -79,3 +79,13 @@ def test_read_cannot_smuggle_raw_arguments_into_history():
  f,b=fixture();raw=b.model_dump(mode='json');raw['records'][0]['action']['arguments_json']='{"secret":"private"}'
  b=Dream.model_validate(raw)
  with pytest.raises(ValueError):review(b,f.fact,Policy.model_validate(f.policy_data),100)
+
+def test_optional_get_narrowing_cannot_change_protected_post():
+ from copy import deepcopy
+ from test_access_actions import TypedActionsTests
+ typed=TypedActionsTests();typed.setUp();request=typed.network();f=typed.f
+ rules=f.policy_data['organizations'][0]['rules'];post=deepcopy(rules[0]);post.update(method='POST',dream_protected=True);rules.append(post)
+ body=Dream(version=1,**{k:v for k,v in f.ids.items() if k not in ('organization_id','owner_id')},project='/project',records=[dict(rule_hash='a'*64,policy_revision=f.policy_data['revision'],action=request.action,last_use=90,expires_at=120,review_pending=True)])
+ result=review(body,f.fact,Policy.model_validate(f.policy_data),100)[0]
+ assert result['status']=='failed' and result['after']==result['before']
+ assert 'protected alternative' in result['reason']
