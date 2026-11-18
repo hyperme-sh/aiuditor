@@ -23,6 +23,11 @@ class ReadPolicyTests(unittest.TestCase):
         self.assertFalse(self.result()['permitted'])
         self.body.expected_policy_revision=Policy.model_validate(self.fixture.policy_data).revision
         self.assertTrue(self.result()['permitted'])
+    def test_double_slash_root_is_refused(self):
+        self.body.project='//'
+        self.body.action.target='//etc/passwd'
+        with self.assertRaises(ValueError):self.result()
+
     def test_project_and_operation_cannot_expand(self):
         for operation,target in [('read','/project-other/file'),('read','/project'),('read','/project//file'),('read','/project/../file'),('write','/project/file'),('https','https://example.test/')]:
             self.body.action.operation=operation;self.body.action.target=target
@@ -62,3 +67,14 @@ class ReadRouteTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(HTTPException) as caught:
                 await routes.read_review(self.body,self.f.request(),Response())
             self.assertEqual(caught.exception.detail,'Permission read review unavailable')
+
+class ReadMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def test_read_review_does_not_open_database_session(self):
+        from aiuditor_service import middleware
+        from fastapi import Request
+        request=Request({'type':'http','method':'POST','path':'/api/v1/aiuditor/access/read-review','headers':[]})
+        handler=AsyncMock(return_value=Response(status_code=204))
+        with patch.object(middleware,'get_session_maker',side_effect=AssertionError('No database needed')):
+            response=await middleware.AiuditorServiceDbMiddleware(lambda scope,receive,send:None).dispatch(request,handler)
+        self.assertEqual(response.status_code,204)
+        handler.assert_awaited_once_with(request)

@@ -170,7 +170,7 @@ def evaluate_read(body: ReadReview, fact: dict, policy: Policy, now=None):
     action=body.action.normalized()
     project=PurePosixPath(body.project)
     if (action.operation!='read' or action.target!=body.action.target
-            or body.project=='/' or project not in PurePosixPath(action.target).parents):
+            or body.project.startswith('//') or action.target.startswith('//') or body.project=='/' or project not in PurePosixPath(action.target).parents):
         raise ValueError('Exact file within selected project required')
     result=evaluate(body,fact,policy,now=now)
     result['preview_only']=False
