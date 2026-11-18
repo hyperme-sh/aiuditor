@@ -86,6 +86,7 @@ class Preview(Strict):
 
 
 class PolicyRule(TemplateRule):
+    dream_protected: bool = Field(default=False, strict=True)
     method: Literal['GET','POST'] | None = None
     executable_sha256: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$')
     effect: Literal['allow','advisory','deny','extreme']

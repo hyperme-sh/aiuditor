@@ -405,3 +405,12 @@ class AiuditorAccessDispatch(Base):
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     policy_revision: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     binding_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class AiuditorAccessDream(Base):
+    """Idempotent bounded permission review, without action payloads."""
+    __tablename__ = 'aiuditor_access_dreams'
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('tenants.id', ondelete='CASCADE'), primary_key=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    binding_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False)
