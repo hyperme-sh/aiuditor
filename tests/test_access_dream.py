@@ -74,3 +74,8 @@ async def test_witness_cannot_start_dreaming(monkeypatch):
  f,b=fixture();monkeypatch.setattr(route,'role_from_request',lambda _:AiuditorRole.WITNESS)
  with pytest.raises(HTTPException) as error:await route.dreaming(b,Request({'type':'http','headers':[]}),Response())
  assert error.value.status_code==403
+
+def test_read_cannot_smuggle_raw_arguments_into_history():
+ f,b=fixture();raw=b.model_dump(mode='json');raw['records'][0]['action']['arguments_json']='{"secret":"private"}'
+ b=Dream.model_validate(raw)
+ with pytest.raises(ValueError):review(b,f.fact,Policy.model_validate(f.policy_data),100)

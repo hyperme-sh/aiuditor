@@ -8,7 +8,7 @@ from pydantic import Field
 from fastapi import HTTPException, Request, Response
 from sqlalchemy import select
 from aiuditor_service.access_preview import Strict, Action, ReadReview, evaluate_read
-from aiuditor_service.access_actions import TypedAction, ActionReview, evaluate_action
+from aiuditor_service.access_actions import TypedAction, ActionReview, evaluate_action, arguments, HTTPSArguments, ServiceArguments
 from aiuditor_service.access_policy_state import PolicyMutation, Restriction, restriction_key
 from aiuditor_service import access_policy_store as store
 from aiuditor_service.models import AiuditorAccessDream
@@ -46,10 +46,15 @@ def review(body, fact, policy, now):
         common={k:getattr(body,k) for k in ('version','request_id','tenant_id','device_id','bot_id','assignment_id','session_id','project')}
         common.update(template_version=1,template=[{'operation':record.action.operation,'target':record.action.target,'limits':record.action.limits}],action=record.action)
         if record.action.operation=='read':
+            if isinstance(record.action,TypedAction):raise ValueError('Read metadata cannot contain argument bodies')
             request=ReadReview(**common);decision=evaluate_read(request,fact,policy,now)
         else:
             request=ActionReview(**common);decision=evaluate_action(request,fact,policy,now)
         rules=[r for org in policy.organizations if str(org.organization_id)==fact['organization_id'] and org.tenant_id==body.tenant_id for r in org.rules if r.operation==record.action.operation and r.target==record.action.target]
+        if isinstance(record.action,TypedAction):
+            args=arguments(record.action)
+            if isinstance(args,HTTPSArguments):rules=[r for r in rules if r.method in (None,args.method)]
+            if isinstance(args,ServiceArguments):rules=[r for r in rules if r.executable_sha256 in (None,args.executable_sha256)]
         protected=any(r.dream_protected for r in rules)
         outcome={'rule_hash':record.rule_hash,'kind':'retain','status':'applied',
                  'reason':'Useful scoped allow remains within current policy',
