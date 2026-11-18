@@ -105,3 +105,16 @@ def test_required_get_per_use_overrides_protected_post_without_policy_edit():
  result=review(body,f.fact,Policy.model_validate(f.policy_data),100)[0]
  assert result['status']=='applied' and result['kind']=='narrow' and result['after'] is None
  assert result['_persist'] is False
+
+
+def test_check_protection_does_not_leak_between_executables():
+ from copy import deepcopy
+ from test_access_actions import TypedActionsTests
+ typed=TypedActionsTests();typed.setUp()
+ request=typed.body('check','unit',dict(executable='/usr/bin/python3',executable_sha256='a'*64,argv_sha256='b'*64,workspace_sha256='c'*64,sandbox='linux-bwrap-no-network'))
+ f=typed.f;rules=f.policy_data['organizations'][0]['rules'];rules[0]['executable_sha256']='a'*64
+ other=deepcopy(rules[0]);other.update(executable_sha256='d'*64,dream_protected=True);rules.append(other)
+ body=Dream(version=1,**{k:v for k,v in f.ids.items() if k not in ('organization_id','owner_id')},project='/project',records=[dict(rule_hash='a'*64,policy_revision=f.policy_data['revision'],action=request.action,last_use=90,expires_at=120,review_pending=True)])
+ result=review(body,f.fact,Policy.model_validate(f.policy_data),100)[0]
+ assert result['status']=='failed' and result['after']==result['before']
+ assert 'protected alternative' in result['reason']

@@ -8,7 +8,7 @@ from pydantic import Field
 from fastapi import HTTPException, Request, Response
 from sqlalchemy import select
 from aiuditor_service.access_preview import Strict, Action, ReadReview, evaluate_read
-from aiuditor_service.access_actions import TypedAction, ActionReview, evaluate_action, arguments, HTTPSArguments, ServiceArguments
+from aiuditor_service.access_actions import TypedAction, ActionReview, evaluate_action, arguments, HTTPSArguments, ServiceArguments, CheckArguments
 from aiuditor_service.access_policy_state import PolicyMutation, Restriction, restriction_key
 from aiuditor_service import access_policy_store as store
 from aiuditor_service.models import AiuditorAccessDream
@@ -55,7 +55,7 @@ def review(body, fact, policy, now):
         if isinstance(record.action,TypedAction):
             args=arguments(record.action)
             if isinstance(args,HTTPSArguments):rules=[r for r in rules if r.method in (None,args.method)]
-            if isinstance(args,ServiceArguments):rules=[r for r in rules if r.executable_sha256 in (None,args.executable_sha256)]
+            if isinstance(args,(ServiceArguments,CheckArguments)):rules=[r for r in rules if r.executable_sha256 in (None,args.executable_sha256)]
         protected=any(r.dream_protected for r in rules)
         outcome={'rule_hash':record.rule_hash,'kind':'retain','status':'applied',
                  'reason':'Useful scoped allow remains within current policy',
