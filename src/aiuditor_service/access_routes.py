@@ -10,6 +10,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from aiuditor_service.access_preview import Preview, Policy, ReadReview, evaluate, evaluate_read
 
+from aiuditor_service.access_actions import ActionReview, evaluate_action
+
 router=APIRouter(prefix='/aiuditor/access',tags=['access-preview'])
 slots=asyncio.Semaphore(8)
 
@@ -87,3 +89,21 @@ async def read_review(body:ReadReview,request:Request,response:Response):
         raise
     except (OSError,ValueError,KeyError,TypeError,TimeoutError,httpx.HTTPError):
         raise HTTPException(503,'Permission read review unavailable') from None
+@router.post('/action-review')
+async def action_review(body:ActionReview,request:Request,response:Response):
+    response.headers['Cache-Control']='no-store'
+    authorization=request.headers.get('Authorization','')
+    if not authorization.startswith('Bearer hm_msi_') or len(authorization)>4096:
+        raise HTTPException(401,'Enrolled machine identity required')
+    if request.headers.get('X-Tenant-ID')!=str(body.tenant_id):
+        raise HTTPException(403,'Read tenant mismatch')
+    try:
+        async with asyncio.timeout(8):
+            async with slots:
+                fact=await machine_context(body,authorization[7:],active=True)
+                policy=await asyncio.to_thread(load_policy)
+                return evaluate_action(body,fact,policy)
+    except HTTPException:
+        raise
+    except (OSError,ValueError,KeyError,TypeError,TimeoutError,httpx.HTTPError):
+        raise HTTPException(503,'Permission action review unavailable') from None
