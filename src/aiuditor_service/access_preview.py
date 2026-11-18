@@ -26,7 +26,7 @@ class Limits(Strict):
     timeout_seconds: int = Field(strict=True, ge=1, le=300)
 
 
-Operation = Literal['read', 'write', 'https', 'service_inspect', 'service_restart']
+Operation = Literal['read', 'write', 'https', 'service_inspect', 'service_restart', 'check']
 
 
 class Action(Strict):
