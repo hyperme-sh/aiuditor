@@ -378,3 +378,30 @@ class AiuditorParentSnapshot(Base):
     exported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     snapshot_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     owned_rows: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class AiuditorAccessPolicy(Base):
+    """Current access rules; all mutations lock this organization row."""
+    __tablename__ = 'aiuditor_access_policies'
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('tenants.id', ondelete='CASCADE'), primary_key=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    state: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class AiuditorAccessPolicyEvent(Base):
+    """Append-only scoped changes, including inherited-rule tombstones."""
+    __tablename__ = 'aiuditor_access_policy_events'
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('tenants.id', ondelete='CASCADE'), primary_key=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    sequence: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    change: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class AiuditorAccessDispatch(Base):
+    """Consumed action IDs are retained independently of allow-cache expiry."""
+    __tablename__ = 'aiuditor_access_dispatches'
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('tenants.id', ondelete='CASCADE'), primary_key=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    policy_revision: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    binding_sha256: Mapped[str] = mapped_column(String(64), nullable=False)

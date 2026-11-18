@@ -18,7 +18,10 @@
     "aiuditor_envelope_reports",
     "aiuditor_parent_snapshots",
     "service_tenants",
-    "service_outbox"
+    "service_outbox",
+    "aiuditor_access_policies",
+    "aiuditor_access_policy_events",
+    "aiuditor_access_dispatches"
   ],
   "baseline_sha256": "58e39340aa9fc3526c2e366a62ab2f4c4265ee46e8d892f3f0fe42eceedd3016",
   "baseline_tables": [

@@ -27,6 +27,7 @@ from aiuditor_service.machine_identity import router as machine_router
 from aiuditor_service.phone_mesh import router as phone_mesh_router
 from aiuditor_service.capability_routes import router as capability_router
 from aiuditor_service.access_routes import router as access_router
+from aiuditor_service.access_policy_routes import router as access_policy_router
 from aiuditor_service.private_models.routes import router as private_model_router
 from aiuditor_service.middleware import AiuditorServiceDbMiddleware
 from aiuditor_service.package import (
@@ -221,6 +222,7 @@ def create_app(
     app.include_router(phone_mesh_router, prefix="/api/v1")
     app.include_router(capability_router, prefix="/api/v1")
     app.include_router(access_router, prefix="/api/v1")
+    app.include_router(access_policy_router, prefix="/api/v1")
     app.include_router(aiuditor_router, prefix="/api/v1")
     app.include_router(private_model_router, prefix="/api/v1")
     add_optional_service_cors(app, env_var="AIUDITOR_SERVICE_CORS_ORIGINS")
