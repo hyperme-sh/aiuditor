@@ -86,6 +86,8 @@ class Preview(Strict):
 
 
 class PolicyRule(TemplateRule):
+    method: Literal['GET','POST'] | None = None
+    executable_sha256: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$')
     effect: Literal['allow','advisory','deny','extreme']
     reason: str = Field(min_length=1,max_length=256)
     no_always_allow: bool = Field(strict=True)
