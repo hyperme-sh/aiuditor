@@ -154,3 +154,6 @@ async def action_admit(body:ActionReview,request:Request,response:Response):
 @router.post('/read-admit')
 async def read_admit(body:ReadReview,request:Request,response:Response):
     return await admit_review(body,request,response,evaluate_read)
+
+# Register the bounded dreaming route on the same owner router.
+from aiuditor_service import access_dream  # noqa: E402,F401
