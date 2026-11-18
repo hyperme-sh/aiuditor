@@ -89,3 +89,13 @@ def test_optional_get_narrowing_cannot_change_protected_post():
  result=review(body,f.fact,Policy.model_validate(f.policy_data),100)[0]
  assert result['status']=='failed' and result['after']==result['before']
  assert 'protected alternative' in result['reason']
+
+def test_required_get_per_use_overrides_protected_post_without_policy_edit():
+ from copy import deepcopy
+ from test_access_actions import TypedActionsTests
+ typed=TypedActionsTests();typed.setUp();request=typed.network();f=typed.f
+ rules=f.policy_data['organizations'][0]['rules'];post=deepcopy(rules[0]);post.update(method='POST',dream_protected=True);rules.append(post);rules[0]['no_always_allow']=True
+ body=Dream(version=1,**{k:v for k,v in f.ids.items() if k not in ('organization_id','owner_id')},project='/project',records=[dict(rule_hash='a'*64,policy_revision=f.policy_data['revision'],action=request.action,last_use=90,expires_at=120,review_pending=False)])
+ result=review(body,f.fact,Policy.model_validate(f.policy_data),100)[0]
+ assert result['status']=='applied' and result['kind']=='narrow' and result['after'] is None
+ assert result['_persist'] is False

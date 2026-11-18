@@ -67,8 +67,8 @@ def review(body, fact, policy, now):
         elif record.expires_at <= now:
             outcome.update(kind='expire',after=None,reason='Scoped allow expired')
         elif not decision['learning_eligible'] or (record.review_pending and not protected):
-            outcome.update(kind='narrow',after=None,reason='Fresh per-use verification replaces reusable learning')
-            if protected_other_selector and not protected:
+            outcome.update(kind='narrow',after=None,reason='Fresh per-use verification replaces reusable learning',_persist=decision['learning_eligible'])
+            if decision['learning_eligible'] and protected_other_selector and not protected:
                 outcome.update(status='failed',after=outcome['before'],reason='Selector-specific narrowing is unsupported; protected alternative retained')
         results.append(outcome)
     return results
@@ -95,7 +95,8 @@ async def dreaming(body:Dream, request:Request, response:Response):
                     return prior.result
                 outcomes=review(body,fact,store.current(row,fact['principal']),time.time())
                 for record,outcome in zip(body.records,outcomes):
-                    if outcome['status']=='applied' and outcome['kind']=='narrow':
+                    persist=outcome.pop('_persist',False)
+                    if outcome['status']=='applied' and outcome['kind']=='narrow' and persist:
                         mutation=PolicyMutation(organization_id=fact['organization_id'],expected_revision=row.state['revision'],scope='personal',restriction=Restriction(operation=record.action.operation,target=record.action.target,mode='per_use',reason='Dreaming review: fresh per-use verification'))
                         existing=row.state['restrictions'].get(restriction_key(fact['principal'],mutation.restriction))
                         if existing and existing['mode']=='limited':
