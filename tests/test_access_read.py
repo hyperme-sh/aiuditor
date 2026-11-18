@@ -49,7 +49,7 @@ class ReadRouteTests(unittest.IsolatedAsyncioTestCase):
         self.f=route_fixture.AccessRouteTests();self.f.setUp()
         self.body=ReadReview.model_validate(self.f.f.body.model_dump())
     async def test_active_owner_context_required_and_policy_reloaded(self):
-        with patch.object(routes,'machine_context',AsyncMock(return_value=self.f.f.fact)) as context,patch.object(routes,'load_policy',return_value=Policy.model_validate(self.f.f.policy_data)) as policy,patch('aiuditor_service.access_preview.time.time',return_value=100):
+        with patch.object(routes,'machine_context',AsyncMock(return_value=self.f.f.fact)) as context,patch.object(routes,'policy_decision',side_effect=current_policy_fixture),patch.object(routes,'load_policy',return_value=Policy.model_validate(self.f.f.policy_data)) as policy,patch('aiuditor_service.access_preview.time.time',return_value=100):
             response=Response()
             self.assertTrue((await routes.read_review(self.body,self.f.request(),response))['permitted'])
             context.assert_awaited_once_with(self.body,'hm_msi_verified',active=True)
@@ -78,3 +78,7 @@ class ReadMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             response=await middleware.AiuditorServiceDbMiddleware(lambda scope,receive,send:None).dispatch(request,handler)
         self.assertEqual(response.status_code,204)
         handler.assert_awaited_once_with(request)
+
+
+async def current_policy_fixture(body,fact,evaluator,**kwargs):
+    return evaluator(body,fact,routes.load_policy())

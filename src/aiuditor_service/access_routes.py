@@ -11,6 +11,8 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from aiuditor_service.access_preview import Preview, Policy, ReadReview, evaluate, evaluate_read
 
 from aiuditor_service.access_actions import ActionReview, evaluate_action
+from aiuditor_service import access_policy_store
+from aiuditor_service.machine_identity import transaction
 
 router=APIRouter(prefix='/aiuditor/access',tags=['access-preview'])
 slots=asyncio.Semaphore(8)
@@ -63,8 +65,7 @@ async def preview(body:Preview,request:Request,response:Response):
         async with asyncio.timeout(8):
             async with slots:
                 fact=await machine_context(body,authorization[7:])
-                policy=await asyncio.to_thread(load_policy)
-                return evaluate(body,fact,policy)
+                return await policy_decision(body,fact,evaluate)
     except HTTPException:
         raise
     except (OSError,ValueError,KeyError,TypeError,TimeoutError,httpx.HTTPError):
@@ -83,8 +84,7 @@ async def read_review(body:ReadReview,request:Request,response:Response):
         async with asyncio.timeout(8):
             async with slots:
                 fact=await machine_context(body,authorization[7:],active=True)
-                policy=await asyncio.to_thread(load_policy)
-                return evaluate_read(body,fact,policy)
+                return await policy_decision(body,fact,evaluate_read)
     except HTTPException:
         raise
     except (OSError,ValueError,KeyError,TypeError,TimeoutError,httpx.HTTPError):
@@ -101,9 +101,51 @@ async def action_review(body:ActionReview,request:Request,response:Response):
         async with asyncio.timeout(8):
             async with slots:
                 fact=await machine_context(body,authorization[7:],active=True)
-                policy=await asyncio.to_thread(load_policy)
-                return evaluate_action(body,fact,policy)
+                return await policy_decision(body,fact,evaluate_action)
     except HTTPException:
         raise
     except (OSError,ValueError,KeyError,TypeError,TimeoutError,httpx.HTTPError):
         raise HTTPException(503,'Permission action review unavailable') from None
+
+
+async def policy_decision(body, fact, evaluator, *, admit=False):
+    # Both reviews and admission read the current row. The row lock orders a
+    # consumed dispatch against a concurrent edit; only admission may execute.
+    async with transaction(body.tenant_id) as session:
+        row=await access_policy_store.locked(session,body.tenant_id,
+            uuid.UUID(fact['organization_id']),load_policy)
+        policy=access_policy_store.current(row,fact['principal'])
+        decision=evaluator(body,fact,policy)
+        if admit:
+            decision=await access_policy_store.consume(session,row,body,decision)
+    return decision
+
+
+async def admit_review(body,request,response,evaluator):
+    response.headers['Cache-Control']='no-store'
+    authorization=request.headers.get('Authorization','')
+    if not authorization.startswith('Bearer hm_msi_') or len(authorization)>4096:
+        raise HTTPException(401,'Enrolled machine identity required')
+    if request.headers.get('X-Tenant-ID')!=str(body.tenant_id):
+        raise HTTPException(403,'Action tenant mismatch')
+    if body.expected_policy_revision is None:
+        raise HTTPException(400,'Current review revision required')
+    try:
+        async with asyncio.timeout(8):
+            async with slots:
+                fact=await machine_context(body,authorization[7:],active=True)
+                return await policy_decision(body,fact,evaluator,admit=True)
+    except HTTPException:
+        raise
+    except (OSError,ValueError,KeyError,TypeError,TimeoutError,httpx.HTTPError):
+        raise HTTPException(503,'Permission admission unavailable') from None
+
+
+@router.post('/action-admit')
+async def action_admit(body:ActionReview,request:Request,response:Response):
+    return await admit_review(body,request,response,evaluate_action)
+
+
+@router.post('/read-admit')
+async def read_admit(body:ReadReview,request:Request,response:Response):
+    return await admit_review(body,request,response,evaluate_read)

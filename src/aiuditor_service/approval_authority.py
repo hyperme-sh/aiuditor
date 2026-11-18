@@ -24,6 +24,10 @@ class AuthorityReply(BaseModel):
 
 
 async def require_current_approval(request, tenant, subject):
+    return await require_authority(request, tenant, subject, 'approval.resolve')
+
+
+async def require_authority(request, tenant, subject, action, organization=None):
     try:
         token = bearer_secret(request)
         origin = os.environ.get("USER_AUTHORITY_URL", "").rstrip("/")
@@ -51,7 +55,8 @@ async def require_current_approval(request, tenant, subject):
                 json={
                     "version": 1,
                     "request_id": str(nonce),
-                    "action": "approval.resolve",
+                    "action": action,
+                    **({"organization_id": str(organization)} if organization is not None else {}),
                     "tenant_id": str(tenant),
                 },
                 headers={
@@ -69,9 +74,9 @@ async def require_current_approval(request, tenant, subject):
         if (
             fact.version != 1
             or fact.request_id != nonce
-            or fact.action != "approval.resolve"
+            or fact.action != action
             or fact.network is not None
-            or fact.organization_id is not None
+            or fact.organization_id != organization
             or fact.tenant_id != tenant
             or fact.subject != subject
         ):

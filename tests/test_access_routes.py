@@ -12,7 +12,7 @@ class AccessRouteTests(unittest.IsolatedAsyncioTestCase):
     def request(self,token='hm_msi_verified',tenant=None):
         return Request({'type':'http','headers':[(b'authorization',('Bearer '+token).encode()),(b'x-tenant-id',(tenant or self.f.ids['tenant_id']).encode())]})
     async def test_owner_response_without_mutation(self):
-        with patch.object(routes,'machine_context',AsyncMock(return_value=self.f.fact)) as context,patch.object(routes,'load_policy',return_value=Policy.model_validate(self.f.policy_data)),patch('aiuditor_service.access_preview.time.time',return_value=100):
+        with patch.object(routes,'machine_context',AsyncMock(return_value=self.f.fact)) as context,patch.object(routes,'policy_decision',side_effect=current_policy_fixture),patch.object(routes,'load_policy',return_value=Policy.model_validate(self.f.policy_data)),patch('aiuditor_service.access_preview.time.time',return_value=100):
             response=Response();result=await routes.preview(self.f.body,self.request(),response)
             self.assertTrue(result['preview_only']);self.assertEqual(result['decision'],'allowed')
             self.assertEqual(response.headers['cache-control'],'no-store');context.assert_awaited_once()
@@ -26,3 +26,7 @@ class AccessRouteTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(HTTPException) as caught:await routes.preview(self.f.body,self.request(),Response())
             self.assertEqual(caught.exception.status_code,503)
             self.assertEqual(caught.exception.detail,'Permission preview unavailable')
+
+
+async def current_policy_fixture(body,fact,evaluator,**kwargs):
+    return evaluator(body,fact,routes.load_policy())
