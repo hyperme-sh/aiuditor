@@ -102,7 +102,10 @@ async def dreaming(body:Dream, request:Request, response:Response):
                         if existing and existing['mode']=='limited':
                             outcome.update(status='failed',after=outcome['before'],reason='Retained explicit personal limits; combined narrowing is unsupported')
                         else:
-                            store.mutate(session,row,mutation,fact['principal'],False)
+                            try:
+                                store.mutate(session,row,mutation,fact['principal'],False)
+                            except ValueError:
+                                outcome.update(status='failed',after=outcome['before'],reason='Personal policy capacity reached; current rules preserved')
                 result={'version':1,'request_id':str(body.request_id),'project':body.project,
                         'identity':{k:fact[k] for k in ('tenant_id','owner_id','principal','organization_id','device_id','bot_id','assignment_id','session_id')},
                         'policy_revision':row.state['revision'],'outcomes':outcomes}

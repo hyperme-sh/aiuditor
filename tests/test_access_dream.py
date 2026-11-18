@@ -38,7 +38,8 @@ def test_duplicate_and_cross_identity_refused():
  with pytest.raises(ValueError):review(b,f.fact,Policy.model_validate(f.policy_data),100)
 
 @pytest.mark.asyncio
-async def test_owner_transaction_retry_and_manual_change_never_reapply(monkeypatch):
+@pytest.mark.parametrize("full",[False,True])
+async def test_owner_transaction_retry_and_manual_change_never_reapply(monkeypatch,full):
  from contextlib import asynccontextmanager
  from types import SimpleNamespace
  from unittest.mock import AsyncMock,Mock
@@ -47,6 +48,8 @@ async def test_owner_transaction_retry_and_manual_change_never_reapply(monkeypat
  from aiuditor_service.role import AiuditorRole
  f,b=fixture();b.records[0].review_pending=True
  row=SimpleNamespace(tenant_id=b.tenant_id,organization_id=uuid.UUID(f.ids['organization_id']),state={'tenant_id':str(b.tenant_id),'organization_id':f.ids['organization_id'],'revision':f.policy_data['revision'],'sequence':0,'restrictions':{},'base':f.policy_data})
+ if full:
+  row.state['restrictions']={str(i):{'subject':'owner','operation':'read','target':f'/project/old-{i}','mode':'inherited','reason':'Prior rule','limits':None} for i in range(128)}
  prior=[]
  session=SimpleNamespace(scalar=AsyncMock(side_effect=lambda *_:prior[0] if prior else None),add=lambda value:prior.append(value) if isinstance(value,route.AiuditorAccessDream) else None)
  @asynccontextmanager
@@ -59,7 +62,10 @@ async def test_owner_transaction_retry_and_manual_change_never_reapply(monkeypat
  monkeypatch.setattr(route,'role_from_request',lambda _:AiuditorRole.GLOBAL)
  monkeypatch.setattr(route.time,'time',lambda:100)
  request=Request({'type':'http','headers':[(b'authorization',b'Bearer hm_msi_private'),(b'x-tenant-id',str(b.tenant_id).encode())]})
- first=await route.dreaming(b,request,Response());assert first['outcomes'][0]['kind']=='narrow';assert row.state['sequence']==1
+ first=await route.dreaming(b,request,Response());assert first['outcomes'][0]['kind']=='narrow'
+ assert first['outcomes'][0]['status']==('failed' if full else 'applied')
+ assert row.state['sequence']==(0 if full else 1)
+ if full:assert len(row.state['restrictions'])==128 and first['outcomes'][0]['after']==first['outcomes'][0]['before']
  row.state={**row.state,'revision':str(uuid.uuid4()),'sequence':2}
  second=await route.dreaming(b,request,Response());assert second==first;assert row.state['sequence']==2
  b.records[0].last_use=80
