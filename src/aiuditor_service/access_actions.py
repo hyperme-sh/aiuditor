@@ -32,6 +32,14 @@ class ServiceArguments(Strict):
     controller_binding_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
 
 
+class CheckArguments(Strict):
+    executable: str = Field(min_length=2,max_length=4096)
+    executable_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    argv_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    workspace_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    sandbox: Literal['linux-bwrap-no-network']
+
+
 class TypedAction(Action):
     arguments_json: str = Field(min_length=2,max_length=16384)
 
@@ -51,7 +59,7 @@ def arguments(action: TypedAction):
             result[key]=value
         return result
     raw=json.loads(action.arguments_json,object_pairs_hook=pairs)
-    models={'https':HTTPSArguments,'write':WriteArguments,'service_restart':ServiceArguments}
+    models={'https':HTTPSArguments,'write':WriteArguments,'service_restart':ServiceArguments,'check':CheckArguments}
     model=models.get(action.operation)
     if model is None:raise ValueError('Typed operation required')
     result=model.model_validate(raw)
@@ -63,11 +71,11 @@ def arguments(action: TypedAction):
                 raise ValueError('Explicit public unicast address required')
         if result.method=='GET' and (result.body_bytes!=0 or result.body_sha256!=hashlib.sha256(b'').hexdigest()):
             raise ValueError('GET has no request body')
-    if isinstance(result,ServiceArguments):
+    if isinstance(result,(ServiceArguments,CheckArguments)):
         path=PurePosixPath(result.executable)
         if not result.executable.startswith('/') or result.executable.startswith('//') or str(path)!=result.executable or '..' in path.parts or '.' in result.executable.split('/') or any(ord(c)<32 for c in result.executable):
             raise ValueError('Canonical executable required')
-        if result.unit!=action.target:raise ValueError('Named service differs')
+        if isinstance(result,ServiceArguments) and result.unit!=action.target:raise ValueError('Named service differs')
     return result
 
 
@@ -91,7 +99,7 @@ def evaluate_action(body:ActionReview,fact:dict,policy:Policy,now=None):
                 if isinstance(args,HTTPSArguments):
                     if rule.method is not None and rule.method!=args.method:continue
                     if rule.effect in ('allow','advisory') and rule.method is None:continue
-                if isinstance(args,ServiceArguments):
+                if isinstance(args,(ServiceArguments,CheckArguments)):
                     if rule.executable_sha256 is not None and rule.executable_sha256!=args.executable_sha256:continue
                     if rule.effect in ('allow','advisory') and rule.executable_sha256 is None:continue
             applicable.append(rule)

@@ -8,7 +8,7 @@ from aiuditor_service.access_preview import Action, Limits, Policy, PolicyRule, 
 
 
 class Restriction(Strict):
-    operation: Literal['read', 'write', 'https', 'service_inspect', 'service_restart']
+    operation: Literal['read', 'write', 'https', 'service_inspect', 'service_restart', 'check']
     target: str = Field(min_length=1, max_length=4096)
     mode: Literal['deny', 'per_use', 'limited', 'inherited']
     reason: str = Field(min_length=1, max_length=256)

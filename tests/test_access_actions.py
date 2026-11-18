@@ -67,3 +67,12 @@ class TypedActionsTests(unittest.TestCase):
         self.assertTrue(self.review(body)['permitted'])
         deny['method']=None
         self.assertFalse(self.review(body)['permitted'])
+
+    def test_check_requires_bound_executable_and_isolation(self):
+        args=dict(executable='/usr/bin/python3.11',executable_sha256='a'*64,argv_sha256='b'*64,workspace_sha256='c'*64,sandbox='linux-bwrap-no-network')
+        body=self.body('check','unit',args)
+        self.assertFalse(self.review(body)['permitted'])
+        self.f.policy_data['organizations'][0]['rules'][0]['executable_sha256']='a'*64
+        self.assertTrue(self.review(body)['permitted'])
+        args['sandbox']='none'
+        with self.assertRaises(ValueError):self.review(self.body('check','unit',args))
