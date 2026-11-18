@@ -34,7 +34,7 @@ async def locked(session, tenant, organization, seed):
     # Seed only once. A later config-file rollback cannot replace durable rules.
     policy = Policy(version=1, revision=base.revision, organizations=[org])
     state = {'tenant_id':str(tenant), 'organization_id':str(organization),
-             'revision':str(uuid.uuid4()), 'sequence':0, 'restrictions':{},
+             'revision':str(base.revision), 'sequence':0, 'restrictions':{},
              'base':policy.model_dump(mode='json')}
     await session.execute(insert(AiuditorAccessPolicy).values(tenant_id=tenant,
         organization_id=organization, state=state).on_conflict_do_nothing())

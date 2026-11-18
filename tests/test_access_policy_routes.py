@@ -106,3 +106,15 @@ async def test_witness_cannot_consume_dispatch_authority(monkeypatch):
     owner=AsyncMock();monkeypatch.setattr(access_routes,'machine_context',owner)
     with pytest.raises(HTTPException) as error:await access_routes.admit_review(body,request,Response(),evaluate_read)
     assert error.value.status_code==403;owner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_initial_database_adoption_preserves_unchanged_policy_revision():
+    from aiuditor_service.access_policy_store import locked
+    f,row=setup();policy=Policy.model_validate(f.policy_data)
+    session=SimpleNamespace(scalar=AsyncMock(side_effect=[None,None,row]),execute=AsyncMock())
+    assert await locked(session,row.tenant_id,row.organization_id,lambda:policy) is row
+    statement=session.execute.await_args.args[0]
+    seeded=statement.compile().params['state']
+    assert seeded['revision']==str(policy.revision)
+    assert seeded['sequence']==0 and seeded['restrictions']=={}
