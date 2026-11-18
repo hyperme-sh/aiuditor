@@ -76,3 +76,33 @@ async def test_history_refuses_partial_rollback_and_file_cannot_replace_current_
         session=SimpleNamespace(scalar=AsyncMock(side_effect=[old,latest]))
         with pytest.raises(HTTPException) as error:await locked(session,row.tenant_id,row.organization_id,seed)
         assert error.value.status_code==503
+
+
+def test_native_policy_client_keeps_verified_interactive_requirements(monkeypatch):
+    from aiuditor_service.private_models import routes as identity
+    from aiuditor_service.role import AiuditorRole
+    tenant=uuid.uuid4();request=Request({'type':'http','headers':[]})
+    claims={'sub':'owner','tenant_id':str(tenant),'azp':'hypermesh-native','account_type':'human','amr':['webauthn']}
+    monkeypatch.setattr(identity,'role_from_request',lambda request:AiuditorRole.GLOBAL)
+    monkeypatch.setattr(identity,'verified_credential_claims',lambda *args:claims)
+    monkeypatch.setattr(identity,'require_tenant_id',lambda request:tenant)
+    assert identity.human(request,clients=frozenset({'hypermesh-native'}))==(tenant,'owner')
+    with pytest.raises(HTTPException):identity.human(request)
+    for change in ({'account_type':'machine'},{'amr':[]},{'tenant_id':str(uuid.uuid4())}):
+        before=claims.copy();claims.update(change)
+        with pytest.raises(HTTPException):identity.human(request,clients=frozenset({'hypermesh-native'}))
+        claims.clear();claims.update(before)
+
+
+@pytest.mark.asyncio
+async def test_witness_cannot_consume_dispatch_authority(monkeypatch):
+    from aiuditor_service import access_routes
+    from aiuditor_service.role import AiuditorRole
+    from aiuditor_service.access_preview import ReadReview, evaluate_read
+    f,row=setup();body=ReadReview.model_validate(f.body.model_dump())
+    body.expected_policy_revision=uuid.uuid4()
+    request=Request({'type':'http','headers':[]})
+    monkeypatch.setattr(access_routes,'role_from_request',lambda _:AiuditorRole.WITNESS)
+    owner=AsyncMock();monkeypatch.setattr(access_routes,'machine_context',owner)
+    with pytest.raises(HTTPException) as error:await access_routes.admit_review(body,request,Response(),evaluate_read)
+    assert error.value.status_code==403;owner.assert_not_awaited()

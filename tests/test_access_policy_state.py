@@ -57,3 +57,12 @@ def test_stale_concurrent_edit_cross_org_and_restart_tombstone():
     assert len(restored['restrictions'])==1 and next(iter(restored['restrictions'].values()))['mode']=='inherited'
     assert restored['sequence']==2 and result(f,restored)['permitted']
     with pytest.raises(ValueError):changed(restored,stale,'owner',admin=False)
+
+
+def test_personal_capacity_cannot_exhaust_organization_revocation_capacity():
+    f,s=fixture()
+    for i in range(4096):
+        s['restrictions'][str(i)]={'subject':f'member-{i//128}','operation':'read','target':f'/project/{i}','mode':'inherited','reason':'Prior edit','limits':None}
+    s,_=changed(s,mutation(s,'deny','organization'),'admin',admin=True)
+    assert not result(f,s)['permitted']
+    with pytest.raises(ValueError):changed(s,mutation(s,'deny'),'new-member',admin=False)

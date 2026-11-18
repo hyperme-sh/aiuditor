@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock,patch
 from fastapi import Request,Response,HTTPException
 from aiuditor_service import access_routes as routes
@@ -10,7 +11,7 @@ class AccessRouteTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.f=fixtures.AccessPreviewTests();self.f.setUp()
     def request(self,token='hm_msi_verified',tenant=None):
-        return Request({'type':'http','headers':[(b'authorization',('Bearer '+token).encode()),(b'x-tenant-id',(tenant or self.f.ids['tenant_id']).encode())]})
+        return Request({'type':'http','app':SimpleNamespace(state=SimpleNamespace()),'headers':[(b'authorization',('Bearer '+token).encode()),(b'x-tenant-id',(tenant or self.f.ids['tenant_id']).encode())]})
     async def test_owner_response_without_mutation(self):
         with patch.object(routes,'machine_context',AsyncMock(return_value=self.f.fact)) as context,patch.object(routes,'policy_decision',side_effect=current_policy_fixture),patch.object(routes,'load_policy',return_value=Policy.model_validate(self.f.policy_data)),patch('aiuditor_service.access_preview.time.time',return_value=100):
             response=Response();result=await routes.preview(self.f.body,self.request(),response)

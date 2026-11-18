@@ -45,12 +45,12 @@ def internal_tenant(request):
         raise HTTPException(400, "Tenant cross-check required") from None
 
 
-def human(request):
+def human(request, *, clients=frozenset({"controlplane-frontend"})):
     require_grant_write(role_from_request(request))
     claims = verified_credential_claims(request, "tenant-session", try_decode_tenant_session_jwt)
     if (
         not claims
-        or claims.get("azp") != "controlplane-frontend"
+        or claims.get("azp") not in clients
         or is_smoke_session(claims)
     ):
         raise HTTPException(401, "Named human tenant session required")

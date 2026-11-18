@@ -2,8 +2,8 @@
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-revision = 'aiuditor_0064_access_policies'
-down_revision = 'aiuditor_0063_accounting_binding'
+revision = 'aiuditor_0065_access_policies'
+down_revision = 'aiuditor_0064_suite_revision'
 branch_labels = None
 depends_on = None
 

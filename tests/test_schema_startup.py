@@ -65,10 +65,11 @@ def test_packaged_bundle_retains_frozen_baseline_and_only_owner_chain():
     config = schema_startup.owner_config()
     script = ScriptDirectory.from_config(config)
     assert script.get_base() == 'aiuditor_0053_baseline'
-    assert script.get_current_head() == 'aiuditor_0064_suite_revision'
+    assert script.get_current_head() == 'aiuditor_0065_access_policies'
     entry = json.loads((schema_startup.ROOT / 'owner.json').read_text())
     assert hashlib.sha256((schema_startup.ROOT / 'versions/baseline.sql').read_bytes()).hexdigest() == entry['baseline_sha256']
     assert 'aiuditor_parent_snapshots' in entry['tables']
+    assert {'aiuditor_access_policies','aiuditor_access_policy_events','aiuditor_access_dispatches'} <= set(entry['tables'])
     assert all(table.startswith('aiuditor_') or table in {'service_tenants', 'service_outbox'} for table in entry['tables'])
     assert not list(schema_startup.ROOT.glob('**/hypermesh*'))
 

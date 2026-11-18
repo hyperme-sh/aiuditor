@@ -13,6 +13,7 @@ from aiuditor_service.access_preview import Preview, Policy, ReadReview, evaluat
 from aiuditor_service.access_actions import ActionReview, evaluate_action
 from aiuditor_service import access_policy_store
 from aiuditor_service.machine_identity import transaction
+from aiuditor_service.role import require_grant_write, role_from_request
 
 router=APIRouter(prefix='/aiuditor/access',tags=['access-preview'])
 slots=asyncio.Semaphore(8)
@@ -55,6 +56,7 @@ async def machine_context(body,token,*,active=False):
 
 @router.post('/preview')
 async def preview(body:Preview,request:Request,response:Response):
+    require_grant_write(role_from_request(request))
     response.headers['Cache-Control']='no-store'
     authorization=request.headers.get('Authorization','')
     if not authorization.startswith('Bearer hm_msi_') or len(authorization)>4096:
@@ -74,6 +76,7 @@ async def preview(body:Preview,request:Request,response:Response):
 
 @router.post('/read-review')
 async def read_review(body:ReadReview,request:Request,response:Response):
+    require_grant_write(role_from_request(request))
     response.headers['Cache-Control']='no-store'
     authorization=request.headers.get('Authorization','')
     if not authorization.startswith('Bearer hm_msi_') or len(authorization)>4096:
@@ -91,6 +94,7 @@ async def read_review(body:ReadReview,request:Request,response:Response):
         raise HTTPException(503,'Permission read review unavailable') from None
 @router.post('/action-review')
 async def action_review(body:ActionReview,request:Request,response:Response):
+    require_grant_write(role_from_request(request))
     response.headers['Cache-Control']='no-store'
     authorization=request.headers.get('Authorization','')
     if not authorization.startswith('Bearer hm_msi_') or len(authorization)>4096:
@@ -122,6 +126,7 @@ async def policy_decision(body, fact, evaluator, *, admit=False):
 
 
 async def admit_review(body,request,response,evaluator):
+    require_grant_write(role_from_request(request))
     response.headers['Cache-Control']='no-store'
     authorization=request.headers.get('Authorization','')
     if not authorization.startswith('Bearer hm_msi_') or len(authorization)>4096:

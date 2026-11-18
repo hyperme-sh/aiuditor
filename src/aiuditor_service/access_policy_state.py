@@ -59,7 +59,10 @@ def changed(state: dict, mutation: PolicyMutation, subject: str, *, admin: bool)
     # An inherited entry is a retained tombstone, not deletion. Older snapshots
     # cannot reapply the removed restriction without a new authorized revision.
     entries[key] = {'subject': owner, **rule.model_dump(mode='json')}
-    if len(entries) > 4096:
+    organization_count=sum(entry['subject']=='' for entry in entries.values())
+    personal_count=len(entries)-organization_count
+    own_count=sum(entry['subject']==owner for entry in entries.values())
+    if (organization_count > 4096 or (owner and (own_count > 128 or personal_count > 4096))):
         raise ValueError('Policy scope capacity reached')
     revision = str(uuid.uuid4())
     sequence = state['sequence'] + 1
