@@ -12,7 +12,8 @@ from aiuditor_service.crawl import (
     default_seed_repos,
 )
 from aiuditor_service.intake import resolve_crawl_every_s, resolve_crawl_tenant, run_intake
-from aiuditor_service.hypermesh import ClosedPlaneHop
+from aiuditor_service.domain.models import SUSTAINED_MEASUREMENT_PROTOCOL
+from aiuditor_service.hypermesh import ClosedPlaneHop, HostLookupUnavailable, HttpPlaneHop
 from aiuditor_service.role import AiuditorRole
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,29 @@ async def _run_worker(function, *args):
     return worker.result()
 
 
+async def queue_missing_sustained_baselines(tenant_id, suites, envelopes, plane):
+    """Ask Plane for one non-preemptive qualification per missing core reference."""
+    queued = 0
+    failures = 0
+    ready = {
+        (row.class_id, row.catalog_id)
+        for row in envelopes.list_for(tenant_id, measurement_protocol=SUSTAINED_MEASUREMENT_PROTOCOL)
+        if row.measurement_verified and row.fit
+    }
+    for member in suites.list_for(tenant_id):
+        if (member.class_id, member.catalog_id) in ready:
+            continue
+        try:
+            job_id = await plane.queue_sustained_lab_soak(
+                tenant_id, class_id=member.class_id, catalog_id=member.catalog_id,
+            )
+        except HostLookupUnavailable:
+            failures += 1
+        else:
+            queued += job_id is not None
+    return queued, failures
+
+
 async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> None:
     """Re-crawl daily on the global or operator writer. Witness returns immediately.
 
@@ -114,6 +138,13 @@ async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> No
             lease = decision.lease
             plane = getattr(app.state, "plane_hop", None)
             lab_hop = None if isinstance(plane, ClosedPlaneHop) else plane
+            benchmark_failures = 0
+            if isinstance(plane, HttpPlaneHop):
+                queued, benchmark_failures = await queue_missing_sustained_baselines(
+                    tenant_id, app.state.suite_store, app.state.envelope_store, plane,
+                )
+                if queued or benchmark_failures:
+                    logger.info("aiuditor sustained lab benchmarks queued=%s failed=%s", queued, benchmark_failures)
             source_name = (os.environ.get("AIUDITOR_CRAWL_SOURCE") or "hf").strip().lower()
             if source_name == "static":
                 source = StaticMetadataSource([])
@@ -134,7 +165,7 @@ async def run_crawl_loop(app, *, stop: asyncio.Event, sleep=asyncio.sleep) -> No
                 report.dropped_no_fit,
                 report.skipped_fresh,
             )
-            await _run_worker(lease.finish, len(report.errors))
+            await _run_worker(lease.finish, len(report.errors) + benchmark_failures)
             _log_crawl_errors(report.errors)
         except Exception as exc:  # noqa: BLE001
             logger.warning("aiuditor crawl failed: %s", exc)

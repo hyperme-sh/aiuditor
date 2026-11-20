@@ -49,6 +49,7 @@ TABLES = (
     "violations",
     "catalog",
     "envelopes",
+    "sustained_envelopes",
     "suite_members",
     "admissions",
     "candidates",
@@ -62,6 +63,7 @@ _DOMAIN = {
     "violations": ContractViolation,
     "catalog": CatalogService,
     "envelopes": ClassEnvelope,
+    "sustained_envelopes": ClassEnvelope,
     "suite_members": SuiteMember,
     "admissions": Admission,
     "candidates": CrawlCandidate,
@@ -215,6 +217,7 @@ _ALLOWED = {
         "updated_at",
     },
 }
+_ALLOWED["sustained_envelopes"] = _ALLOWED["envelopes"] | {"measurement_protocol", "measurement"}
 
 
 def _parse_uuid(value: object) -> uuid.UUID:
@@ -440,6 +443,7 @@ def apply_snapshot(stores: Any, rows: dict[str, Any]) -> None:
         ("violations", "violation_store"),
         ("catalog", "catalog_store"),
         ("envelopes", "envelope_store"),
+        ("sustained_envelopes", "envelope_store"),
         ("suite_members", "suite_store"),
         ("admissions", "admission_store"),
         ("candidates", "candidate_store"),
@@ -466,6 +470,7 @@ def _sql_models():
         AiuditorConnection,
         AiuditorContract,
         AiuditorEnvelope,
+        AiuditorSustainedEnvelope,
         AiuditorPolicy,
         AiuditorSuiteMember,
         AiuditorViolation,
@@ -479,6 +484,7 @@ def _sql_models():
         "violations": AiuditorViolation,
         "catalog": AiuditorCatalog,
         "envelopes": AiuditorEnvelope,
+        "sustained_envelopes": AiuditorSustainedEnvelope,
         "suite_members": AiuditorSuiteMember,
         "admissions": AiuditorAdmission,
         "candidates": AiuditorCandidate,

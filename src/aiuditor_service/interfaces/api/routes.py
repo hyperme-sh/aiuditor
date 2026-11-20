@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
-from aiuditor_service.lab_reporting import LabEnvelopeReport
+from aiuditor_service.lab_reporting import LabReport
 from aiuditor_service.domain.models import AccountingContract, AccountingAllocation
 
 import uuid
@@ -66,6 +66,8 @@ from aiuditor_service.domain.models import (
     AuditorGrant,
     ClassEnvelope,
     ClassEnvelopeCreate,
+    LEGACY_MEASUREMENT_PROTOCOL,
+    MeasurementProtocol,
     Connection,
     ConnectionAssign,
     ConnectionClassify,
@@ -1044,7 +1046,7 @@ async def allocate_catalog_service(
     status_code=status.HTTP_201_CREATED,
     summary="Record a lab class envelope. Not a Hypermesh scorecard stamp.",
 )
-async def record_envelope(request: Request, body: "LabEnvelopeReport", response: Response) -> ClassEnvelope:
+async def record_envelope(request: Request, body: LabReport, response: Response) -> ClassEnvelope:
     require_grant_write(role_from_request(request))
     from aiuditor_service.lab_reporting import authenticate
     from sqlalchemy.exc import SQLAlchemyError
@@ -1069,16 +1071,22 @@ async def record_envelope(request: Request, body: "LabEnvelopeReport", response:
 async def list_envelopes(
     request: Request,
     class_id: str | None = Query(default=None),
+    measurement_protocol: MeasurementProtocol = LEGACY_MEASUREMENT_PROTOCOL,
 ) -> list[ClassEnvelope]:
     tenant_id = await asyncio.to_thread(require_program_reader, request)
-    return _envelopes(request).list_for(tenant_id, class_id=class_id)
+    return _envelopes(request).list_for(
+        tenant_id, class_id=class_id, measurement_protocol=measurement_protocol,
+    )
 
 
 @router.get("/envelopes/{envelope_id}", response_model=ClassEnvelope)
 @atomic_events
-async def get_envelope(request: Request, envelope_id: uuid.UUID) -> ClassEnvelope:
+async def get_envelope(
+    request: Request, envelope_id: uuid.UUID,
+    measurement_protocol: MeasurementProtocol = LEGACY_MEASUREMENT_PROTOCOL,
+) -> ClassEnvelope:
     tenant_id = await asyncio.to_thread(require_hold_actor, request)
-    row = _envelopes(request).get(tenant_id, envelope_id)
+    row = _envelopes(request).get(tenant_id, envelope_id, measurement_protocol=measurement_protocol)
     if row is None:
         raise HTTPException(status_code=404, detail=ENVELOPE_NOT_FOUND)
     return row

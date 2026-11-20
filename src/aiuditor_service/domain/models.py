@@ -16,7 +16,7 @@ from enum import StrEnum
 from typing import Self, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, model_validator, computed_field
+from pydantic import BaseModel, ConfigDict, Field, model_validator, computed_field
 
 
 class ConnectionKind(StrEnum):
@@ -465,6 +465,25 @@ class HydrateSnapshot(BaseModel):
     admissions: list[dict[str, object]] = Field(default_factory=list)
 
 
+LEGACY_MEASUREMENT_PROTOCOL = "legacy-http-v1"
+SUSTAINED_MEASUREMENT_PROTOCOL = "sustained-decode-v2"
+MeasurementProtocol = Literal["legacy-http-v1", "sustained-decode-v2"]
+
+
+class SustainedDecodeMeasurement(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    image_digest: str = Field(
+        pattern=r"^(?:[a-z0-9][a-z0-9._:/-]*@)?sha256:[a-f0-9]{64}$",
+        max_length=256,
+    )
+    decode_tokens: int = Field(ge=64, le=131072)
+    decode_elapsed_ms: int = Field(gt=0, le=3_600_000)
+    context_prompt_tokens: int = Field(gt=0, lt=131072)
+    context_generated_tokens: int = Field(gt=0, lt=131072)
+    context_elapsed_ms: int = Field(gt=0, le=3_600_000)
+
+
 class ClassEnvelopeCreate(BaseModel):
     """Lab-soak measurement for one artifact on one hardware class.
 
@@ -506,6 +525,19 @@ class ClassEnvelope(BaseModel):
     binding_sha256: str | None = None
     report_sha256: str | None = None
     measured_at: datetime | None = None
+    measurement_protocol: MeasurementProtocol = Field(
+        default=LEGACY_MEASUREMENT_PROTOCOL,
+        exclude_if=lambda protocol: protocol == LEGACY_MEASUREMENT_PROTOCOL,
+    )
+    measurement: SustainedDecodeMeasurement | None = Field(
+        default=None, exclude_if=lambda measurement: measurement is None,
+    )
+
+    @model_validator(mode="after")
+    def measurement_matches_protocol(self):
+        if (self.measurement_protocol == SUSTAINED_MEASUREMENT_PROTOCOL) != (self.measurement is not None):
+            raise ValueError("Sustained measurement data requires its explicit protocol")
+        return self
 
     @computed_field
     @property
@@ -535,6 +567,15 @@ class ClassEnvelope(BaseModel):
             "fit": self.fit,
             "decode_tok_s": self.decode_tok_s,
             "thermal_c": self.thermal_c,
+        }
+
+    def to_sustained_event_payload(self) -> dict[str, object]:
+        if self.measurement is None:
+            raise ValueError("Sustained envelope event requires its measurement")
+        return {
+            **self.to_event_payload(),
+            "measurement_protocol": self.measurement_protocol,
+            "measurement": self.measurement.model_dump(mode="json"),
         }
 
 
