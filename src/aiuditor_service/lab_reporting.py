@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import uuid
@@ -13,9 +14,15 @@ from typing import Literal
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from aiuditor_service.domain.models import ClassEnvelope, ClassEnvelopeCreate
+from aiuditor_service.domain.models import (
+    ClassEnvelope,
+    ClassEnvelopeCreate,
+    SUSTAINED_MEASUREMENT_PROTOCOL,
+    SustainedDecodeMeasurement,
+)
 
 PURPOSE = b"aiuditor.lab-envelope.v1\n"
+SUSTAINED_PURPOSE = b"aiuditor.lab-envelope.v2\n"
 MAX_AGE = timedelta(hours=24)
 QUALIFICATION_MAX_AGE = timedelta(days=7)
 
@@ -65,14 +72,43 @@ class LabEnvelopeReport(BaseModel):
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
-async def authenticate(request: Request, report: LabEnvelopeReport):
+class SustainedEnvelope(Measurement):
+    context: int = Field(strict=True, ge=512, le=131072)
+    decode_tok_s: float = Field(strict=True, gt=0)
+
+
+class SustainedLabEnvelopeReport(LabEnvelopeReport):
+    protocol_version: Literal[2]
+    origin: Literal["qualification"]
+    measurement_protocol: Literal["sustained-decode-v2"]
+    measurement: SustainedDecodeMeasurement
+    envelope: SustainedEnvelope
+
+    @model_validator(mode="after")
+    def coherent_measurement(self):
+        sample = self.measurement
+        if not self.envelope.fit:
+            raise ValueError("Sustained qualification requires verified context fit")
+        if sample.context_prompt_tokens + sample.context_generated_tokens != self.envelope.context:
+            raise ValueError("Context fit counts must span the declared context")
+        expected = sample.decode_tokens * 1000 / sample.decode_elapsed_ms
+        if not math.isclose(self.envelope.decode_tok_s, expected, rel_tol=1e-9):
+            raise ValueError("Sustained decode rate must match the measured tokens and elapsed time")
+        return self
+
+
+LabReport = LabEnvelopeReport | SustainedLabEnvelopeReport
+
+
+async def authenticate(request: Request, report: LabReport):
     key = os.environ.get("AIUDITOR_LAB_REPORT_KEY", "")
     generic = [os.environ.get(name, "") for name in
                ("AIUDITOR_INTERNAL_TOKEN", "HYPERMESH_INTERNAL_TOKEN", "AIUDITOR_MODEL_ADMISSION_TOKEN")]
     if len(key) < 32 or key in [token for token in generic if token]:
         raise HTTPException(503, "Dedicated lab reporting authority is not configured")
     signature = request.headers.get("X-Lab-Signature", "")
-    expected = hmac.new(key.encode(), PURPOSE + await request.body(), hashlib.sha256).hexdigest()
+    purpose = SUSTAINED_PURPOSE if report.protocol_version == 2 else PURPOSE
+    expected = hmac.new(key.encode(), purpose + await request.body(), hashlib.sha256).hexdigest()
     if re.fullmatch(r"[a-f0-9]{64}", signature) is None or not hmac.compare_digest(expected, signature):
         raise HTTPException(401, "Authenticated lab report required")
     if request.headers.get("X-Tenant-ID") != str(report.tenant_id):
@@ -103,9 +139,12 @@ def _new_row(report, existing, now):
         raise HTTPException(409, "A newer lab measurement is required")
     if existing is not None and existing.context is not None and report.origin == "path_b":
         raise HTTPException(409, "A context-qualified baseline requires a complete qualification run")
+    data = report.envelope.model_dump()
+    if isinstance(report, SustainedLabEnvelopeReport):
+        data.update(measurement_protocol=report.measurement_protocol, measurement=report.measurement)
     return ClassEnvelope(
         id=existing.id if existing else uuid.uuid4(), tenant_id=report.tenant_id,
-        **report.envelope.model_dump(), created_at=existing.created_at if existing else now,
+        **data, created_at=existing.created_at if existing else now,
         # Freshness is observation time, never the time an old result is retried.
         updated_at=report.measured_at, measured_at=report.measured_at,
         lab_origin=report.origin, lab_job_id=report.job_id, lab_device_id=report.device_id,
@@ -123,12 +162,16 @@ def event_for(row):
     """One durable event identity per immutable accepted measurement receipt."""
     from controlplane_events import ControlPlaneEventEnvelope
     from controlplane_events.contracts import validate_event_envelope
-    from aiuditor_service.events import ENVELOPE_RECORDED_V1
-    identity = f"aiuditor.lab-envelope.v1:{row.tenant_id}:{row.lab_origin}:{row.lab_job_id}:{row.report_sha256}"
+    from aiuditor_service.events import ENVELOPE_RECORDED_V1, ENVELOPE_RECORDED_V2
+    sustained = row.measurement_protocol == SUSTAINED_MEASUREMENT_PROTOCOL
+    version = 2 if sustained else 1
+    event_type = ENVELOPE_RECORDED_V2 if sustained else ENVELOPE_RECORDED_V1
+    payload = row.to_sustained_event_payload() if sustained else row.to_event_payload()
+    identity = f"aiuditor.lab-envelope.v{version}:{row.tenant_id}:{row.lab_origin}:{row.lab_job_id}:{row.report_sha256}"
     event_id = uuid.uuid5(uuid.NAMESPACE_URL, identity)
-    envelope = ControlPlaneEventEnvelope(event_type=ENVELOPE_RECORDED_V1,
+    envelope = ControlPlaneEventEnvelope(event_type=event_type,
         service="aiuditor", tenant_id=row.tenant_id, occurred_at=row.measured_at,
-        correlation_id=str(event_id), payload=row.to_event_payload())
+        correlation_id=str(event_id), payload=payload)
     validate_event_envelope(envelope)
     return event_id, envelope
 
@@ -166,6 +209,8 @@ def persist_report(persist, report, now):
     """Serialize each job and target; receipt + envelope commit atomically."""
     from aiuditor_service.persist import MemoryPersistSession, dump_for_persist, sql_row
     digest = report.evidence_hash()
+    sustained = report.protocol_version == 2
+    table = "sustained_envelopes" if sustained else "envelopes"
     if isinstance(persist, MemoryPersistSession):
         with persist._lab_report_lock:
             tid = str(report.tenant_id)
@@ -180,7 +225,11 @@ def persist_report(persist, report, now):
                     raise HTTPException(409, "Lab event identity binds different facts")
                 events.setdefault(str(event_id), event_value)
                 return row, fresh
-            bucket = persist.rows.setdefault("envelopes", {}).setdefault(tid, {})
+            other_origin = "path_b" if report.origin == "qualification" else "qualification"
+            previous = receipts.get(f"{other_origin}:{report.job_id}")
+            if previous and (sustained or previous["accepted_envelope"].get("measurement_protocol") == SUSTAINED_MEASUREMENT_PROTOCOL):
+                raise HTTPException(409, "Lab run already binds another measurement protocol or origin")
+            bucket = persist.rows.setdefault(table, {}).setdefault(tid, {})
             existing = next((ClassEnvelope.model_validate(r) for r in bucket.values()
                              if r["class_id"] == report.envelope.class_id and r["catalog_id"] == report.envelope.catalog_id), None)
             row = _new_row(report, existing, now)
@@ -193,29 +242,36 @@ def persist_report(persist, report, now):
             return row, True
 
     from sqlalchemy import select, text
-    from aiuditor_service.models import AiuditorEnvelope, AiuditorEnvelopeReport
+    from aiuditor_service.models import AiuditorEnvelope, AiuditorEnvelopeReport, AiuditorSustainedEnvelope
+    model = AiuditorSustainedEnvelope if sustained else AiuditorEnvelope
     with persist._session_factory() as session, session.begin():
         session.execute(text("SELECT set_config('app.current_tenant_id', :tid, true)"), {"tid": str(report.tenant_id)})
-        for key in (f"lab-report:{report.tenant_id}:{report.origin}:{report.job_id}",
-                    f"lab-envelope:{report.tenant_id}:{report.envelope.class_id}:{report.envelope.catalog_id}"):
+        for key in (f"lab-job:{report.tenant_id}:{report.job_id}",
+                    f"lab-report:{report.tenant_id}:{report.origin}:{report.job_id}",
+                    f"lab-envelope:{report.tenant_id}:{report.envelope.class_id}:{report.envelope.catalog_id}"
+                    + (":sustained-decode-v2" if sustained else "")):
             session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"), {"key": key})
         receipt = session.get(AiuditorEnvelopeReport, (report.tenant_id, report.origin, report.job_id))
         if receipt is not None:
             row, fresh = _replay({"payload_sha256": receipt.payload_sha256, "accepted_envelope": receipt.accepted_envelope}, digest)
             enqueue_event(session, row, replay=True)
             return row, fresh
-        old = session.scalar(select(AiuditorEnvelope).where(
-            AiuditorEnvelope.tenant_id == report.tenant_id,
-            AiuditorEnvelope.class_id == report.envelope.class_id,
-            AiuditorEnvelope.catalog_id == report.envelope.catalog_id).with_for_update())
+        other_origin = "path_b" if report.origin == "qualification" else "qualification"
+        previous = session.get(AiuditorEnvelopeReport, (report.tenant_id, other_origin, report.job_id))
+        if previous and (sustained or previous.accepted_envelope.get("measurement_protocol") == SUSTAINED_MEASUREMENT_PROTOCOL):
+            raise HTTPException(409, "Lab run already binds another measurement protocol or origin")
+        old = session.scalar(select(model).where(
+            model.tenant_id == report.tenant_id,
+            model.class_id == report.envelope.class_id,
+            model.catalog_id == report.envelope.catalog_id).with_for_update())
         existing = ClassEnvelope.model_validate({c.name: getattr(old, c.name) for c in old.__table__.columns}) if old else None
         row = _new_row(report, existing, now)
-        values = sql_row("envelopes", dump_for_persist(row))
+        values = sql_row(table, dump_for_persist(row))
         if old:
             for key, value in values.items():
                 setattr(old, key, value)
         else:
-            session.add(AiuditorEnvelope(**values))
+            session.add(model(**values))
         session.add(AiuditorEnvelopeReport(tenant_id=report.tenant_id, origin=report.origin,
             job_id=report.job_id, payload_sha256=digest,
             accepted_envelope=row.model_dump(mode="json"), received_at=now))

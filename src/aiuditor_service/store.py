@@ -16,6 +16,9 @@ from aiuditor_service.domain.models import (
     ApprovalPolicy,
     CatalogService,
     ClassEnvelope,
+    LEGACY_MEASUREMENT_PROTOCOL,
+    MeasurementProtocol,
+    SUSTAINED_MEASUREMENT_PROTOCOL,
     Connection,
     ConnectionKind,
     ConnectionPurpose,
@@ -290,43 +293,63 @@ class EnvelopeStore:
     envelopes: dict[uuid.UUID, dict[uuid.UUID, ClassEnvelope]] = field(
         default_factory=dict
     )
+    sustained_envelopes: dict[uuid.UUID, dict[uuid.UUID, ClassEnvelope]] = field(
+        default_factory=dict
+    )
     persist: PersistSession = field(default_factory=MemoryPersistSession)
     _hydrating: bool = False
 
-    def for_tenant(self, tenant_id: uuid.UUID) -> dict[uuid.UUID, ClassEnvelope]:
-        bucket = self.envelopes.setdefault(tenant_id, {})
-        _reload(bucket, self.persist, "envelopes", tenant_id, hydrating=self._hydrating)
+    def for_tenant(
+        self, tenant_id: uuid.UUID, measurement_protocol: MeasurementProtocol = LEGACY_MEASUREMENT_PROTOCOL,
+    ) -> dict[uuid.UUID, ClassEnvelope]:
+        sustained = measurement_protocol == SUSTAINED_MEASUREMENT_PROTOCOL
+        table = "sustained_envelopes" if sustained else "envelopes"
+        cache = self.sustained_envelopes if sustained else self.envelopes
+        bucket = cache.setdefault(tenant_id, {})
+        _reload(bucket, self.persist, table, tenant_id, hydrating=self._hydrating)
         return bucket
 
     def list_for(
-        self, tenant_id: uuid.UUID, *, class_id: str | None = None
+        self, tenant_id: uuid.UUID, *, class_id: str | None = None,
+        measurement_protocol: MeasurementProtocol = LEGACY_MEASUREMENT_PROTOCOL,
     ) -> list[ClassEnvelope]:
-        rows = list(self.for_tenant(tenant_id).values())
+        rows = list(self.for_tenant(tenant_id, measurement_protocol).values())
         if class_id is not None:
             rows = [row for row in rows if row.class_id == class_id]
         rows.sort(key=lambda row: (row.class_id, row.catalog_id, row.created_at))
         return rows
 
-    def get(self, tenant_id: uuid.UUID, envelope_id: uuid.UUID) -> ClassEnvelope | None:
-        return self.for_tenant(tenant_id).get(envelope_id)
+    def get(
+        self, tenant_id: uuid.UUID, envelope_id: uuid.UUID, *,
+        measurement_protocol: MeasurementProtocol = LEGACY_MEASUREMENT_PROTOCOL,
+    ) -> ClassEnvelope | None:
+        return self.for_tenant(tenant_id, measurement_protocol).get(envelope_id)
 
     def for_class_catalog(
-        self, tenant_id: uuid.UUID, class_id: str, catalog_id: str
+        self, tenant_id: uuid.UUID, class_id: str, catalog_id: str, *,
+        measurement_protocol: MeasurementProtocol = LEGACY_MEASUREMENT_PROTOCOL,
     ) -> ClassEnvelope | None:
-        for row in self.for_tenant(tenant_id).values():
+        for row in self.for_tenant(tenant_id, measurement_protocol).values():
             if row.class_id == class_id and row.catalog_id == catalog_id:
                 return row
         return None
 
     def create_if_absent(self, row: ClassEnvelope) -> bool:
+        if row.measurement_protocol != LEGACY_MEASUREMENT_PROTOCOL:
+            raise ValueError("Sustained envelopes require an authenticated lab report")
         if not self.persist.create_envelope(dump_for_persist(row)):
             return False
         self.envelopes.setdefault(row.tenant_id, {})[row.id] = row
         return True
 
     def put(self, row: ClassEnvelope) -> ClassEnvelope:
-        _write(self.persist, "envelopes", row, hydrating=self._hydrating)
-        self.envelopes.setdefault(row.tenant_id, {})[row.id] = row
+        if row.measurement_protocol == SUSTAINED_MEASUREMENT_PROTOCOL:
+            if not self._hydrating:
+                raise ValueError("Sustained envelopes require an authenticated lab report")
+            self.sustained_envelopes.setdefault(row.tenant_id, {})[row.id] = row
+        else:
+            _write(self.persist, "envelopes", row, hydrating=self._hydrating)
+            self.envelopes.setdefault(row.tenant_id, {})[row.id] = row
         return row
 
 

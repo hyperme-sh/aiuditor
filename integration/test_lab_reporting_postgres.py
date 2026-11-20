@@ -10,10 +10,10 @@ from fastapi import FastAPI, HTTPException
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
-from aiuditor_service.lab_reporting import LabEnvelopeReport
+from aiuditor_service.lab_reporting import LabEnvelopeReport, SustainedLabEnvelopeReport
 from aiuditor_service.persist import SqlPersistSession
 from aiuditor_service.store import EnvelopeStore
-from test_lab_reporting import KEY, report, signed
+from test_lab_reporting import KEY, report, signed, sustained_report
 
 pytest_plugins = ['machine_postgres']
 pytestmark = pytest.mark.integration
@@ -28,7 +28,7 @@ def reporter_db(migrated_postgres):
             c.execute(text('INSERT INTO tenants(id,name,is_active) VALUES(:id,:name,true)'),{'id':id,'name':str(id)})
         c.exec_driver_sql(f'CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOBYPASSRLS')
         c.exec_driver_sql(f'GRANT USAGE ON SCHEMA public TO "{role}"')
-        c.exec_driver_sql(f'GRANT SELECT,INSERT,UPDATE ON aiuditor_envelopes,aiuditor_envelope_reports,service_outbox,service_tenants TO "{role}"')
+        c.exec_driver_sql(f'GRANT SELECT,INSERT,UPDATE ON aiuditor_envelopes,aiuditor_sustained_envelopes,aiuditor_envelope_reports,service_outbox,service_tenants TO "{role}"')
     engine=create_engine(migrated_postgres)
     @event.listens_for(engine,'connect')
     def use_role(conn,_):
@@ -41,8 +41,10 @@ def reporter_db(migrated_postgres):
     admin.dispose()
 
 
-def test_concurrent_receipt_restart_and_rls(reporter_db):
-    admin,engine,tid,other=reporter_db; body=LabEnvelopeReport.model_validate(report(tid))
+@pytest.mark.parametrize("factory,report_model", [(report, LabEnvelopeReport), (sustained_report, SustainedLabEnvelopeReport)])
+def test_concurrent_receipt_restart_and_rls(reporter_db, factory, report_model):
+    _,engine,tid,other=reporter_db
+    body=report_model.model_validate(factory(tid))
     barrier=Barrier(4)
     def deliver(_):
         p=SqlPersistSession(sessionmaker(engine));barrier.wait()
@@ -58,7 +60,10 @@ def test_concurrent_receipt_restart_and_rls(reporter_db):
         c.execute(text("SELECT set_config('app.current_tenant_id',:tid,true)"),{'tid':str(other)})
         assert c.scalar(text('SELECT count(*) FROM aiuditor_envelope_reports'))==0
         assert c.scalar(text('SELECT count(*) FROM aiuditor_envelopes'))==0
-    assert EnvelopeStore(persist=p).get(other,old.id) is None
+        assert c.scalar(text('SELECT count(*) FROM aiuditor_sustained_envelopes'))==0
+    owner=EnvelopeStore(persist=p)
+    assert owner.get(tid,old.id,measurement_protocol=old.measurement_protocol)==old
+    assert owner.get(other,old.id,measurement_protocol=old.measurement_protocol) is None
     changed=body.model_copy(update={'device_id':uuid.uuid4()})
     with pytest.raises(HTTPException) as error:p.accept_lab_report(changed,datetime.now(UTC))
     assert error.value.status_code==409

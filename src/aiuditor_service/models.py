@@ -174,20 +174,8 @@ class AiuditorCatalog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class AiuditorEnvelope(Base):
-    """Lab class envelope. One artifact per class_id. Not a Hypermesh scorecard."""
-
-    __tablename__ = "aiuditor_envelopes"
-    __table_args__ = (
-        Index("ix_aiuditor_envelopes_tenant", "tenant_id"),
-        Index("ix_aiuditor_envelopes_tenant_class", "tenant_id", "class_id"),
-        UniqueConstraint(
-            "tenant_id",
-            "class_id",
-            "catalog_id",
-            name="uq_aiuditor_envelope_class_catalog",
-        ),
-    )
+class EnvelopeFields(Base):
+    __abstract__ = True
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
@@ -210,6 +198,29 @@ class AiuditorEnvelope(Base):
     measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AiuditorEnvelope(EnvelopeFields):
+    """Legacy lab envelope, keyed by tenant, class, and catalog."""
+
+    __tablename__ = "aiuditor_envelopes"
+    __table_args__ = (
+        Index("ix_aiuditor_envelopes_tenant", "tenant_id"),
+        Index("ix_aiuditor_envelopes_tenant_class", "tenant_id", "class_id"),
+        UniqueConstraint("tenant_id", "class_id", "catalog_id", name="uq_aiuditor_envelope_class_catalog"),
+    )
+
+
+class AiuditorSustainedEnvelope(EnvelopeFields):
+    """Protocol-specific class reference isolated from legacy readers."""
+
+    __tablename__ = "aiuditor_sustained_envelopes"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "class_id", "catalog_id", name="uq_aiuditor_sustained_envelope"),
+        CheckConstraint("measurement_protocol = 'sustained-decode-v2'", name="ck_aiuditor_sustained_protocol"),
+    )
+    measurement_protocol: Mapped[str] = mapped_column(String(32), nullable=False)
+    measurement: Mapped[dict] = mapped_column(JSONB, nullable=False)
 
 
 class AiuditorEnvelopeReport(Base):

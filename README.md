@@ -290,6 +290,28 @@ owned outbox even when another publisher transport is configured; the existing
 owner relay handles delivery. It does not repair fixture topology or authorize
 another run's measurement.
 
+### Sustained decode references
+
+A full-context qualification can publish signed lab-envelope protocol 2 under
+the HMAC domain `aiuditor.lab-envelope.v2\n`. The report binds the existing
+tenant, job, device, artifact and runtime to `measurement_protocol:
+sustained-decode-v2` and the measured image digest, decode token count and
+elapsed milliseconds, and context-fit token counts and elapsed milliseconds.
+At least 64 decode tokens are required. The reported decode rate must match
+the measured count and time, and the prompt and generated context tokens must
+sum to the bound context. Replacement uses the same signed revision
+precondition.
+
+Use `GET /api/v1/aiuditor/envelopes?measurement_protocol=sustained-decode-v2`
+to select the new protocol. Default reads continue to return the legacy
+whole-request reference. Each protocol has its own reference row and event
+version. A legacy job ID cannot establish a sustained reference.
+
+The scheduled metadata intake also requests a sustained benchmark for declared
+core-suite members missing a verified sustained reference. Plane owns lab
+assignment and retry deduplication. Older Plane builds and classes without a
+capable lab host defer the request.
+
 ## License
 
 AIuditor is distributed under Apache-2.0; see LICENSE and NOTICE. Dependencies

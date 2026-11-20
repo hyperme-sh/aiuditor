@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from aiuditor_service.lab_reporting import LabEnvelopeReport, PURPOSE
+from aiuditor_service.lab_reporting import LabEnvelopeReport, PURPOSE, SUSTAINED_PURPOSE
 from aiuditor_service.persist import MemoryPersistSession
 from aiuditor_service.store import EnvelopeStore
 from aiuditor_service.intake import needs_resoaking
@@ -28,10 +28,10 @@ def report(tenant, **changes):
     return value
 
 
-def signed(value, key=KEY):
+def signed(value, key=KEY, *, purpose=PURPOSE):
     content = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     return {"content": content, "headers": {"Content-Type":"application/json",
-        "X-Tenant-ID":value["tenant_id"], "X-Lab-Signature":hmac.new(key.encode(), PURPOSE+content, hashlib.sha256).hexdigest()}}
+        "X-Tenant-ID":value["tenant_id"], "X-Lab-Signature":hmac.new(key.encode(), purpose+content, hashlib.sha256).hexdigest()}}
 
 
 @pytest.fixture(autouse=True)
@@ -145,3 +145,97 @@ async def test_path_b_cannot_erase_qualified_context(http_client, tenant_a):
     req = signed(value); req['headers']['If-Match'] = '"'+accepted.json()['revision']+'"'
     refused = await http_client.post('/api/v1/aiuditor/envelopes', **req)
     assert refused.status_code == 409
+
+
+def sustained_report(tenant, **changes):
+    sample = report(tenant, protocol_version=2, origin="qualification")
+    sample.update(
+        measurement_protocol="sustained-decode-v2",
+        measurement={
+            "image_digest": "ghcr.io/example/runtime@sha256:" + "c" * 64,
+            "decode_tokens": 64,
+            "decode_elapsed_ms": 4000,
+            "context_prompt_tokens": 16368,
+            "context_generated_tokens": 16,
+            "context_elapsed_ms": 42000,
+        },
+    )
+    sample["envelope"].update(context=16384, decode_tok_s=16.0)
+    sample.update(changes)
+    return sample
+
+
+async def test_sustained_measurement_keeps_legacy_report_and_projection(http_client, tenant_a, app):
+    path = "/api/v1/aiuditor/envelopes"
+    legacy_report = report(tenant_a, origin="qualification")
+    legacy = await http_client.post(path, **signed(legacy_report))
+    assert legacy.status_code == 201
+    new_report = sustained_report(tenant_a)
+    assert (await http_client.post(path, **signed(new_report))).status_code == 401
+    new = await http_client.post(path, **signed(new_report, purpose=SUSTAINED_PURPOSE))
+    assert new.status_code == 201, new.text
+    assert new.json()["measurement"] == new_report["measurement"]
+    assert new.json()["measurement_verified"] is True
+    assert new.json()["id"] != legacy.json()["id"]
+    assert "measurement_protocol" not in legacy.json()
+    assert "measurement" not in legacy.json()
+
+    headers = tenant_session_headers(tenant_a)
+    assert (await http_client.get(path, headers=headers)).json() == [legacy.json()]
+    query = "?measurement_protocol=sustained-decode-v2"
+    assert (await http_client.get(path + query, headers=headers)).json() == [new.json()]
+    new_path = f"{path}/{new.json()['id']}"
+    assert (await http_client.get(new_path, headers=headers)).status_code == 404
+    assert (await http_client.get(new_path + query, headers=headers)).json() == new.json()
+
+    for value, auth_purpose, expected in (
+        (legacy_report, PURPOSE, legacy),
+        (new_report, SUSTAINED_PURPOSE, new),
+    ):
+        again = await http_client.post(path, **signed(value, purpose=auth_purpose))
+        assert again.status_code == 201 and again.json() == expected.json()
+        assert again.headers["X-Lab-Report-Replay"] == "true"
+
+    outbox = app.state.envelope_store.persist.rows["service_outbox"][str(tenant_a)]
+    events = {entry["event_type"]:entry["payload"] for entry in outbox.values()}
+    v1 = events["aiuditor.envelope.recorded.v1"]
+    v2 = events["aiuditor.envelope.recorded.v2"]
+    assert "measurement_protocol" not in v1 and "measurement" not in v1
+    assert v2["measurement"] == new_report["measurement"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"decode_tokens": 3}, {"decode_tokens": "64"}, {"decode_elapsed_ms": 0},
+    {"decode_elapsed_ms": 5000}, {"context_generated_tokens": 15},
+    {"context_elapsed_ms": False}, {"image_digest": "ghcr.io/example/runtime:latest"},
+])
+async def test_sustained_report_refuses_inconsistent_or_legacy_samples(http_client, tenant_a, changes):
+    value = sustained_report(tenant_a)
+    value["measurement"].update(changes)
+    result = await http_client.post(
+        "/api/v1/aiuditor/envelopes", **signed(value, purpose=SUSTAINED_PURPOSE),
+    )
+    assert result.status_code == 422
+
+
+async def test_sustained_report_requires_fresh_job_identity_and_protocol_revision(http_client, tenant_a):
+    path = "/api/v1/aiuditor/envelopes"
+    legacy_report = report(tenant_a, origin="qualification")
+    legacy = await http_client.post(path, **signed(legacy_report))
+    new_report = sustained_report(tenant_a, job_id=legacy_report["job_id"])
+    assert (await http_client.post(path, **signed(new_report, purpose=SUSTAINED_PURPOSE))).status_code == 409
+    new_report = sustained_report(tenant_a)
+    new = await http_client.post(path, **signed(new_report, purpose=SUSTAINED_PURPOSE))
+    assert new.status_code == 201
+    replacement = sustained_report(
+        tenant_a, mode="replace", expected_revision=legacy.json()["revision"],
+        measured_at=(datetime.now(UTC) + timedelta(seconds=1)).isoformat(),
+    )
+    wrong = signed(replacement, purpose=SUSTAINED_PURPOSE)
+    wrong["headers"]["If-Match"] = '"' + legacy.json()["revision"] + '"'
+    assert (await http_client.post(path, **wrong)).status_code == 412
+    replacement["expected_revision"] = new.json()["revision"]
+    valid = signed(replacement, purpose=SUSTAINED_PURPOSE)
+    valid["headers"]["If-Match"] = '"' + new.json()["revision"] + '"'
+    replaced = await http_client.post(path, **valid)
+    assert replaced.status_code == 201 and replaced.json()["id"] == new.json()["id"]

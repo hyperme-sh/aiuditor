@@ -13,6 +13,7 @@ from typing import Protocol
 
 import httpx
 
+from aiuditor_service.domain.models import SUSTAINED_MEASUREMENT_PROTOCOL
 from aiuditor_service.role import ROLE_HEADER, resolve_role
 
 HOST_LOOKUP_REQUIRED = "HYPERMESH_SERVICE_URL is required to assign a host"
@@ -640,6 +641,38 @@ class HttpPlaneHop:
         if not isinstance(body, dict):
             raise HostLookupUnavailable(PLANE_HOP_FAILED)
         return body
+
+    async def queue_sustained_lab_soak(
+        self, tenant_id: uuid.UUID, *, class_id: str, catalog_id: str,
+    ) -> uuid.UUID | None:
+        token = (os.environ.get("HYPERMESH_INTERNAL_TOKEN") or "").strip()
+        if not token:
+            return None
+        headers = self._hop(tenant_id, None)
+        headers["X-Internal-Token"] = token
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
+                response = await client.post(
+                    f"{self._base}/api/v1/hypermesh/lab/soaks/sustained-decode",
+                    headers=headers,
+                    json={
+                        "class_id": class_id,
+                        "catalog_id": catalog_id,
+                        "measurement_protocol": SUSTAINED_MEASUREMENT_PROTOCOL,
+                    },
+                )
+            if response.status_code in (404, 409):
+                return None
+            response.raise_for_status()
+            body = response.json()
+            if not isinstance(body, dict) or body.get("measurement_protocol") != SUSTAINED_MEASUREMENT_PROTOCOL:
+                raise ValueError("Wrong lab measurement protocol")
+            job_id = body.get("job_id")
+            if not isinstance(job_id, str):
+                raise ValueError("Missing lab job identifier")
+            return uuid.UUID(job_id)
+        except (httpx.HTTPError, TypeError, ValueError) as exc:
+            raise HostLookupUnavailable(PLANE_HOP_FAILED) from exc
 
     async def promote_catalog(
         self,
