@@ -216,8 +216,8 @@ class AiuditorSustainedEnvelope(EnvelopeFields):
 
     __tablename__ = "aiuditor_sustained_envelopes"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "class_id", "catalog_id", name="uq_aiuditor_sustained_envelope"),
-        CheckConstraint("measurement_protocol = 'sustained-decode-v2'", name="ck_aiuditor_sustained_protocol"),
+        UniqueConstraint("tenant_id", "class_id", "catalog_id", "measurement_protocol", name="uq_aiuditor_sustained_envelope"),
+        CheckConstraint("measurement_protocol IN ('sustained-decode-v2', 'sustained-decode-v3')", name="ck_aiuditor_sustained_protocol"),
     )
     measurement_protocol: Mapped[str] = mapped_column(String(32), nullable=False)
     measurement: Mapped[dict] = mapped_column(JSONB, nullable=False)

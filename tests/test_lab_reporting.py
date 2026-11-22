@@ -239,3 +239,39 @@ async def test_sustained_report_requires_fresh_job_identity_and_protocol_revisio
     valid["headers"]["If-Match"] = '"' + new.json()["revision"] + '"'
     replaced = await http_client.post(path, **valid)
     assert replaced.status_code == 201 and replaced.json()["id"] == new.json()["id"]
+
+
+async def test_series_reference_is_signed_replayable_and_isolated(http_client, tenant_a, app):
+    from aiuditor_service.lab_reporting import SERIES_PURPOSE
+
+    path = "/api/v1/aiuditor/envelopes"
+    single = sustained_report(tenant_a)
+    assert (await http_client.post(path, **signed(single, purpose=SUSTAINED_PURPOSE))).status_code == 201
+    series = sustained_report(tenant_a, protocol_version=3, measurement_protocol="sustained-decode-v3")
+    timing = series["measurement"]
+    del timing["decode_tokens"], timing["decode_elapsed_ms"]
+    timing.update(
+        warmup={"decode_tokens": 64, "decode_elapsed_ms": 1000},
+        samples=[{"decode_tokens": 64, "decode_elapsed_ms": duration} for duration in (2000, 4000, 8000)],
+    )
+    assert (await http_client.post(path, **signed(series, purpose=SUSTAINED_PURPOSE))).status_code == 401
+    first = await http_client.post(path, **signed(series, purpose=SERIES_PURPOSE))
+    assert first.status_code == 201, first.text
+    summary = {"sample_count": 3, "median_tok_s": 16.0, "spread_tok_s": 24.0, "units": "tokens_per_second"}
+    assert first.json()["measurement_summary"] == summary
+    replay = await http_client.post(path, **signed(series, purpose=SERIES_PURPOSE))
+    assert replay.json() == first.json()
+    assert replay.headers["X-Lab-Report-Replay"] == "true"
+    timing["warmup"]["decode_elapsed_ms"] = 1001
+    assert (await http_client.post(path, **signed(series, purpose=SERIES_PURPOSE))).status_code == 409
+    headers = tenant_session_headers(tenant_a)
+    assert (await http_client.get(path + "?measurement_protocol=sustained-decode-v3", headers=headers)).json() == [first.json()]
+    v2 = (await http_client.get(path + "?measurement_protocol=sustained-decode-v2", headers=headers)).json()
+    assert len(v2) == 1 and "measurement_summary" not in v2[0]
+    outbox = app.state.envelope_store.persist.rows["service_outbox"][str(tenant_a)]
+    events = {event["event_type"]: event["payload"] for event in outbox.values()}
+    assert events["aiuditor.envelope.recorded.v3"]["measurement_summary"] == summary
+
+    series["job_id"] = str(uuid.uuid4())
+    series["envelope"]["decode_tok_s"] = 32
+    assert (await http_client.post(path, **signed(series, purpose=SERIES_PURPOSE))).status_code == 422
