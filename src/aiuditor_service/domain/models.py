@@ -467,7 +467,8 @@ class HydrateSnapshot(BaseModel):
 
 LEGACY_MEASUREMENT_PROTOCOL = "legacy-http-v1"
 SUSTAINED_MEASUREMENT_PROTOCOL = "sustained-decode-v2"
-MeasurementProtocol = Literal["legacy-http-v1", "sustained-decode-v2"]
+SERIES_MEASUREMENT_PROTOCOL = "sustained-decode-v3"
+MeasurementProtocol = Literal["legacy-http-v1", "sustained-decode-v2", "sustained-decode-v3"]
 
 
 class SustainedDecodeMeasurement(BaseModel):
@@ -482,6 +483,31 @@ class SustainedDecodeMeasurement(BaseModel):
     context_prompt_tokens: int = Field(gt=0, lt=131072)
     context_generated_tokens: int = Field(gt=0, lt=131072)
     context_elapsed_ms: int = Field(gt=0, le=3_600_000)
+
+
+class DecodeRepetition(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    decode_tokens: int = Field(ge=64, le=64)
+    decode_elapsed_ms: int = Field(ge=1, le=120000)
+
+
+class SustainedDecodeSeries(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    image_digest: str = Field(
+        pattern=r"^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$", max_length=256,
+    )
+    context_prompt_tokens: int = Field(ge=1, lt=131072)
+    context_generated_tokens: int = Field(ge=16, le=16)
+    context_elapsed_ms: int = Field(ge=1, le=180000)
+    warmup: DecodeRepetition
+    samples: list[DecodeRepetition] = Field(min_length=3, max_length=3)
+
+    def summary(self) -> dict[str, int | float | str]:
+        from controlplane_events.contracts import sustained_series_summary
+
+        return sustained_series_summary([sample.model_dump() for sample in self.samples])
 
 
 class ClassEnvelopeCreate(BaseModel):
@@ -529,14 +555,27 @@ class ClassEnvelope(BaseModel):
         default=LEGACY_MEASUREMENT_PROTOCOL,
         exclude_if=lambda protocol: protocol == LEGACY_MEASUREMENT_PROTOCOL,
     )
-    measurement: SustainedDecodeMeasurement | None = Field(
+    measurement: SustainedDecodeMeasurement | SustainedDecodeSeries | None = Field(
         default=None, exclude_if=lambda measurement: measurement is None,
+    )
+
+    measurement_summary: dict[str, int | float | str] | None = Field(
+        default=None, exclude_if=lambda summary: summary is None,
     )
 
     @model_validator(mode="after")
     def measurement_matches_protocol(self):
-        if (self.measurement_protocol == SUSTAINED_MEASUREMENT_PROTOCOL) != (self.measurement is not None):
+        expected = {
+            LEGACY_MEASUREMENT_PROTOCOL: type(None),
+            SUSTAINED_MEASUREMENT_PROTOCOL: SustainedDecodeMeasurement,
+            SERIES_MEASUREMENT_PROTOCOL: SustainedDecodeSeries,
+        }[self.measurement_protocol]
+        if not isinstance(self.measurement, expected):
             raise ValueError("Sustained measurement data requires its explicit protocol")
+        summary = self.measurement.summary() if isinstance(self.measurement, SustainedDecodeSeries) else None
+        if self.measurement_summary is not None and self.measurement_summary != summary:
+            raise ValueError("Stored measurement summary disagrees with the timed samples")
+        self.measurement_summary = summary
         return self
 
     @computed_field
@@ -576,6 +615,7 @@ class ClassEnvelope(BaseModel):
             **self.to_event_payload(),
             "measurement_protocol": self.measurement_protocol,
             "measurement": self.measurement.model_dump(mode="json"),
+            **({"measurement_summary": self.measurement_summary} if self.measurement_summary is not None else {}),
         }
 
 

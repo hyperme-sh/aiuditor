@@ -307,6 +307,13 @@ to select the new protocol. Default reads continue to return the legacy
 whole-request reference. Each protocol has its own reference row and event
 version. A legacy job ID cannot establish a sustained reference.
 
+Protocol 3 uses the separate HMAC purpose `aiuditor.lab-envelope.v3\n` and
+`sustained-decode-v3`. It records a warm-up and three timed local decode
+repetitions. AIuditor verifies the median and derives the max-minus-min spread
+in tokens per second from the repetitions alone. Select this reference with
+`measurement_protocol=sustained-decode-v3`. Existing readers retain their
+protocol-specific views and revisions.
+
 The scheduled metadata intake also requests a sustained benchmark for declared
 core-suite members missing a verified sustained reference. Plane owns lab
 assignment and retry deduplication. Older Plane builds and classes without a

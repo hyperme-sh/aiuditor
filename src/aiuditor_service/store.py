@@ -18,7 +18,6 @@ from aiuditor_service.domain.models import (
     ClassEnvelope,
     LEGACY_MEASUREMENT_PROTOCOL,
     MeasurementProtocol,
-    SUSTAINED_MEASUREMENT_PROTOCOL,
     Connection,
     ConnectionKind,
     ConnectionPurpose,
@@ -302,11 +301,13 @@ class EnvelopeStore:
     def for_tenant(
         self, tenant_id: uuid.UUID, measurement_protocol: MeasurementProtocol = LEGACY_MEASUREMENT_PROTOCOL,
     ) -> dict[uuid.UUID, ClassEnvelope]:
-        sustained = measurement_protocol == SUSTAINED_MEASUREMENT_PROTOCOL
+        sustained = measurement_protocol != LEGACY_MEASUREMENT_PROTOCOL
         table = "sustained_envelopes" if sustained else "envelopes"
         cache = self.sustained_envelopes if sustained else self.envelopes
         bucket = cache.setdefault(tenant_id, {})
         _reload(bucket, self.persist, table, tenant_id, hydrating=self._hydrating)
+        if sustained:
+            return {key: row for key, row in bucket.items() if row.measurement_protocol == measurement_protocol}
         return bucket
 
     def list_for(
@@ -343,7 +344,7 @@ class EnvelopeStore:
         return True
 
     def put(self, row: ClassEnvelope) -> ClassEnvelope:
-        if row.measurement_protocol == SUSTAINED_MEASUREMENT_PROTOCOL:
+        if row.measurement_protocol != LEGACY_MEASUREMENT_PROTOCOL:
             if not self._hydrating:
                 raise ValueError("Sustained envelopes require an authenticated lab report")
             self.sustained_envelopes.setdefault(row.tenant_id, {})[row.id] = row
