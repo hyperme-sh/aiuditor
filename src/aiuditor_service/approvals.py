@@ -78,11 +78,13 @@ def require_hold_actor(request: Request) -> uuid.UUID:
 
 
 def require_program_reader(request: Request) -> uuid.UUID:
-    """Allow the configured reader to list certification data for its bound tenant."""
-    token = os.environ.get("AIUDITOR_PROGRAM_READ_TOKEN", "")
-    if token and request_has_internal_token(request, token):
+    """Allow each configured reader to list certification data for its bound tenant."""
+    for prefix in ("AIUDITOR_PROGRAM_READ", "AIUDITOR_ADDITIONAL_PROGRAM_READ"):
+        token = os.environ.get(f"{prefix}_TOKEN", "")
+        if not token or not request_has_internal_token(request, token):
+            continue
         try:
-            tenant = uuid.UUID(os.environ.get("AIUDITOR_PROGRAM_READ_TENANT_ID", ""))
+            tenant = uuid.UUID(os.environ.get(f"{prefix}_TENANT_ID", ""))
         except ValueError:
             raise HTTPException(503, "Program reader tenant is unconfigured") from None
         if request.headers.get("X-Tenant-ID") != str(tenant):
