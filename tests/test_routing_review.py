@@ -114,6 +114,28 @@ async def test_http_review_requires_internal_credential(http_client, tenant_a, m
     assert response.status_code == 403
 
 
+async def test_additional_reviewer_preserves_separate_tenant_authority(http_client, tenant_a, monkeypatch):
+    tenant_b = uuid.uuid4()
+    monkeypatch.setenv('AIUDITOR_CONDUCTOR_TOKEN', 'a' * 32)
+    monkeypatch.setenv('AIUDITOR_CONDUCTOR_TENANT_ID', str(tenant_a))
+    monkeypatch.setenv('AIUDITOR_ADDITIONAL_CONDUCTOR_TOKEN', 'b' * 32)
+    monkeypatch.setenv('AIUDITOR_ADDITIONAL_CONDUCTOR_TENANT_ID', str(tenant_b))
+    body = envelope().model_dump(mode='json')
+
+    for token, tenant, status in (
+        ('a' * 32, tenant_a, 200), ('a' * 32, tenant_b, 403),
+        ('b' * 32, tenant_a, 403), ('b' * 32, tenant_b, 200),
+    ):
+        response = await http_client.post('/api/v1/aiuditor/review', json=body,
+            headers={'X-Tenant-ID': str(tenant), 'X-Internal-Token': token})
+        assert response.status_code == status
+
+    monkeypatch.setenv('AIUDITOR_ADDITIONAL_CONDUCTOR_TOKEN', 'a' * 32)
+    response = await http_client.post('/api/v1/aiuditor/review', json=body,
+        headers={'X-Tenant-ID': str(tenant_a), 'X-Internal-Token': 'a' * 32})
+    assert response.status_code == 503
+
+
 def test_absent_routing_policy_binds_as_sql_null():
     from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
     from aiuditor_service.models import AiuditorPolicy
