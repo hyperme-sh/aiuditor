@@ -55,11 +55,17 @@ def review(store, tenant, envelope):
 
 
 def require_reviewer(request):
-    token = os.environ.get('AIUDITOR_CONDUCTOR_TOKEN', '')
-    if len(token) < 32 or not request_has_internal_token(request, token):
+    matched = []
+    for prefix in ('AIUDITOR_CONDUCTOR', 'AIUDITOR_ADDITIONAL_CONDUCTOR'):
+        token = os.environ.get(f'{prefix}_TOKEN', '')
+        if len(token) >= 32 and request_has_internal_token(request, token):
+            matched.append(prefix)
+    if not matched:
         raise HTTPException(401, 'Conductor review credential required')
+    if len(matched) != 1:
+        raise HTTPException(503, 'Conductor review credential has ambiguous tenant bindings')
     try:
-        tenant = uuid.UUID(os.environ.get('AIUDITOR_CONDUCTOR_TENANT_ID', ''))
+        tenant = uuid.UUID(os.environ.get(f'{matched[0]}_TENANT_ID', ''))
     except ValueError:
         raise HTTPException(503, 'Conductor tenant is unconfigured') from None
     if request.headers.get('X-Tenant-ID') != str(tenant):
