@@ -18,7 +18,6 @@ from aiuditor_service.models import (
 from aiuditor_service.private_models.routes import human
 from aiuditor_service.role import require_grant_write, role_from_request
 from aiuditor_service.workspace_connection_contracts import (
-    MAX_GRANT_SECONDS,
     MAX_PAST_SECONDS,
     ConnectionCreate,
     ConnectionView,
@@ -170,8 +169,8 @@ async def put_grant(
             return grant_view(connection, row, now)
         if connection.disabled_at is not None:
             raise HTTPException(409, "Workspace connector is disabled")
-        if not now < body.expires_at <= now + MAX_GRANT_SECONDS:
-            raise HTTPException(422, "Grant expiry must be within the next 30 days")
+        if body.expires_at <= now:
+            raise HTTPException(422, "Grant expiry must be in the future")
         row = Grant(
             tenant_id=tenant, connection_id=connection_id, created_by=subject,
             **body.model_dump(exclude={"operations"}), operations=operations,

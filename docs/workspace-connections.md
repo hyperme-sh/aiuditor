@@ -29,8 +29,7 @@ reports `enabled` or `disabled` for its policy state. A grant reports `active`,
 `expired`, `revoked`, or `connection_disabled`. An exact registration retry
 returns the current record. Reuse of an ID for a different scope returns 409.
 Revocation and disable are idempotent. Use a new ID to create a new grant or
-connection after revocation. Grant expiry is Unix time in seconds and must be
-within 30 days when a new grant is recorded.
+connection after revocation. Grant expiry is future Unix time in seconds.
 
 ## Broker authorization
 

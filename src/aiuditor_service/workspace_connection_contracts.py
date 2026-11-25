@@ -19,7 +19,6 @@ SCOPE_PREFIX = b"aiuditor.workspace-connection.v1\n"
 MAX_BODY_BYTES = 4096
 MAX_PAST_SECONDS = 60
 MAX_FUTURE_SECONDS = 5
-MAX_GRANT_SECONDS = 30 * 86400
 
 
 class Contract(BaseModel):
@@ -43,7 +42,7 @@ class GrantCreate(Contract):
     actor_kind: ActorKind
     actor_id: OpaqueID
     operations: Annotated[list[Operation], Field(min_length=1, max_length=4)]
-    expires_at: StrictInt
+    expires_at: Annotated[StrictInt, Field(ge=0, le=253402300799)]
 
     @model_validator(mode="after")
     def unique_operations(self):
