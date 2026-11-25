@@ -32,6 +32,69 @@ def owner_revision(url):
         engine.dispose()
 
 
+def test_workspace_connector_tables_force_tenant_visibility(isolated_owner_db):
+    url = isolated_owner_db
+    provision_owner(url, revision='aiuditor_0068_sustained_series')
+    schema_startup.upgrade_schema(url)
+    engine = create_engine(url)
+    reader = 'workspace_reader_' + uuid.uuid4().hex
+    tenants = [uuid.uuid4(), uuid.uuid4()]
+    shared_scope = {
+        'workspace': uuid.uuid4(), 'connection': uuid.uuid4(), 'grant': uuid.uuid4(),
+        'request': uuid.uuid4(),
+    }
+    tables = (
+        'aiuditor_workspace_connections', 'aiuditor_workspace_grants', 'aiuditor_workspace_decisions',
+    )
+    try:
+        with engine.begin() as db:
+            db.exec_driver_sql(f'CREATE ROLE "{reader}" NOLOGIN')
+            db.exec_driver_sql(f'GRANT SELECT ON {",".join(tables)} TO "{reader}"')
+            for tenant in tenants:
+                params = {**shared_scope, 'tenant': tenant}
+                db.execute(text('INSERT INTO tenants(id,name,is_active) VALUES(:tenant,:name,true)'),
+                           {'tenant': tenant, 'name': str(tenant)})
+                db.execute(text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                           {'tenant': str(tenant)})
+                db.execute(text("""
+                    INSERT INTO aiuditor_workspace_connections
+                    (tenant_id, workspace_id, connection_id, provider, target)
+                    VALUES (:tenant, :workspace, :connection, 'odoo', 'fixture-company')
+                """), params)
+                db.execute(text("""
+                    INSERT INTO aiuditor_workspace_grants
+                    (tenant_id, workspace_id, connection_id, grant_id, actor_kind,
+                     actor_id, operations, created_by, expires_at)
+                    VALUES (:tenant, :workspace, :connection, :grant, 'person',
+                            'fixture-actor', '["read"]', 'fixture-admin', 100)
+                """), params)
+                db.execute(text("""
+                    INSERT INTO aiuditor_workspace_decisions
+                    (tenant_id, workspace_id, connection_id, grant_id, request_id,
+                     actor_kind, provider, operation, reason, decided_at)
+                    VALUES (:tenant, :workspace, :connection, :grant, :request, 'person',
+                            'odoo', 'read', 'allowed', 10)
+                """), params)
+            assert db.execute(text("""
+                SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = ANY(:tables)
+            """), {'tables': list(tables)}).all() == [(True, True)] * len(tables)
+
+        with engine.begin() as db:
+            db.exec_driver_sql(f'SET LOCAL ROLE "{reader}"')
+            for table in tables:
+                assert db.execute(text(f'SELECT tenant_id FROM {table}')).all() == []
+            for tenant in tenants:
+                db.execute(text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                           {'tenant': str(tenant)})
+                for table in tables:
+                    assert db.execute(text(f'SELECT tenant_id FROM {table}')).scalars().all() == [tenant]
+    finally:
+        with engine.begin() as db:
+            db.exec_driver_sql(f'DROP OWNED BY "{reader}"')
+            db.exec_driver_sql(f'DROP ROLE "{reader}"')
+        engine.dispose()
+
+
 def test_owner_startup_ignores_retired_foreign_tables(isolated_owner_db, monkeypatch):
     url = isolated_owner_db
     provision_owner(url, revision='aiuditor_0057_lab_reports')

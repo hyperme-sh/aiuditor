@@ -21,6 +21,10 @@ class AiuditorServiceDbMiddleware(BaseHTTPMiddleware):
     """Sets app.current_tenant_id from the bound credential for RLS."""
 
     async def dispatch(self, request: Request, call_next):
+        if request.method == "POST" and request.url.path == "/api/v1/aiuditor/workspace-connections/authorize":
+            # The broker's signed body binds the tenant before the route borrows
+            # a database connection and sets its tenant GUC.
+            return await call_next(request)
         if request.method == "POST" and request.url.path in {
             "/api/v1/aiuditor/machine/client-mesh-grant",
             "/api/v1/aiuditor/machine/client-mesh-introspect",
