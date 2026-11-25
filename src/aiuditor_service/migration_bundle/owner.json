@@ -23,7 +23,10 @@
     "aiuditor_access_policy_events",
     "aiuditor_access_dispatches",
     "aiuditor_access_dreams",
-    "aiuditor_sustained_envelopes"
+    "aiuditor_sustained_envelopes",
+    "aiuditor_workspace_connections",
+    "aiuditor_workspace_grants",
+    "aiuditor_workspace_decisions"
   ],
   "baseline_sha256": "58e39340aa9fc3526c2e366a62ab2f4c4265ee46e8d892f3f0fe42eceedd3016",
   "baseline_tables": [

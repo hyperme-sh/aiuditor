@@ -425,3 +425,61 @@ class AiuditorAccessDream(Base):
     request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     binding_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     result: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class AiuditorWorkspaceConnection(Base):
+    """Workspace connector scope. The broker owns provider credentials and endpoints."""
+
+    __tablename__ = "aiuditor_workspace_connections"
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    target: Mapped[str] = mapped_column(String(128), nullable=False)
+    disabled_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class AiuditorWorkspaceGrant(Base):
+    """One exact principal and its allowed operations on one connector scope."""
+
+    __tablename__ = "aiuditor_workspace_grants"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "workspace_id", "connection_id"],
+            [f"aiuditor_workspace_connections.{field}" for field in ("tenant_id", "workspace_id", "connection_id")],
+            ondelete="CASCADE",
+        ),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    grant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    actor_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    operations: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(512), nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    revoked_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
+class AiuditorWorkspaceDecision(Base):
+    """One consumed broker call and its audit facts, with no message or prompt data."""
+
+    __tablename__ = "aiuditor_workspace_decisions"
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True
+    )
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    grant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    actor_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    decided_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

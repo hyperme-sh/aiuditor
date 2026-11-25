@@ -12,6 +12,9 @@ their existing write boundaries; witness hydration does not grant write authorit
 ORM models are owned by `aiuditor_service.models`. Hypermesh integration uses
 owner HTTP contracts and opaque IDs, not cross-product SQL/FKs.
 
+The [workspace connector contract](docs/workspace-connections.md) defines
+permission checks for Odoo and Outlook tool calls from Portal and the broker.
+
 ## Policy class selectors
 
 Policy `prompt_class` values are case-sensitive identifiers of 1–64 ASCII
